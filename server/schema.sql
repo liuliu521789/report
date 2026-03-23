@@ -79,18 +79,6 @@ CREATE TABLE IF NOT EXISTS company_settings (
     ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
--- Applied seals snapshot per report (so historical reports keep their seal image)
-CREATE TABLE IF NOT EXISTS report_seals (
-  report_id BIGINT UNSIGNED NOT NULL,
-  seal_type ENUM('department_qc', 'inspector', 'supervisor', 'pass', 'recheck') NOT NULL,
-  seal_name VARCHAR(128) NOT NULL,
-  seal_image_url VARCHAR(512) NOT NULL,
-  created_by BIGINT UNSIGNED NULL,
-  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (report_id, seal_type),
-  CONSTRAINT fk_report_seals_report FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
-) ENGINE=InnoDB;
-
 -- Reports (cannot delete, only void)
 CREATE TABLE IF NOT EXISTS reports (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -113,6 +101,18 @@ CREATE TABLE IF NOT EXISTS reports (
   KEY idx_reports_template_id (template_id),
   CONSTRAINT fk_reports_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_reports_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- Applied seals snapshot per report (so historical reports keep their seal image)
+CREATE TABLE IF NOT EXISTS report_seals (
+  report_id BIGINT UNSIGNED NOT NULL,
+  seal_type ENUM('department_qc', 'inspector', 'supervisor', 'pass', 'recheck') NOT NULL,
+  seal_name VARCHAR(128) NOT NULL,
+  seal_image_url VARCHAR(512) NOT NULL,
+  created_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (report_id, seal_type),
+  CONSTRAINT fk_report_seals_report FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Report templates (field design reusable)
