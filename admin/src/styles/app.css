@@ -1,0 +1,94 @@
+:root {
+  --bg: #f6f7fb;
+  --card: #ffffff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: rgba(15, 23, 42, 0.08);
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  --radius: 14px;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Layout */
+.app-shell .el-aside {
+  background: #0b1220;
+  color: rgba(255, 255, 255, 0.92);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.app-shell .el-header {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.app-shell .el-main {
+  background: var(--bg);
+}
+
+/* ElementUI style polish */
+.el-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.el-table {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.el-table th {
+  background: #f8fafc !important;
+  color: #334155;
+  font-weight: 600;
+}
+
+.el-dialog {
+  border-radius: 14px;
+}
+
+.el-button {
+  border-radius: 10px;
+}
+
+.el-input__inner,
+.el-textarea__inner {
+  border-radius: 10px;
+}
+
+.el-menu {
+  background: transparent;
+  border-right: none;
+}
+
+.el-menu-item,
+.el-submenu__title {
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.el-menu-item.is-active {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #ffffff !important;
+}
+
+.el-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.text-muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+

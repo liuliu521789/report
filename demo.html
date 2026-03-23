@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>产品质量检验报告单</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft YaHei", "SimSun", sans-serif;
+        }
+        body {
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        .report-container {
+            width: 210mm;
+            min-height: 297mm;
+            background: #fff;
+            margin: 0 auto;
+            padding: 30mm 20mm;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        .header-logo {
+            position: absolute;
+            top: 20mm;
+            left: 20mm;
+            width: 60px;
+            height: 60px;
+            background: url('data:image/svg+xml;utf8,<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M20 20 L50 10 L80 20 L80 80 L50 90 L20 80 Z" fill="none" stroke="#000" stroke-width="8"/><path d="M35 30 L65 30 L65 70 L35 70 Z" fill="none" stroke="#000" stroke-width="8"/><path d="M35 50 L65 50" fill="none" stroke="#000" stroke-width="8"/></svg>') no-repeat center;
+            background-size: contain;
+        }
+        .header-logo::after {
+            content: "卓越品质 用心服务";
+            position: absolute;
+            top: 65px;
+            left: 0;
+            font-size: 12px;
+            color: #333;
+            white-space: nowrap;
+        }
+        .header-doc-no {
+            text-align: right;
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .company-name {
+            text-align: center;
+            font-size: 20px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .report-title {
+            text-align: center;
+            font-size: 36px;
+            font-weight: bold;
+            color: #222;
+            margin-bottom: 15px;
+        }
+        .report-title-en {
+            text-align: center;
+            font-size: 20px;
+            color: #333;
+            margin-bottom: 30px;
+            font-style: italic;
+        }
+
+        /* 行容器 */
+        .form-row {
+            display: flex;
+            margin-bottom: 15px;
+            align-items: center;
+            position: relative;
+        }
+        /* 标签区域 */
+        .form-label {
+            width: 130px;
+            font-size: 16px;
+            color: #333;
+            text-align: right;
+            padding-right: 8px;
+        }
+        .form-label-en {
+            font-size: 14px;
+            color: #666;
+            margin-top: 3px;
+            outline: none;
+        }
+        /* 编辑标签 */
+        .editable-label {
+            outline: none;
+            display: inline-block;
+            min-width: 60px;
+            text-align: right;
+        }
+        /* 输入框 */
+        .form-input {
+            flex: 1;
+            height: 32px;
+            border: none;
+            border-bottom: 1px solid #333;
+            font-size: 16px;
+            padding: 0 5px;
+            outline: none;
+            background: transparent;
+        }
+        .form-input:focus {
+            border-bottom: 2px solid #1890ff;
+        }
+        /* 图标样式 */
+        .action-icons {
+            display: flex;
+            gap: 6px;
+            margin-left: 8px;
+        }
+        .edit-icon, .del-icon {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+        .edit-icon {
+            color: #1890ff;
+        }
+        .del-icon {
+            color: #ff4444;
+        }
+        /* 添加按钮 */
+        .add-row-btn {
+            margin: 0 0 25px 135px;
+            padding: 5px 12px;
+            background: #1890ff;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .test-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            border: 1px solid #333;
+        }
+        .test-table th, .test-table td {
+            border: 1px solid #333;
+            padding: 8px 12px;
+            text-align: center;
+            font-size: 15px;
+            vertical-align: middle;
+            position: relative;
+        }
+        .test-table th {
+            background-color: #fafafa;
+            font-weight: bold;
+            padding-bottom: 12px;
+        }
+        .item-name {
+            outline: none;
+        }
+        .item-en {
+            font-size: 13px;
+            color: #666;
+            margin-top: 2px;
+            outline: none;
+        }
+        .test-input {
+            width: 100%;
+            border: none;
+            outline: none;
+            text-align: center;
+            font-size: 15px;
+            background: transparent;
+        }
+        .conclusion-input, .remark-input {
+            width: 90%;
+            height: 36px;
+            border: none;
+            border-bottom: 1px solid #333;
+            font-size: 20px;
+            text-align: center;
+            outline: none;
+            background: transparent;
+            color: #c00;
+            font-weight: bold;
+        }
+        .table-action {
+            display: flex;
+            gap: 4px;
+            justify-content: center;
+            align-items: center;
+        }
+        /* 表头操作 */
+        .th-actions {
+            display: flex;
+            gap: 4px;
+            justify-content: center;
+            margin-top: 4px;
+        }
+        /* 印章切换按钮 */
+        .stamp-btn-group {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            margin: 30px 0 0 0;
+            flex-wrap: wrap;
+        }
+        .stamp-btn {
+            padding: 6px 10px;
+            background: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .stamp-btn:hover {
+            background: #e0e0e0;
+        }
+        .footer-section {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .footer-item {
+            text-align: center;
+        }
+        .footer-label {
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        .footer-label-en {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .stamp-item {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto;
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+        }
+        @media print {
+            .edit-icon, .del-icon, .add-row-btn, .action-icons, .table-action, .th-actions, .stamp-btn-group, .stamp-btn {display: none !important;}
+            body {background: #fff;}
+            .report-container {box-shadow: none;}
+            .form-input, .test-input, .conclusion-input, .remark-input {border-bottom: 1px solid #333 !important;}
+        }
+    </style>
+</head>
+<body>
+<div class="report-container">
+    <div class="header-logo"></div>
+    <div class="header-doc-no">JL-8.8-00</div>
+    <div class="company-name">开封物源化工有限公司</div>
+    <h1 class="report-title">产品质量检验报告单</h1>
+    <div class="report-title-en">Certificate of Analysis</div>
+
+    <!-- 动态表单区域 -->
+    <div id="formContainer">
+        <!-- 行1 -->
+        <div class="form-row">
+            <div class="form-label">
+                <span class="editable-label">产品名称</span>
+                <div class="form-label-en">Product Name</div>
+            </div>
+            <input type="text" class="form-input" placeholder="请输入">
+            <div class="action-icons">
+                <span class="edit-icon" onclick="startEdit(this)">✏️</span>
+                <span class="del-icon" onclick="deleteRow(this)">🗑️</span>
+            </div>
+        </div>
+
+        <!-- 行2 -->
+        <div class="form-row">
+            <div class="form-label">
+                <span class="editable-label">包装规格</span>
+                <div class="form-label-en">Packing</div>
+            </div>
+            <input type="text" class="form-input" placeholder="请输入">
+            <div class="action-icons">
+                <span class="edit-icon" onclick="startEdit(this)">✏️</span>
+                <span class="del-icon" onclick="deleteRow(this)">🗑️</span>
+            </div>
+        </div>
+
+        <!-- 行3 -->
+        <div class="form-row">
+            <div class="form-label">
+                <span class="editable-label">本批数量</span>
+                <div class="form-label-en">Batch Weight</div>
+            </div>
+            <input type="text" class="form-input" placeholder="请输入">
+            <div class="action-icons">
+                <span class="edit-icon" onclick="startEdit(this)">✏️</span>
+                <span class="del-icon" onclick="deleteRow(this)">🗑️</span>
+            </div>
+        </div>
+
+        <!-- 行4 -->
+        <div class="form-row">
+            <div class="form-label">
+                <span class="editable-label">生产批号</span>
+                <div class="form-label-en">Batch No.</div>
+            </div>
+            <input type="text" class="form-input" placeholder="请输入">
+            <div class="action-icons">
+                <span class="edit-icon" onclick="startEdit(this)">✏️</span>
+                <span class="del-icon" onclick="deleteRow(this)">🗑️</span>
+            </div>
+        </div>
+
+        <!-- 行5 -->
+        <div class="form-row">
+            <div class="form-label">
+                <span class="editable-label">检验日期</span>
+                <div class="form-label-en">Analysis Date</div>
+            </div>
+            <input type="text" class="form-input" placeholder="请输入">
+            <div class="action-icons">
+                <span class="edit-icon" onclick="startEdit(this)">✏️</span>
+                <span class="del-icon" onclick="deleteRow(this)">🗑️</span>
+            </div>
+        </div>
+
+        <!-- 行6 -->
+        <div class="form-row">
+            <div class="form-label">
+                <span class="editable-label">出厂日期</span>
+                <div class="form-label-en">EX-mill Date</div>
+            </div>
+            <input type="text" class="form-input" placeholder="请输入">
+            <div class="action-icons">
+                <span class="edit-icon" onclick="startEdit(this)">✏️</span>
+                <span class="del-icon" onclick="deleteRow(this)">🗑️</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加字段按钮 -->
+    <button class="add-row-btn" onclick="addNewRow()">+ 添加字段</button>
+
+    <!-- 检验表格 -->
+    <table class="test-table">
+        <thead>
+            <tr>
+                <th>
+                    <div class="item-name" contenteditable="false">检验项目</div>
+                    <div class="item-en" contenteditable="false">Test item</div>
+                    <div class="th-actions">
+                        <span class="edit-icon" onclick="editTh(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTh(this)">🗑️</span>
+                    </div>
+                </th>
+                <th>
+                    <div class="item-name" contenteditable="false">单位</div>
+                    <div class="item-en" contenteditable="false">Unit</div>
+                    <div class="th-actions">
+                        <span class="edit-icon" onclick="editTh(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTh(this)">🗑️</span>
+                    </div>
+                </th>
+                <th>
+                    <div class="item-name" contenteditable="false">标准值</div>
+                    <div class="item-en" contenteditable="false">Normal value</div>
+                    <div class="th-actions">
+                        <span class="edit-icon" onclick="editTh(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTh(this)">🗑️</span>
+                    </div>
+                </th>
+                <th>
+                    <div class="item-name" contenteditable="false">检测值</div>
+                    <div class="item-en" contenteditable="false">Test value</div>
+                    <div class="th-actions">
+                        <span class="edit-icon" onclick="editTh(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTh(this)">🗑️</span>
+                    </div>
+                </th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody">
+            <tr>
+                <td>
+                    <div class="item-name">外观</div>
+                    <div class="item-en">Appearance</div>
+                </td>
+                <td>-</td>
+                <td><input type="text" class="test-input" value="透明"></td>
+                <td><input type="text" class="test-input"></td>
+                <td>
+                    <div class="table-action">
+                        <span class="edit-icon" onclick="editTableItem(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTableItem(this)">🗑️</span>
+                    </div>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <div class="item-name">色度</div>
+                    <div class="item-en">Color(Fe-Co)</div>
+                </td>
+                <td>#</td>
+                <td><input type="text" class="test-input" value="≤3"></td>
+                <td><input type="number" class="test-input"></td>
+                <td>
+                    <div class="table-action">
+                        <span class="edit-icon" onclick="editTableItem(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTableItem(this)">🗑️</span>
+                    </div>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <div class="item-name">固体份</div>
+                    <div class="item-en">Solidity</div>
+                </td>
+                <td>%</td>
+                <td><input type="text" class="test-input" value="68-72"></td>
+                <td><input type="number" class="test-input"></td>
+                <td>
+                    <div class="table-action">
+                        <span class="edit-icon" onclick="editTableItem(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTableItem(this)">🗑️</span>
+                    </div>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <div class="item-name">粘度</div>
+                    <div class="item-en">Viscosity</div>
+                </td>
+                <td>s</td>
+                <td><input type="text" class="test-input" value="450-650"></td>
+                <td><input type="number" class="test-input"></td>
+                <td>
+                    <div class="table-action">
+                        <span class="edit-icon" onclick="editTableItem(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTableItem(this)">🗑️</span>
+                    </div>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <div class="item-name">酸值</div>
+                    <div class="item-en">Acid value</div>
+                </td>
+                <td>mgKOH/g</td>
+                <td><input type="text" class="test-input" value="≤10"></td>
+                <td><input type="number" class="test-input"></td>
+                <td>
+                    <div class="table-action">
+                        <span class="edit-icon" onclick="editTableItem(this)">✏️</span>
+                        <span class="del-icon" onclick="deleteTableItem(this)">🗑️</span>
+                    </div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="3">检验结论<br><span class="item-en">Test conclusion</span></td>
+                <td><input type="text" class="conclusion-input" placeholder="请输入"></td>
+                <td></td>
+            </tr>
+            <tr>
+                <td colspan="3">备注<br><span class="item-en">Remarks</span></td>
+                <td><input type="text" class="remark-input" placeholder="请输入"></td>
+                <td></td>
+            </tr>
+        </tbody>
+    </table>
+    <button class="add-row-btn" onclick="addTableItem()">+ 添加检验项目</button>
+
+    <div class="footer-section">
+        <div class="footer-item">
+            <div class="footer-label">主检（签字）</div>
+            <div class="footer-label-en">Inspector</div>
+            <div id="stamp1" class="stamp-item"></div>
+        </div>
+        <div class="footer-item">
+            <div class="footer-label">审核（签字）</div>
+            <div class="footer-label-en">Supervisor</div>
+            <div id="stamp2" class="stamp-item"></div>
+        </div>
+        <div class="footer-item">
+            <div class="footer-label">部门</div>
+            <div class="footer-label-en">Department</div>
+            <div id="stamp3" class="stamp-item"></div>
+        </div>
+    </div>
+
+    <!-- 印章按钮放在页面最底部 -->
+    <div class="stamp-btn-group">
+        <button class="stamp-btn" onclick="changeStamp('zhijian')">质检章</button>
+        <button class="stamp-btn" onclick="changeStamp('zhujian')">主检章</button>
+        <button class="stamp-btn" onclick="changeStamp('shenhe')">审核章</button>
+        <button class="stamp-btn" onclick="changeStamp('hege')">合格章</button>
+        <button class="stamp-btn" onclick="changeStamp('fujian')">复检章</button>
+    </div>
+</div>
+
+<script>
+// ==================== 顶部表单功能 ====================
+function startEdit(el) {
+    const row = el.closest('.form-row');
+    const labelCN = row.querySelector('.editable-label');
+    const labelEN = row.querySelector('.form-label-en');
+    
+    labelCN.contentEditable = true;
+    labelEN.contentEditable = true;
+    labelCN.focus();
+    labelCN.style.borderBottom = '1px dashed #1890ff';
+    labelEN.style.borderBottom = '1px dashed #1890ff';
+}
+
+function deleteRow(el) {
+    if(confirm('确定删除该行？')) {
+        el.closest('.form-row').remove();
+    }
+}
+
+function addNewRow() {
+    const container = document.getElementById('formContainer');
+    const newRow = document.createElement('div');
+    newRow.className = 'form-row';
+    newRow.innerHTML = `
+        <div class="form-label">
+            <span class="editable-label">自定义字段</span>
+            <div class="form-label-en">Custom Field</div>
+        </div>
+        <input type="text" class="form-input" placeholder="请输入">
+        <div class="action-icons">
+            <span class="edit-icon" onclick="startEdit(this)">✏️</span>
+            <span class="del-icon" onclick="deleteRow(this)">🗑️</span>
+        </div>
+    `;
+    container.appendChild(newRow);
+}
+
+// ==================== 列表头操作 ====================
+function editTh(el) {
+    const th = el.closest('th');
+    const name = th.querySelector('.item-name');
+    const en = th.querySelector('.item-en');
+    
+    name.contentEditable = true;
+    en.contentEditable = true;
+    name.focus();
+    name.style.borderBottom = '1px dashed #1890ff';
+    en.style.borderBottom = '1px dashed #1890ff';
+}
+
+function deleteTh(el) {
+    const th = el.closest('th');
+    const table = th.closest('.test-table');
+    const index = Array.from(th.parentElement.children).indexOf(th);
+    
+    if(index === 4) {
+        alert('操作列不能删除！');
+        return;
+    }
+    if(confirm('确定删除该整列？')) {
+        const rows = table.querySelectorAll('tr');
+        rows.forEach(row => {
+            if(row.cells[index]) row.deleteCell(index);
+        });
+    }
+}
+
+// ==================== 表格行功能 ====================
+function editTableItem(el) {
+    const tr = el.closest('tr');
+    const name = tr.querySelector('.item-name');
+    const en = tr.querySelector('.item-en');
+    
+    name.contentEditable = true;
+    en.contentEditable = true;
+    name.focus();
+    name.style.borderBottom = '1px dashed #1890ff';
+    en.style.borderBottom = '1px dashed #1890ff';
+}
+
+function deleteTableItem(el) {
+    if(confirm('确定删除该检验项目？')) {
+        el.closest('tr').remove();
+    }
+}
+
+function addTableItem() {
+    const tbody = document.getElementById('tableBody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td>
+            <div class="item-name">新项目</div>
+            <div class="item-en">New Item</div>
+        </td>
+        <td><input type="text" class="test-input" placeholder="单位"></td>
+        <td><input type="text" class="test-input" placeholder="标准值"></td>
+        <td><input type="text" class="test-input" placeholder="检测值"></td>
+        <td>
+            <div class="table-action">
+                <span class="edit-icon" onclick="editTableItem(this)">✏️</span>
+                <span class="del-icon" onclick="deleteTableItem(this)">🗑️</span>
+            </div>
+        </td>
+    `;
+    const conclusionRow = tbody.querySelector('.conclusion-input').closest('tr');
+    tbody.insertBefore(tr, conclusionRow);
+}
+
+// ==================== 印章切换功能 ====================
+function changeStamp(type) {
+    let svg = '';
+    switch(type) {
+        case 'zhijian':
+            svg = 'data:image/svg+xml;utf8,<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="45" fill="none" stroke="#c00" stroke-width="2"/><text x="50" y="30" text-anchor="middle" font-size="12" fill="#c00">开封物源化工</text><text x="50" y="50" text-anchor="middle" font-size="18" fill="#c00" font-weight="bold">质检章</text><text x="50" y="70" text-anchor="middle" font-size="12" fill="#c00">质量检验专用</text></svg>';
+            break;
+        case 'zhujian':
+            svg = 'data:image/svg+xml;utf8,<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="45" fill="none" stroke="#c00" stroke-width="2"/><text x="50" y="40" text-anchor="middle" font-size="18" fill="#c00" font-weight="bold">主检章</text><text x="50" y="60" text-anchor="middle" font-size="12" fill="#c00">检验专用</text></svg>';
+            break;
+        case 'shenhe':
+            svg = 'data:image/svg+xml;utf8,<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="45" fill="none" stroke="#c00" stroke-width="2"/><text x="50" y="40" text-anchor="middle" font-size="18" fill="#c00" font-weight="bold">审核章</text><text x="50" y="60" text-anchor="middle" font-size="12" fill="#c00">审核专用</text></svg>';
+            break;
+        case 'hege':
+            svg = 'data:image/svg+xml;utf8,<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50 10 L90 50 L50 90 L10 50 Z" fill="none" stroke="#4CAF50" stroke-width="3"/><text x="50" y="45" text-anchor="middle" font-size="18" fill="#4CAF50" font-weight="bold">合格</text><text x="50" y="65" text-anchor="middle" font-size="18" fill="#4CAF50" font-weight="bold">PASSED</text></svg>';
+            break;
+        case 'fujian':
+            svg = 'data:image/svg+xml;utf8,<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="45" fill="none" stroke="#ff9800" stroke-width="2"/><text x="50" y="40" text-anchor="middle" font-size="18" fill="#ff9800" font-weight="bold">复检章</text><text x="50" y="60" text-anchor="middle" font-size="12" fill="#ff9800">复核专用</text></svg>';
+            break;
+    }
+    document.querySelectorAll('.stamp-item').forEach(item => {
+        item.style.backgroundImage = `url(${svg})`;
+    });
+}
+</script>
+</body>
+</html>
