@@ -4,7 +4,8 @@ import QRCode from 'qrcode';
 import { nanoid } from 'nanoid';
 
 import { getPool } from '../db/pool.js';
-import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { resolvePublicBaseUrl } from '../lib/publicBaseUrl.js';
+import { requireAuth, requireAnyPermission, requirePermission } from '../middleware/auth.js';
 
 export const router = Router();
 
@@ -12,6 +13,9 @@ router.use(requireAuth);
 
 const createSchema = z.object({
   reportIds: z.array(z.number().int().positive()).min(1).max(200)
+});
+const deleteSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(200)
 });
 
 router.post('/', requirePermission('qrcodes', 'create'), async (req, res) => {
@@ -53,8 +57,8 @@ router.post('/', requirePermission('qrcodes', 'create'), async (req, res) => {
 
     await conn.commit();
 
-    const base = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
-    const scanUrl = `${base}/qr/${token}`;
+    const base = resolvePublicBaseUrl(req);
+    const scanUrl = `${base}/api/public/qr/${token}`;
     const dataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 280 });
     res.status(201).json({ id: qrcodeId, token, scanUrl, qrDataUrl: dataUrl });
   } catch (e) {
@@ -66,19 +70,89 @@ router.post('/', requirePermission('qrcodes', 'create'), async (req, res) => {
 });
 
 router.get('/', requirePermission('qrcodes', 'list'), async (req, res) => {
+  const q = String(req.query.q || '').trim();
   const limit = Math.min(Number(req.query.limit || 50), 200);
   const offset = Math.max(Number(req.query.offset || 0), 0);
+  const base = resolvePublicBaseUrl(req);
 
   const pool = getPool();
-  const [rows] = await pool.query(
-    `SELECT q.id, q.token, q.created_at AS createdAt,
-            (SELECT COUNT(*) FROM qrcode_reports qr WHERE qr.qrcode_id = q.id) AS reportCount
-     FROM qrcodes q
-     ORDER BY q.id DESC
-     LIMIT ? OFFSET ?`,
-    [limit, offset]
+  const where = [];
+  const params = [];
+  if (q) {
+    where.push(
+      `EXISTS (
+        SELECT 1
+        FROM qrcode_reports qr
+        JOIN reports r ON r.id = qr.report_id
+        WHERE qr.qrcode_id = qrc.id
+          AND (r.product_name LIKE ? OR r.batch_no LIKE ?)
+      )`
+    );
+    params.push(`%${q}%`, `%${q}%`);
+  }
+  const sqlWhere = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS total
+     FROM qrcodes qrc
+     ${sqlWhere}`,
+    params
   );
-  res.json({ items: rows });
+  const total = Number(countRows?.[0]?.total || 0);
+  const [baseRows] = await pool.query(
+    `SELECT qrc.id, qrc.token, qrc.created_at AS createdAt
+     FROM qrcodes qrc
+     ${sqlWhere}
+     ORDER BY qrc.id DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+  if (!baseRows.length) return res.json({ items: [], total, limit, offset });
+
+  const ids = baseRows.map((r) => r.id);
+  const [rows] = await pool.query(
+    `SELECT q.id, q.token, q.created_at AS createdAt, r.product_name AS productName, r.batch_no AS batchNo
+     FROM qrcodes q
+     LEFT JOIN qrcode_reports qr ON qr.qrcode_id = q.id
+     LEFT JOIN reports r ON r.id = qr.report_id
+     WHERE q.id IN (${ids.map(() => '?').join(',')})
+     ORDER BY q.id DESC, r.id DESC`,
+    ids
+  );
+
+  const byId = new Map();
+  for (const row of rows) {
+    if (!byId.has(row.id)) {
+      byId.set(row.id, {
+        id: row.id,
+        token: row.token,
+        createdAt: row.createdAt,
+        reportCount: 0,
+        reportTags: []
+      });
+    }
+    const item = byId.get(row.id);
+    if (row.productName || row.batchNo) {
+      item.reportCount += 1;
+      item.reportTags.push({
+        productName: row.productName || '',
+        batchNo: row.batchNo || ''
+      });
+    }
+  }
+
+  const items = baseRows.map((r) => byId.get(r.id) || {
+    id: r.id,
+    token: r.token,
+    createdAt: r.createdAt,
+    reportCount: 0,
+    reportTags: []
+  });
+  for (const item of items) {
+    const scanUrl = `${base}/api/public/qr/${item.token}`;
+    item.qrThumbDataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 72 });
+  }
+  res.json({ items, total, limit, offset });
 });
 
 router.get('/:id', requirePermission('qrcodes', 'viewDetail'), async (req, res) => {
@@ -115,9 +189,21 @@ router.get('/:id/qr', requirePermission('qrcodes', 'viewDetail'), async (req, re
   const qrcode = qrRows?.[0];
   if (!qrcode) return res.status(404).json({ error: 'NOT_FOUND' });
 
-  const base = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
-  const scanUrl = `${base}/qr/${qrcode.token}`;
+  const base = resolvePublicBaseUrl(req);
+  const scanUrl = `${base}/api/public/qr/${qrcode.token}`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 280 });
   res.json({ id: qrcode.id, token: qrcode.token, scanUrl, qrDataUrl: dataUrl });
+});
+
+router.delete('/', requireAnyPermission('qrcodes', ['delete', 'create']), async (req, res) => {
+  const parsed = deleteSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const { ids } = parsed.data;
+  const pool = getPool();
+  const [result] = await pool.query(
+    `DELETE FROM qrcodes WHERE id IN (${ids.map(() => '?').join(',')})`,
+    ids
+  );
+  res.json({ ok: true, deletedCount: Number(result?.affectedRows || 0) });
 });
 

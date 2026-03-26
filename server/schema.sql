@@ -20,8 +20,8 @@ CREATE TABLE IF NOT EXISTS employee_categories (
 ) ENGINE=InnoDB;
 
 INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json) VALUES
-('品管', 'qc', 1, CAST('{"reports":{"list":true,"view":true,"create":true,"edit":true,"void":true,"activate":true,"previewPrint":true,"seals":true},"qrcodes":{"list":true,"create":true,"viewDetail":true},"templates":{"use":true},"stamps":{"manage":false},"company":{"manage":false}}' AS JSON)),
-('客服', 'cs', 2, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"previewPrint":true,"seals":false},"qrcodes":{"list":true,"create":false,"viewDetail":true},"templates":{"use":false},"stamps":{"manage":false},"company":{"manage":false}}' AS JSON));
+('品管', 'qc', 1, CAST('{"reports":{"list":true,"view":true,"create":true,"edit":true,"void":true,"activate":true,"bulkPass":true,"bulkVoid":true,"bulkActivate":true,"bulkDelete":true,"previewPrint":true,"seals":true},"qrcodes":{"list":true,"create":true,"viewDetail":true,"delete":true},"templates":{"use":true},"stamps":{"manage":false},"company":{"manage":false}}' AS JSON)),
+('客服', 'cs', 2, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":false},"stamps":{"manage":false},"company":{"manage":false}}' AS JSON));
 
 -- 超级管理员（无类别）或员工（必选类别，可有个性化权限 JSON）
 CREATE TABLE IF NOT EXISTS users (

@@ -73,6 +73,10 @@ const upsertSchema = z.object({
   isActive: z.boolean().optional()
 });
 
+const bulkIdsSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(500)
+});
+
 router.post('/', async (req, res) => {
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
@@ -97,6 +101,79 @@ router.post('/', async (req, res) => {
       success: true
     });
     res.status(201).json({ id: result.insertId });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+});
+
+router.delete('/bulk', async (req, res) => {
+  const parsed = bulkIdsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const { ids } = parsed.data;
+  const pool = getPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [result] = await conn.query(
+      `DELETE FROM company_stamps WHERE id IN (${ids.map(() => '?').join(',')})`,
+      ids
+    );
+    await conn.commit();
+    await logOperationFromReq(req, {
+      module: '公司章',
+      action: '批量删除公司章',
+      detail: { count: ids.length },
+      success: true
+    });
+    res.json({ ok: true, deletedCount: Number(result?.affectedRows || 0) });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+});
+
+router.put('/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+
+  const parsed = upsertSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+
+  const { name, sealType, imageUrl, isActive = false } = parsed.data;
+
+  const pool = getPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Keep "single active" per seal_type
+    if (isActive) {
+      await conn.query('UPDATE company_stamps SET is_active=0 WHERE seal_type=?', [sealType]);
+    }
+
+    const [result] = await conn.query(
+      'UPDATE company_stamps SET name=?, seal_type=?, image_url=?, is_active=? WHERE id=?',
+      [name, sealType, imageUrl, isActive ? 1 : 0, id]
+    );
+
+    if (!result?.affectedRows) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'NOT_FOUND' });
+    }
+
+    await conn.commit();
+    await logOperationFromReq(req, {
+      module: '公司章',
+      action: '修改公司章',
+      detail: { stampId: id, sealType, isActive: !!isActive },
+      success: true
+    });
+    res.json({ ok: true, updatedCount: Number(result?.affectedRows || 0) });
   } catch (e) {
     await conn.rollback();
     throw e;

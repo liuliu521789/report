@@ -6,6 +6,7 @@
   --border: rgba(15, 23, 42, 0.08);
   --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
   --radius: 14px;
+  --primary: #22c55e;
 }
 
 html,
@@ -21,6 +22,30 @@ body {
   background: #0b1220;
   color: rgba(255, 255, 255, 0.92);
   border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.app-shell .aside {
+  /* Layout.vue: .aside { padding: 14px 12px; } */
+  /* Set horizontal padding to 0 so the menu can be truly flush with sidebar edges. */
+  padding: 14px 0 !important;
+}
+
+.app-shell .aside .menu {
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.app-shell .aside .menu .el-menu-item,
+.app-shell .aside .menu .el-submenu__title {
+  width: 100% !important;
+  box-sizing: border-box;
+  border-right: 3px solid transparent;
+}
+
+.app-shell .aside .menu.el-menu--collapse .el-menu-item,
+.app-shell .aside .menu.el-menu--collapse .el-submenu__title {
+  width: 100% !important;
 }
 
 .app-shell .el-header {
@@ -79,12 +104,73 @@ body {
 }
 
 .el-menu-item.is-active {
-  background: rgba(255, 255, 255, 0.08) !important;
-  color: #ffffff !important;
+  background: rgba(34, 197, 94, 0.12) !important;
+  color: var(--primary) !important;
+  border-right-color: var(--primary) !important;
+}
+
+.el-menu-item.is-active i {
+  color: var(--primary) !important;
+}
+
+.el-menu-item.is-active:hover {
+  background: rgba(34, 197, 94, 0.12) !important;
+  color: var(--primary) !important;
 }
 
 .el-menu-item:hover {
   background: rgba(255, 255, 255, 0.06) !important;
+  color: #ffffff !important;
+}
+
+.el-submenu__title:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #ffffff !important;
+}
+
+.el-submenu.is-active > .el-submenu__title {
+  /* ElementUI will mark parent submenu as active when any child is active.
+     Keep parent in normal style so only the selected menu item shows green. */
+  color: rgba(255, 255, 255, 0.84) !important;
+  background: transparent !important;
+  border-right-color: transparent !important;
+}
+
+.el-submenu.is-active > .el-submenu__title i {
+  color: rgba(255, 255, 255, 0.84) !important;
+}
+
+.el-menu--popup {
+  background: #0b1220 !important;
+}
+
+.el-menu--popup .el-menu-item,
+.el-menu--popup .el-submenu__title {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.el-menu--popup .el-menu-item:hover,
+.el-menu--popup .el-submenu__title:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #ffffff !important;
+}
+
+.el-menu--popup .el-menu-item.is-active,
+.el-menu--popup .el-submenu.is-active > .el-submenu__title {
+  /* Only submenu child items should show active style */
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  border-right-color: transparent !important;
+}
+
+.el-menu--popup .el-menu-item.is-active i,
+.el-menu--popup .el-submenu.is-active > .el-submenu__title i {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.el-menu--popup .el-menu-item.is-active:hover {
+  background: rgba(34, 197, 94, 0.12) !important;
+  color: var(--primary) !important;
 }
 
 .text-muted {

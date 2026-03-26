@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 import { router as healthRouter } from './routes/health.js';
 import { router as authRouter } from './routes/auth.js';
@@ -28,6 +29,24 @@ app.use(express.json({ limit: '5mb' }));
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// 同域提供 jsPDF / html2canvas UMD，供公开报告页导出（外链 CDN 常被拦截）
+try {
+  const require = createRequire(import.meta.url);
+  const jspdfRoot = path.dirname(require.resolve('jspdf/package.json'));
+  app.use('/vendor/jspdf', express.static(path.join(jspdfRoot, 'dist')));
+} catch {
+  // eslint-disable-next-line no-console
+  console.warn('[server] jspdf static mount skipped (npm install jspdf)');
+}
+try {
+  const require = createRequire(import.meta.url);
+  const h2cRoot = path.dirname(require.resolve('html2canvas/package.json'));
+  app.use('/vendor/html2canvas', express.static(path.join(h2cRoot, 'dist')));
+} catch {
+  // eslint-disable-next-line no-console
+  console.warn('[server] html2canvas static mount skipped (npm install html2canvas)');
+}
 
 app.use('/api/health', healthRouter);
 app.use('/api/auth', authRouter);

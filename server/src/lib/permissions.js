@@ -11,6 +11,10 @@ export function emptyPermissions() {
       edit: false,
       void: false,
       activate: false,
+      bulkPass: false,
+      bulkVoid: false,
+      bulkActivate: false,
+      bulkDelete: false,
       previewPrint: false,
       seals: false,
       fieldEdit: {}
@@ -18,7 +22,8 @@ export function emptyPermissions() {
     qrcodes: {
       list: false,
       create: false,
-      viewDetail: false
+      viewDetail: false,
+      delete: false
     },
     templates: {
       use: false
@@ -42,6 +47,10 @@ export function defaultPermissionsQc() {
       edit: true,
       void: true,
       activate: true,
+      bulkPass: true,
+      bulkVoid: true,
+      bulkActivate: true,
+      bulkDelete: true,
       previewPrint: true,
       seals: true,
       fieldEdit: {}
@@ -49,7 +58,8 @@ export function defaultPermissionsQc() {
     qrcodes: {
       list: true,
       create: true,
-      viewDetail: true
+      viewDetail: true,
+      delete: true
     },
     templates: {
       use: true
@@ -73,6 +83,10 @@ export function defaultPermissionsCs() {
       edit: false,
       void: false,
       activate: false,
+      bulkPass: false,
+      bulkVoid: false,
+      bulkActivate: false,
+      bulkDelete: false,
       previewPrint: true,
       seals: false,
       fieldEdit: {}
@@ -80,7 +94,8 @@ export function defaultPermissionsCs() {
     qrcodes: {
       list: true,
       create: false,
-      viewDetail: true
+      viewDetail: true,
+      delete: false
     },
     templates: {
       use: false

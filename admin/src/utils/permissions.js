@@ -1,8 +1,17 @@
 /** 与后端 JWT permissions 结构一致；超级管理员本地无 permissions 或 accountType=super_admin 时视为全 true */
 
+import { getActivePinia } from 'pinia';
+import { useAuthStore } from '../stores/auth';
 import { canEditReportFieldKeyFromPermissions } from './reportFieldEditDefinitions';
 
+function authStore() {
+  const p = getActivePinia();
+  return p ? useAuthStore() : null;
+}
+
 export function getAccountType() {
+  const s = authStore();
+  if (s) return s.accountType || '';
   return localStorage.getItem('accountType') || '';
 }
 
@@ -12,6 +21,11 @@ export function isSuperAdmin() {
 
 export function getPermissions() {
   if (isSuperAdmin()) return null;
+  const s = authStore();
+  if (s) {
+    const p = s.permissions;
+    return p && typeof p === 'object' ? { ...p } : {};
+  }
   const raw = localStorage.getItem('permissions');
   if (!raw) return {};
   try {

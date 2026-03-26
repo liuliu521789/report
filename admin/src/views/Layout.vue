@@ -1,48 +1,80 @@
 <template>
   <el-container class="app-shell" style="height: 100%">
-    <el-aside width="240px" class="aside">
+    <el-aside :width="isMenuCollapsed ? '64px' : '240px'" class="aside">
       <div class="brand">
-        <div class="logo">QC</div>
-        <div class="brand-text">
+        <div class="logo" v-if="!isMenuCollapsed">QC</div>
+        <div class="brand-text" v-if="!isMenuCollapsed">
           <div class="name">质检报告系统</div>
           <div class="sub">员工端后台</div>
         </div>
+        <el-button
+          class="collapse-btn"
+          type="text"
+          :icon="isMenuCollapsed ? 'el-icon-s-unfold' : 'el-icon-s-fold'"
+          @click="toggleMenu"
+        />
       </div>
       <el-menu
         :default-active="$route.path"
         :default-openeds="menuDefaultOpeneds"
+        :collapse="isMenuCollapsed"
         router
         class="menu"
       >
         <el-menu-item v-if="perm('reports', 'list')" index="/reports">
+          <i class="el-icon-document-copy" />
           <span>报告管理</span>
         </el-menu-item>
         <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
+          <i class="el-icon-link" />
           <span>二维码管理</span>
         </el-menu-item>
         <el-menu-item v-if="perm('stamps', 'manage')" index="/stamps">
+          <i class="el-icon-postcard" />
           <span>公司章管理</span>
         </el-menu-item>
         <el-menu-item v-if="perm('company', 'manage')" index="/company">
+          <i class="el-icon-office-building" />
           <span>公司信息</span>
         </el-menu-item>
         <el-submenu v-if="isSuperAdminUser" index="account-submenu">
           <template slot="title">
+            <i class="el-icon-user" />
             <span>账号管理</span>
           </template>
-          <el-menu-item index="/employee-categories">员工类别</el-menu-item>
-          <el-menu-item index="/users">员工账号</el-menu-item>
+          <el-menu-item index="/employee-categories">
+            <i class="el-icon-collection-tag" />
+            <span>员工类别</span>
+          </el-menu-item>
+          <el-menu-item index="/users">
+            <i class="el-icon-user-solid" />
+            <span>员工账号</span>
+          </el-menu-item>
         </el-submenu>
         <el-submenu v-if="isSuperAdminUser" index="audit-submenu">
           <template slot="title">
+            <i class="el-icon-notebook-2" />
             <span>安全日志</span>
           </template>
-          <el-menu-item index="/audit/login-logs">登录日志</el-menu-item>
-          <el-menu-item index="/audit/operations">操作日志</el-menu-item>
-          <el-menu-item index="/audit/errors">错误日志</el-menu-item>
-          <el-menu-item index="/security">系统安全</el-menu-item>
+          <el-menu-item index="/audit/login-logs">
+            <i class="el-icon-key" />
+            <span>登录日志</span>
+          </el-menu-item>
+          <el-menu-item index="/audit/operations">
+            <i class="el-icon-tickets" />
+            <span>操作日志</span>
+          </el-menu-item>
+          <el-menu-item index="/audit/errors">
+            <i class="el-icon-warning-outline" />
+            <span>错误日志</span>
+          </el-menu-item>
+          <el-menu-item index="/security">
+            <i class="el-icon-lock" />
+            <span>系统安全</span>
+          </el-menu-item>
         </el-submenu>
         <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
+          <i class="el-icon-document" />
           <span>我的操作日志</span>
         </el-menu-item>
       </el-menu>
@@ -54,10 +86,18 @@
           <div class="text-muted">{{ pageDesc }}</div>
         </div>
         <div class="header-right">
+          <div class="meta-info">
+            <span>{{ currentTimeText }}</span>
+            <span class="divider">|</span>
+            <span>{{ weatherText }}</span>
+          </div>
           <el-dropdown trigger="click">
             <span class="user">
-              <span class="dot" />
-              <span class="text">已登录</span>
+              <span class="avatar-wrap">
+                <el-avatar size="small" icon="el-icon-user-solid" />
+              </span>
+              <span class="text">{{ loginName || '已登录' }}</span>
+              <span class="online-dot" />
             </span>
             <el-dropdown-menu slot="dropdown">
               <el-dropdown-item @click.native="openChangePassword">修改密码</el-dropdown-item>
@@ -93,16 +133,21 @@
 <script>
 import { isSuperAdmin, perm } from '../utils/permissions';
 import { changePassword, getMe } from '../api';
+import { useAuthStore } from '../stores/auth';
 
 export default {
   name: 'Layout',
   data() {
     return {
-      accountType: localStorage.getItem('accountType') || '',
+      isMenuCollapsed: false,
+      loginName: '',
+      currentTimeText: '',
+      weatherText: '天气定位中...',
       pwDialog: false,
       pwSaving: false,
       pwForm: { oldPassword: '', newPassword: '', newPassword2: '' },
-      idleTimer: null
+      idleTimer: null,
+      clockTimer: null
     };
   },
   computed: {
@@ -110,8 +155,7 @@ export default {
       return isSuperAdmin();
     },
     menuDefaultOpeneds() {
-      if (!this.isSuperAdminUser) return [];
-      return ['account-submenu', 'audit-submenu'];
+      return [];
     },
     pageTitle() {
       const p = this.$route.path;
@@ -152,33 +196,27 @@ export default {
       });
     };
     bindActivity();
-    if (localStorage.getItem('token')) {
+    const auth = useAuthStore();
+    if (auth.token) {
       try {
         const d = await getMe();
         if (d?.user?.accountType) {
-          localStorage.setItem('accountType', d.user.accountType);
-          this.accountType = d.user.accountType;
-          if (d.user.permissions != null) {
-            localStorage.setItem('permissions', JSON.stringify(d.user.permissions));
-          } else {
-            localStorage.removeItem('permissions');
-          }
-          this.$forceUpdate();
+          this.loginName = d.user.username || '';
         }
-        if (d.idleTimeoutMinutes != null) {
-          localStorage.setItem('idleTimeoutMinutes', String(d.idleTimeoutMinutes));
-        }
-        if (d.confirmSensitiveOperations != null) {
-          localStorage.setItem('confirmSensitiveOperations', d.confirmSensitiveOperations ? '1' : '0');
-        }
+        auth.applyMeResponse(d);
+        this.$forceUpdate();
       } catch (_) {
         /* ignore */
       }
     }
+    this.tickClock();
+    this.clockTimer = setInterval(this.tickClock, 1000);
+    this.fetchWeather();
     this.setupIdleTimer();
   },
   beforeDestroy() {
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.clockTimer) clearInterval(this.clockTimer);
     ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach((ev) => {
       window.removeEventListener(ev, this.onUserActivity, true);
     });
@@ -190,18 +228,94 @@ export default {
     },
     resetIdleTimer() {
       if (this.idleTimer) clearTimeout(this.idleTimer);
-      const min = Number(localStorage.getItem('idleTimeoutMinutes') || '60');
+      const min = Number(useAuthStore().idleTimeoutMinutes || 60);
       if (!Number.isFinite(min) || min < 1) return;
       this.idleTimer = setTimeout(() => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('accountType');
-        localStorage.removeItem('permissions');
+        useAuthStore().clearSession();
         this.$message.warning('长时间未操作，已自动退出登录');
         this.$router.push('/login');
       }, min * 60 * 1000);
     },
     setupIdleTimer() {
       this.resetIdleTimer();
+    },
+    toggleMenu() {
+      this.isMenuCollapsed = !this.isMenuCollapsed;
+    },
+    tickClock() {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      this.currentTimeText = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    },
+    weatherCodeText(code) {
+      const m = {
+        0: '晴',
+        1: '基本晴',
+        2: '少云',
+        3: '多云',
+        45: '雾',
+        48: '雾凇',
+        51: '毛毛雨',
+        53: '小雨',
+        55: '中雨',
+        61: '小雨',
+        63: '中雨',
+        65: '大雨',
+        71: '小雪',
+        73: '中雪',
+        75: '大雪',
+        80: '阵雨',
+        81: '中阵雨',
+        82: '强阵雨',
+        95: '雷暴'
+      };
+      return m[Number(code)] || '未知';
+    },
+    getCurrentPosition() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('geolocation_not_supported'));
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: false,
+          timeout: 8000,
+          maximumAge: 10 * 60 * 1000
+        });
+      });
+    },
+    async fetchWeatherByCoords(lat, lon, cityLabel = '当前位置') {
+      try {
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&timezone=auto`);
+        if (!res.ok) throw new Error('weather_http_error');
+        const data = await res.json();
+        const cw = data?.current_weather;
+        if (!cw) throw new Error('weather_data_missing');
+        const t = Math.round(Number(cw.temperature));
+        const codeText = this.weatherCodeText(cw.weathercode);
+        this.weatherText = `${cityLabel} ${codeText} ${t}°C`;
+        return true;
+      } catch (_) {
+        return false;
+      }
+    },
+    async fetchWeather() {
+      try {
+        const pos = await this.getCurrentPosition();
+        const lat = Number(pos?.coords?.latitude);
+        const lon = Number(pos?.coords?.longitude);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          const ok = await this.fetchWeatherByCoords(lat, lon, '当前位置');
+          if (ok) return;
+        }
+      } catch (_) {
+        // ignore and fallback
+      }
+      // 定位失败时兜底开封
+      const ok = await this.fetchWeatherByCoords(34.797049, 114.307583, '开封');
+      if (!ok) {
+        this.weatherText = '天气获取失败';
+      }
     },
     openChangePassword() {
       this.pwDialog = true;
@@ -232,10 +346,7 @@ export default {
     },
     logout() {
       if (this.idleTimer) clearTimeout(this.idleTimer);
-      localStorage.removeItem('token');
-      localStorage.removeItem('accountType');
-      localStorage.removeItem('permissions');
-      localStorage.removeItem('idleTimeoutMinutes');
+      useAuthStore().clearSession();
       this.$router.push('/login');
     }
   }
@@ -250,12 +361,19 @@ export default {
   height: 64px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.08);
   margin-bottom: 12px;
+}
+.collapse-btn {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.9);
+}
+.collapse-btn:hover {
+  color: #ffffff;
 }
 .logo {
   width: 38px;
@@ -300,8 +418,20 @@ export default {
 .header-right {
   display: flex;
   align-items: center;
+  gap: 14px;
+}
+.meta-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+.divider {
+  color: #cbd5e1;
 }
 .user {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -311,11 +441,20 @@ export default {
   background: rgba(255, 255, 255, 0.9);
   cursor: pointer;
 }
-.dot {
+.avatar-wrap {
+  position: relative;
+  width: 24px;
+  height: 24px;
+}
+.online-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
   width: 8px;
   height: 8px;
-  border-radius: 99px;
+  border-radius: 999px;
   background: #22c55e;
+  border: 1px solid #ffffff;
 }
 .text {
   font-size: 12px;

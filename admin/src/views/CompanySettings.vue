@@ -55,7 +55,9 @@
 </template>
 
 <script>
+import { mapState } from 'pinia';
 import { getCompanySettings, updateCompanySettings } from '../api';
+import { useAuthStore } from '../stores/auth';
 
 export default {
   name: 'CompanySettings',
@@ -74,13 +76,13 @@ export default {
     };
   },
   computed: {
+    ...mapState(useAuthStore, ['token']),
     uploadAction() {
       const base = process.env.VUE_APP_API_BASE_URL || 'http://localhost:3001';
       return `${base}/api/company/settings/logo`;
     },
     uploadHeaders() {
-      const token = localStorage.getItem('token');
-      return token ? { Authorization: `Bearer ${token}` } : {};
+      return this.token ? { Authorization: `Bearer ${this.token}` } : {};
     }
   },
   mounted() {

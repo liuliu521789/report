@@ -126,6 +126,26 @@ export async function activateReport(id) {
   return data;
 }
 
+export async function bulkPassReports(ids) {
+  const { data } = await http.post('/api/reports/bulk/conclusion-pass', { ids });
+  return data;
+}
+
+export async function bulkVoidReports(ids) {
+  const { data } = await http.post('/api/reports/bulk/void', { ids });
+  return data;
+}
+
+export async function bulkActivateReports(ids) {
+  const { data } = await http.post('/api/reports/bulk/activate', { ids });
+  return data;
+}
+
+export async function bulkDeleteReports(ids) {
+  const { data } = await http.delete('/api/reports/bulk', { data: { ids } });
+  return data;
+}
+
 export async function createQrcode(reportIds) {
   const { data } = await http.post('/api/qrcodes', { reportIds });
   return data;
@@ -143,6 +163,11 @@ export async function getQrcode(id) {
 
 export async function getQrcodeQr(id) {
   const { data } = await http.get(`/api/qrcodes/${id}/qr`);
+  return data;
+}
+
+export async function deleteQrcodes(ids) {
+  const { data } = await http.delete('/api/qrcodes', { data: { ids } });
   return data;
 }
 
@@ -218,6 +243,16 @@ export async function activateStamp(id) {
 
 export async function deleteStamp(id) {
   const { data } = await http.delete(`/api/stamps/${id}`);
+  return data;
+}
+
+export async function updateStamp(id, payload) {
+  const { data } = await http.put(`/api/stamps/${id}`, payload);
+  return data;
+}
+
+export async function bulkDeleteStamps(ids) {
+  const { data } = await http.delete('/api/stamps/bulk', { data: { ids } });
   return data;
 }
 

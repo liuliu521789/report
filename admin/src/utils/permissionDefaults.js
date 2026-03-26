@@ -19,6 +19,10 @@ export function emptyPermissionShape() {
       edit: false,
       void: false,
       activate: false,
+      bulkPass: false,
+      bulkVoid: false,
+      bulkActivate: false,
+      bulkDelete: false,
       previewPrint: false,
       seals: false,
       fieldEdit: defaultFieldEditShape()
@@ -26,7 +30,8 @@ export function emptyPermissionShape() {
     qrcodes: {
       list: false,
       create: false,
-      viewDetail: false
+      viewDetail: false,
+      delete: false
     },
     templates: {
       use: false

@@ -8,6 +8,10 @@
       <el-checkbox v-model="inner.reports.edit" @change="emit">编辑</el-checkbox>
       <el-checkbox v-model="inner.reports.void" @change="emit">作废</el-checkbox>
       <el-checkbox v-model="inner.reports.activate" @change="emit">恢复有效</el-checkbox>
+      <el-checkbox v-model="inner.reports.bulkPass" @change="emit">批量判定合格</el-checkbox>
+      <el-checkbox v-model="inner.reports.bulkVoid" @change="emit">批量作废</el-checkbox>
+      <el-checkbox v-model="inner.reports.bulkActivate" @change="emit">批量有效</el-checkbox>
+      <el-checkbox v-model="inner.reports.bulkDelete" @change="emit">批量删除</el-checkbox>
       <el-checkbox v-model="inner.reports.previewPrint" @change="emit">预览/打印</el-checkbox>
       <el-checkbox v-model="inner.reports.seals" @change="emit">盖章</el-checkbox>
       <div class="perm-subtitle">报告字段（勾选为可编辑，未勾选为只读）</div>
@@ -28,6 +32,7 @@
       <el-checkbox v-model="inner.qrcodes.list" @change="emit">列表</el-checkbox>
       <el-checkbox v-model="inner.qrcodes.create" @change="emit">生成</el-checkbox>
       <el-checkbox v-model="inner.qrcodes.viewDetail" @change="emit">详情/下载图</el-checkbox>
+      <el-checkbox v-model="inner.qrcodes.delete" @change="emit">删除</el-checkbox>
     </div>
     <div class="perm-block">
       <div class="perm-title">模板</div>

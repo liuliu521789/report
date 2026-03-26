@@ -46,10 +46,10 @@ router.get('/settings', canReadCompanyForReports, async (req, res) => {
 });
 
 const settingsSchema = z.object({
-  companyNameZh: z.string().min(1).max(128),
-  companyNameEn: z.string().min(1).max(256),
-  reportTitleZh: z.string().min(1).max(128),
-  reportTitleEn: z.string().min(1).max(256),
+  companyNameZh: z.string().max(128).optional().nullable().transform((v) => v ?? ''),
+  companyNameEn: z.string().max(256).optional().nullable().transform((v) => v ?? ''),
+  reportTitleZh: z.string().max(128).optional().nullable().transform((v) => v ?? ''),
+  reportTitleEn: z.string().max(256).optional().nullable().transform((v) => v ?? ''),
   descriptionZh: z.string().max(256).optional().nullable(),
   descriptionEn: z.string().max(256).optional().nullable(),
   logoUrl: z.string().max(512).optional().nullable()

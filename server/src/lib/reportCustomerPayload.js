@@ -1,4 +1,5 @@
 import { getPool } from '../db/pool.js';
+import { normalizePublicAssetUrl } from './publicBaseUrl.js';
 
 /** 与小程序/公开页一致的公司信息（snake_case 字段名） */
 export async function getCompanySettings(pool) {
@@ -75,9 +76,32 @@ export async function getReportCustomerPayload(pool, id) {
     recheck: null
   };
   for (const r of sealRows || []) {
-    appliedSeals[r.sealType] = { imageUrl: r.imageUrl };
+    appliedSeals[r.sealType] = { imageUrl: normalizePublicAssetUrl(r.imageUrl) };
   }
 
-  const company = await getCompanySettings(pool);
+  const rawCompany = await getCompanySettings(pool);
+  const company = {
+    ...rawCompany,
+    logo_url: normalizePublicAssetUrl(rawCompany.logo_url)
+  };
   return { company, report: { ...report, fields }, appliedSeals };
+}
+
+/** 汇总接口中的 stamps（mapActiveStamps 结构）与 company.logo_url */
+export function normalizePublicSummaryAssets(company, stamps) {
+  const c = company
+    ? {
+        ...company,
+        logo_url: normalizePublicAssetUrl(company.logo_url)
+      }
+    : company;
+  if (!stamps || typeof stamps !== 'object') return { company: c, stamps };
+  const out = { ...stamps };
+  for (const key of Object.keys(out)) {
+    const row = out[key];
+    if (row && row.imageUrl != null) {
+      out[key] = { ...row, imageUrl: normalizePublicAssetUrl(row.imageUrl) };
+    }
+  }
+  return { company: c, stamps: out };
 }

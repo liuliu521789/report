@@ -127,8 +127,12 @@
               @input="onMetaValueZh(row)"
             />
             <div v-if="rowEditable(row)" class="action-icons">
-              <span class="edit-icon" title="编辑标签" @click="focusLabel(row)">✏️</span>
-              <span class="del-icon" title="删除行" @click="deleteMetaRow(row)">🗑️</span>
+              <span class="edit-icon" title="编辑标签" @click="focusLabel(row)">
+                <i class="el-icon-edit"></i>
+              </span>
+              <span class="del-icon" title="删除行" @click="deleteMetaRow(row)">
+                <i class="el-icon-delete"></i>
+              </span>
             </div>
           </div>
         </div>
@@ -211,7 +215,9 @@
               </td>
               <td v-if="fieldEditable('inspection_table')">
                 <div class="table-action">
-                  <span class="del-icon" title="删除检验项" @click="removeTableRow(ri)">🗑️</span>
+                  <span class="del-icon" title="删除检验项" @click="removeTableRow(ri)">
+                    <i class="el-icon-delete"></i>
+                  </span>
                 </div>
               </td>
             </tr>
@@ -477,7 +483,8 @@ export default {
       form: {
         reportNo: '',
         templateId: null,
-        conclusion: 'unknown',
+        // 默认判定结论：未选择时按“合格”保存
+        conclusion: 'pass',
         fields: []
       }
     };
@@ -547,7 +554,7 @@ export default {
       this.form = {
         reportNo: report.reportNo,
         templateId: report.templateId || null,
-        conclusion: report.conclusion || 'unknown',
+        conclusion: report.conclusion || 'pass',
         fields: (report.fields || []).map((f) => ({
           fieldKey: f.fieldKey,
           fieldLabel: f.fieldLabel,
@@ -969,7 +976,7 @@ export default {
     startBlank() {
       this.selectedTemplateId = null;
       this.form.reportNo = '';
-      this.form.conclusion = 'unknown';
+      this.form.conclusion = 'pass';
       this.seedDefaultPaper();
       this.$message.success('已切换为空白版式');
     },
@@ -999,7 +1006,7 @@ export default {
         batchNo: batch?.fieldValue?.zh?.trim() || null,
         batchNoEn: batch?.fieldValue?.en || null,
         templateId: this.form.templateId || null,
-        conclusion: this.form.conclusion,
+        conclusion: this.form.conclusion || 'pass',
         fields: this.form.fields.map((f) => ({
           fieldKey: f.fieldKey,
           fieldLabel: f.fieldLabel,
@@ -1272,21 +1279,33 @@ export default {
   display: flex;
   gap: 6px;
   margin-left: 8px;
+  align-items: center;
 }
 .edit-icon,
 .del-icon {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   cursor: pointer;
-  font-size: 16px;
   flex-shrink: 0;
   user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+.edit-icon i,
+.del-icon i {
+  font-size: 16px;
 }
 .edit-icon {
   color: #1890ff;
 }
 .del-icon {
   color: #ff4444;
+}
+.edit-icon:hover,
+.del-icon:hover {
+  background: rgba(0, 0, 0, 0.04);
 }
 .add-row-btn {
   margin: 0 0 25px 135px;

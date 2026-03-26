@@ -1,5 +1,6 @@
 import Vue from 'vue';
 import Router from 'vue-router';
+import { useAuthStore } from '../stores/auth';
 
 import Login from '../views/Login.vue';
 import Layout from '../views/Layout.vue';
@@ -52,32 +53,27 @@ const router = new Router({
 });
 
 function canRoutePerm(mod, key) {
-  if (localStorage.getItem('accountType') === 'super_admin') return true;
-  try {
-    const perms = JSON.parse(localStorage.getItem('permissions') || '{}');
-    return !!(perms[mod] && perms[mod][key]);
-  } catch {
-    return false;
-  }
+  const auth = useAuthStore();
+  if (auth.accountType === 'super_admin') return true;
+  const perms = auth.permissions || {};
+  return !!(perms[mod] && perms[mod][key]);
 }
 
 /** 满足任一 (module,key) 即可，用于「查看详情」与「编辑」共用路由 */
 function canRouteAnyPerm(pairs) {
-  if (localStorage.getItem('accountType') === 'super_admin') return true;
+  const auth = useAuthStore();
+  if (auth.accountType === 'super_admin') return true;
   if (!Array.isArray(pairs) || pairs.length === 0) return false;
-  try {
-    const perms = JSON.parse(localStorage.getItem('permissions') || '{}');
-    return pairs.some(([mod, key]) => !!(perms[mod] && perms[mod][key]));
-  } catch {
-    return false;
-  }
+  const perms = auth.permissions || {};
+  return pairs.some(([mod, key]) => !!(perms[mod] && perms[mod][key]));
 }
 
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('token');
+  const auth = useAuthStore();
+  const token = auth.token;
   if (to.path !== '/login' && !token) return next('/login');
   if (to.path === '/login' && token) return next('/reports');
-  if (to.matched.some((r) => r.meta?.superAdminOnly) && localStorage.getItem('accountType') !== 'super_admin') {
+  if (to.matched.some((r) => r.meta?.superAdminOnly) && auth.accountType !== 'super_admin') {
     return next('/reports');
   }
   const needAny = to.matched.find((r) => r.meta?.needAnyPerm)?.meta?.needAnyPerm;

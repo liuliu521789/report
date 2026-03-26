@@ -1,7 +1,12 @@
 import { Router } from 'express';
+import puppeteer from 'puppeteer';
 
 import { getPool } from '../db/pool.js';
-import { getCompanySettings, getReportCustomerPayload } from '../lib/reportCustomerPayload.js';
+import {
+  getCompanySettings,
+  getReportCustomerPayload,
+  normalizePublicSummaryAssets
+} from '../lib/reportCustomerPayload.js';
 
 export const router = Router();
 
@@ -23,9 +28,8 @@ function mapActiveStamps(rows) {
   return out;
 }
 
-// Public "scan" endpoint for mini program.
-// In production: the QR should encode the miniprogram scheme.
-// Here we keep a stable HTTP URL for development/testing.
+// Public "scan" endpoint for WeChat/browser users.
+// Keep a stable HTTP URL and route users to a mobile-friendly landing page.
 async function handleScan(req, res) {
   const token = String(req.params.token || '').trim();
   if (!token) return res.status(400).type('text').send('bad token');
@@ -35,162 +39,303 @@ async function handleScan(req, res) {
   const qr = qrRows?.[0];
   if (!qr) return res.status(404).type('text').send('not found');
 
-  // Redirect to a placeholder. The mini program will use its own route like:
-  // pages/summary/index?token=xxx
-  res.redirect(302, `/miniprogram/index.html?token=${encodeURIComponent(token)}`);
+  // 相对路径跳转：始终留在用户扫码时访问的 Host 上，避免 PUBLIC_BASE_URL 与手机实际域名不一致导致外置浏览器空白/无地址。
+  res.redirect(302, `/api/public/scan?token=${encodeURIComponent(token)}`);
 }
 
+router.get('/api/public/qr/:token', handleScan);
 router.get('/qr/:token', handleScan);
 // Backward compatible: older QR links used /mp/qr/:token
 router.get('/mp/qr/:token', handleScan);
 
-// Dev-only HTML preview page for desktop verification.
-// Usage:
-// - /miniprogram/index.html?token=xxx  (summary list)
-// - /miniprogram/report.html?token=xxx&id=123  (report detail)
-router.get('/miniprogram/index.html', (req, res) => {
+// Public landing page after scanning QR code from WeChat/browser.
+function sendScanLandingHtml(req, res) {
   res.type('html').send(`<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>报告汇总（开发预览）</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>产品质量检测报告单</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; background: #f6f7fb; color: #111; }
-      .wrap { max-width: 980px; margin: 0 auto; padding: 18px; }
-      .card { background: #fff; border: 1px solid #e9edf5; border-radius: 12px; padding: 16px; }
-      .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-      .muted { color: #666; font-size: 12px; }
-      h1 { margin: 0 0 10px; font-size: 18px; }
-      table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-      th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px; }
-      a { color: #1677ff; text-decoration: none; }
-      .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #ddd; }
-      .ok { border-color: #b7eb8f; background: #f6ffed; }
-      .bad { border-color: #ffa39e; background: #fff1f0; }
-      .unk { border-color: #d9d9d9; background: #fafafa; }
-      .warn { border-color: #ffe58f; background: #fffbe6; }
-      .stamp { width: 120px; height: 120px; object-fit: contain; border: 1px dashed #ddd; border-radius: 8px; background: #fafafa; }
-      .error { color: #cf1322; white-space: pre-wrap; }
-      .btn { display: inline-block; padding: 8px 12px; border-radius: 10px; border: 1px solid #d9d9d9; background: #fff; cursor: pointer; }
+      :root {
+        --title-blue: #1a3a5f;
+        --text-sub: #666666;
+        --green: #00c06b;
+        --green-border: #b7eb8f;
+        --card-bg: #ffffff;
+        --sep: #e8e8e8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: linear-gradient(180deg, #e8f2ff 0%, #f0f6fc 35%, #f7f8fa 100%);
+        color: #333;
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .page {
+        max-width: 480px;
+        margin: 0 auto;
+        padding: 16px 18px 28px;
+        padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+      }
+      .top-refresh {
+        text-align: right;
+        margin-bottom: 8px;
+      }
+      .top-refresh button {
+        border: none;
+        background: transparent;
+        color: #94a3b8;
+        font-size: 13px;
+        padding: 4px 0;
+      }
+      .doc-label {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .doc-label .deco {
+        color: #cbd5e1;
+        font-size: 11px;
+        letter-spacing: -1px;
+        transform: rotate(-12deg);
+        opacity: 0.85;
+      }
+      .doc-label .label-text {
+        font-size: 12px;
+        color: #94a3b8;
+        font-weight: 400;
+      }
+      .hero {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 22px;
+      }
+      .hero-text { flex: 1; min-width: 0; }
+      .hero-text h1 {
+        margin: 0;
+        font-size: 26px;
+        font-weight: 700;
+        color: var(--title-blue);
+        letter-spacing: 0.5px;
+        line-height: 1.25;
+      }
+      .hero-text .bind {
+        margin: 10px 0 0;
+        font-size: 14px;
+        color: var(--text-sub);
+      }
+      .hero-art {
+        flex-shrink: 0;
+        width: 108px;
+        height: 88px;
+      }
+      .hero-art svg { width: 100%; height: 100%; display: block; }
+      .report-list { display: flex; flex-direction: column; gap: 14px; }
+      .report-card {
+        background: var(--card-bg);
+        border: 1px solid var(--green-border);
+        border-radius: 12px;
+        padding: 16px 14px 14px;
+        box-shadow: 0 2px 12px rgba(0, 192, 107, 0.06);
+      }
+      .report-card .no {
+        font-size: 15px;
+        font-weight: 600;
+        color: #374151;
+        margin: 0;
+      }
+      .report-card .sep {
+        height: 1px;
+        background: var(--sep);
+        margin: 12px 0 12px;
+      }
+      .report-card .meta {
+        font-size: 14px;
+        color: var(--text-sub);
+        line-height: 1.6;
+        margin: 0;
+      }
+      .report-card .meta + .meta { margin-top: 4px; }
+      .btn-detail {
+        display: block;
+        width: 100%;
+        margin-top: 14px;
+        padding: 12px 16px;
+        border: none;
+        border-radius: 10px;
+        background: var(--green);
+        color: #fff;
+        font-size: 15px;
+        font-weight: 500;
+        text-align: center;
+        text-decoration: none;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .btn-detail:active { opacity: 0.92; }
+      .error {
+        margin: 12px 0;
+        color: #cf1322;
+        font-size: 14px;
+        white-space: pre-wrap;
+      }
+      .empty {
+        text-align: center;
+        padding: 40px 16px;
+        color: var(--text-sub);
+        font-size: 14px;
+      }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <div class="card">
-        <div class="row" style="justify-content: space-between">
-          <div>
-            <h1>报告汇总（开发预览页）</h1>
-            <div class="muted" id="meta"></div>
-          </div>
-          <div class="row">
-            <button class="btn" id="refresh">刷新</button>
-          </div>
-        </div>
-        <div class="row" style="margin-top: 12px">
-          <img id="stamp" class="stamp" alt="公司章" style="display:none" />
-          <div>
-            <div class="muted">Token</div>
-            <div id="token" style="font-weight:600"></div>
-          </div>
-        </div>
-        <div id="err" class="error" style="margin-top:12px"></div>
-        <table>
-          <thead>
-            <tr>
-              <th>报告编号</th>
-              <th>产品名称</th>
-              <th>批次</th>
-              <th>判定</th>
-              <th>状态</th>
-              <th>查看</th>
-            </tr>
-          </thead>
-          <tbody id="tbody"></tbody>
-        </table>
+    <div class="page">
+      <div class="top-refresh"><button type="button" id="refresh">刷新</button></div>
+      <div class="doc-label">
+        <span class="deco">////</span>
+        <span class="label-text">产品质量检测报告单</span>
+        <span class="deco">////</span>
       </div>
+      <div class="hero">
+        <div class="hero-text">
+          <h1>报告汇总</h1>
+          <p class="bind">绑定报告：<span id="count">0</span>条</p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <svg viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="gPaper" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#5b9cf5"/>
+                <stop offset="100%" style="stop-color:#3d7dd9"/>
+              </linearGradient>
+              <linearGradient id="gLens" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#7eb8ff"/>
+                <stop offset="100%" style="stop-color:#4a90e2"/>
+              </linearGradient>
+            </defs>
+            <rect x="18" y="12" width="52" height="68" rx="6" fill="url(#gPaper)" opacity="0.95"/>
+            <rect x="24" y="22" width="28" height="3" rx="1" fill="#fff" opacity="0.9"/>
+            <rect x="24" y="30" width="36" height="3" rx="1" fill="#fff" opacity="0.65"/>
+            <rect x="24" y="38" width="32" height="3" rx="1" fill="#fff" opacity="0.65"/>
+            <rect x="26" y="48" width="8" height="8" rx="2" fill="none" stroke="#fff" stroke-width="2" opacity="0.85"/>
+            <rect x="38" y="48" width="8" height="8" rx="2" fill="#fff" opacity="0.35"/>
+            <path d="M62 58 L88 32" stroke="#f5c542" stroke-width="5" stroke-linecap="round"/>
+            <path d="M86 30 L94 22 L98 38 Z" fill="#f5c542"/>
+            <circle cx="82" cy="58" r="22" fill="none" stroke="url(#gLens)" stroke-width="5"/>
+            <circle cx="82" cy="58" r="14" fill="rgba(255,255,255,0.25)"/>
+          </svg>
+        </div>
+      </div>
+      <div id="error" class="error"></div>
+      <div id="list" class="report-list"></div>
     </div>
-
     <script>
       const qs = new URLSearchParams(location.search);
-      const token = qs.get('token') || '';
-      document.getElementById('token').textContent = token || '(missing)';
+      const token = (qs.get('token') || '').trim();
 
-      function tag(html, cls) {
-        return '<span class="tag ' + cls + '">' + html + '</span>';
+      function esc(s) {
+        return String(s)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
       }
 
-      function conclusionLabel(v) {
-        if (v === 'pass') return tag('合格', 'ok');
-        if (v === 'fail') return tag('不合格', 'bad');
-        return tag('未知', 'unk');
+      function renderList(reports) {
+        const list = document.getElementById('list');
+        if (!reports || reports.length === 0) {
+          list.innerHTML = '<div class="empty">暂无绑定报告</div>';
+          return;
+        }
+        list.innerHTML = reports.map((r) => {
+          const pubBase = location.pathname.indexOf('/api/public/') === 0 ? '/api/public' : '';
+          const reportPath = pubBase ? pubBase + '/report.html' : '/miniprogram/report.html';
+          const href = reportPath + '?token=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(r.id);
+          return (
+            '<div class="report-card">' +
+              '<p class="no">报告编号：' + esc(r.reportNo || '-') + '</p>' +
+              '<div class="sep"></div>' +
+              '<p class="meta">产品：' + esc(r.productName || '-') + '</p>' +
+              '<p class="meta">批次：' + esc(r.batchNo || '-') + '</p>' +
+              '<a class="btn-detail" href="' + href + '">点击查看详情</a>' +
+            '</div>'
+          );
+        }).join('');
       }
 
-      function statusLabel(v) {
-        if (v === 'void') return tag('作废', 'warn');
-        return tag('有效', 'ok');
-      }
-
-      async function load() {
-        document.getElementById('err').textContent = '';
-        document.getElementById('tbody').innerHTML = '';
+      async function load(forceRefresh) {
+        const errEl = document.getElementById('error');
+        errEl.textContent = '';
         if (!token) {
-          document.getElementById('err').textContent = '缺少 token 参数，例如：/miniprogram/index.html?token=xxx';
+          errEl.textContent = '缺少访问参数';
           return;
         }
         try {
-          const res = await fetch('/api/public/summary?token=' + encodeURIComponent(token));
+          const url =
+            '/api/public/summary?token=' +
+            encodeURIComponent(token) +
+            (forceRefresh ? '&_t=' + Date.now() : '');
+          const res = await fetch(url, {
+            cache: forceRefresh ? 'no-store' : 'default'
+          });
           const data = await res.json();
           if (!res.ok) throw new Error(JSON.stringify(data));
-
-          document.getElementById('meta').textContent = '报告数：' + (data.reports?.length || 0) + '｜生成时间：' + (data.createdAt || '-');
-
-          const stamp = data.stamps?.departmentQc?.imageUrl;
-          const img = document.getElementById('stamp');
-          if (stamp) {
-            img.src = stamp;
-            img.style.display = '';
-          } else {
-            img.style.display = 'none';
-          }
-
-          const rows = (data.reports || []).map(r => {
-            const href = '/miniprogram/report.html?token=' + encodeURIComponent(token) + '&id=' + encodeURIComponent(r.id);
-            return '<tr>' +
-              '<td>' + (r.reportNo || '') + '</td>' +
-              '<td>' + (r.productName || '') + '</td>' +
-              '<td>' + (r.batchNo || '') + '</td>' +
-              '<td>' + conclusionLabel(r.conclusion) + '</td>' +
-              '<td>' + statusLabel(r.status) + '</td>' +
-              '<td><a href=\"' + href + '\">详情</a></td>' +
-            '</tr>';
-          }).join('');
-          document.getElementById('tbody').innerHTML = rows || '<tr><td colspan="6" class="muted">暂无报告</td></tr>';
+          const reports = data.reports || [];
+          document.getElementById('count').textContent = String(reports.length);
+          renderList(reports);
         } catch (e) {
-          document.getElementById('err').textContent = '加载失败：' + (e?.message || e);
+          errEl.textContent = '加载失败：' + (e?.message || e);
         }
       }
 
-      document.getElementById('refresh').addEventListener('click', load);
+      document.getElementById('refresh').addEventListener('click', async function () {
+        const btn = this;
+        const old = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '刷新中...';
+        try {
+          await load(true);
+          btn.textContent = '已刷新';
+          setTimeout(function () {
+            btn.textContent = old;
+          }, 900);
+        } finally {
+          btn.disabled = false;
+        }
+      });
       load();
     </script>
   </body>
 </html>`);
-});
+}
 
-router.get('/miniprogram/report.html', (req, res) => {
+router.get('/scan.html', sendScanLandingHtml);
+router.get('/api/public/scan', sendScanLandingHtml);
+router.get('/miniprogram/index.html', sendScanLandingHtml);
+
+function sendReportCustomerHtml(req, res) {
   res.type('html').send(`<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>检测报告</title>
     <style>
       body { font-family: "SimSun", "Songti SC", "Microsoft YaHei", serif; margin: 0; background: #e8e8e8; color: #222; }
-      .wrap { max-width: 1000px; margin: 0 auto; padding: 16px; }
+      .wrap { max-width: 1000px; margin: 0 auto; padding: 16px; box-sizing: border-box; }
+      /* A4 竖版：版心固定 210mm×297mm（内容超长时-only 高度增大）；窄屏由 JS 整体 scale，保证等比缩放 */
       .paper {
         background: #fff;
         width: 210mm;
+        max-width: 210mm;
+        min-width: 210mm;
         min-height: 297mm;
         margin: 0 auto;
         padding: 20mm 20mm 16mm;
@@ -199,6 +344,7 @@ router.get('/miniprogram/report.html', (req, res) => {
         position: relative;
         display: flex;
         flex-direction: column;
+        flex-shrink: 0;
       }
       .paper-main {
         flex: 1 1 auto;
@@ -374,6 +520,164 @@ router.get('/miniprogram/report.html', (req, res) => {
         display: inline-block;
       }
 
+      /* 视口装不下 A4 宽度时，由 JS 对 .paper 做统一 transform: scale()，版面内相对比例不变 */
+      .paper-scale-outer {
+        width: 100%;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+      }
+
+      @media screen and (max-width: 768px) {
+        html { -webkit-text-size-adjust: 100%; }
+        .wrap {
+          max-width: 100%;
+          padding: 8px;
+          padding-left: max(8px, env(safe-area-inset-left));
+          padding-right: max(8px, env(safe-area-inset-right));
+        }
+        .topbar { margin-bottom: 8px; }
+      }
+
+      /* 微信内：全屏引导（右上角菜单 → 浏览器打开），参考常见 App 遮罩样式 */
+      .wx-browser-guide {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-start;
+        padding: calc(12px + env(safe-area-inset-top, 0px)) 18px calc(24px + env(safe-area-inset-bottom, 0px));
+        box-sizing: border-box;
+        background: rgba(0, 0, 0, 0.78);
+        -webkit-tap-highlight-color: transparent;
+      }
+      .wx-browser-guide.is-visible {
+        display: flex;
+      }
+      .wx-browser-guide__arrow-wrap {
+        position: relative;
+        flex: 0 0 auto;
+        height: min(38vh, 220px);
+        min-height: 120px;
+        margin-bottom: 8px;
+      }
+      .wx-browser-guide__arrow-svg {
+        position: absolute;
+        right: max(8px, env(safe-area-inset-right));
+        top: env(safe-area-inset-top, 0px);
+        width: min(72vw, 280px);
+        height: auto;
+        max-height: 100%;
+        overflow: visible;
+      }
+      .wx-browser-guide__arrow-svg path.guide-dash {
+        fill: none;
+        stroke: #fff;
+        stroke-width: 2.5;
+        stroke-linecap: round;
+        stroke-dasharray: 9 7;
+        opacity: 0.95;
+      }
+      .wx-browser-guide__arrow-svg path.guide-head {
+        fill: #fff;
+        opacity: 0.95;
+      }
+      .wx-browser-guide__steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        flex: 1 1 auto;
+        max-width: 100%;
+      }
+      .wx-browser-guide__steps li {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        margin-bottom: 20px;
+        color: #fff;
+        font-size: 16px;
+        line-height: 1.45;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+      }
+      .wx-browser-guide__steps .step-num {
+        flex-shrink: 0;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: #fff;
+        color: #111;
+        font-size: 14px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+      }
+      .wx-browser-guide__steps .step-text {
+        flex: 1;
+        min-width: 0;
+        padding-top: 2px;
+      }
+      .wx-browser-guide__steps .muted {
+        display: block;
+        margin-top: 6px;
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.72);
+        line-height: 1.4;
+      }
+      .wx-browser-guide__actions {
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .wx-browser-guide__btn {
+        width: 100%;
+        padding: 14px 18px;
+        border-radius: 12px;
+        border: none;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .wx-browser-guide__btn--secondary {
+        background: rgba(255, 255, 255, 0.15);
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+      }
+      .wx-browser-guide__btn--primary {
+        background: #fff;
+        color: #111;
+      }
+      .wx-browser-guide__hint {
+        min-height: 22px;
+        text-align: center;
+        font-size: 14px;
+        color: #86efac;
+        margin-top: 4px;
+      }
+      button.btn:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
+      }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
       @media print {
         @page {
           size: A4 portrait;
@@ -443,13 +747,24 @@ router.get('/miniprogram/report.html', (req, res) => {
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
         }
+        .paper-scale-outer {
+          height: auto !important;
+          overflow: visible !important;
+          display: block !important;
+        }
+        .paper {
+          transform: none !important;
+        }
+        .wx-browser-guide {
+          display: none !important;
+        }
       }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="topbar">
-        <div class="muted">验证页（电脑端预览）：Token=<span id="token"></span>，ReportID=<span id="rid"></span></div>
+        <div class="muted" id="topbarTitle">产品质量检测报告单</div>
         <div style="display:flex; gap:10px">
           <a class="btn" id="back" href="#">返回汇总</a>
           <button class="btn" id="print">打印/导出PDF</button>
@@ -457,6 +772,7 @@ router.get('/miniprogram/report.html', (req, res) => {
         </div>
       </div>
 
+      <div id="paperScaleOuter" class="paper-scale-outer">
       <div class="paper">
         <div id="err" class="error"></div>
 
@@ -616,6 +932,54 @@ router.get('/miniprogram/report.html', (req, res) => {
           </div>
         </div>
       </div>
+      </div>
+    </div>
+
+    <div
+      id="wxBrowserGuide"
+      class="wx-browser-guide"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="wxBrowserGuideTitle"
+      aria-hidden="true"
+    >
+      <div class="wx-browser-guide__arrow-wrap" aria-hidden="true">
+        <svg
+          class="wx-browser-guide__arrow-svg"
+          viewBox="0 0 140 96"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            class="guide-dash"
+            d="M 6 90 C 28 52 62 28 118 8"
+          />
+          <path class="guide-head" d="M 118 8 L 112 14 L 114 6 Z" />
+        </svg>
+      </div>
+      <div id="wxBrowserGuideTitle" class="sr-only">在浏览器中打开以导出 PDF</div>
+      <ol class="wx-browser-guide__steps">
+        <li>
+          <span class="step-num">1</span>
+          <span class="step-text">点击右上角「···」按钮</span>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <span class="step-text">选择「在浏览器中打开」<span class="muted">（或 Safari / Chrome 等图标）</span></span>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <span class="step-text">在系统浏览器中打开本页后，点击「打印/导出 PDF」，使用「另存为 PDF」保存</span>
+        </li>
+      </ol>
+      <div class="wx-browser-guide__actions">
+        <button type="button" class="wx-browser-guide__btn wx-browser-guide__btn--secondary" id="wxGuideCopyUrl">
+          复制本页链接
+        </button>
+        <button type="button" class="wx-browser-guide__btn wx-browser-guide__btn--primary" id="wxGuideClose">
+          我知道了
+        </button>
+        <div id="wxGuideCopyHint" class="wx-browser-guide__hint" aria-live="polite"></div>
+      </div>
     </div>
 
     <script>
@@ -625,16 +989,115 @@ router.get('/miniprogram/report.html', (req, res) => {
       const adminPreview = qs.get('adminPreview') === '1';
       const accessToken = qs.get('accessToken') || '';
       const autoPrint = qs.get('autoPrint') === '1';
-      document.getElementById('token').textContent = adminPreview ? '(admin)' : token || '(missing)';
-      document.getElementById('rid').textContent = id || '(missing)';
-      if (adminPreview) {
-        const tb = document.querySelector('.topbar');
-        if (tb) tb.style.display = 'none';
-        document.body.style.margin = '0';
-      } else {
-        document.getElementById('back').href = '/miniprogram/index.html?token=' + encodeURIComponent(token);
+      function isWeChatBrowser() {
+        return /micromessenger/i.test(navigator.userAgent || '');
       }
-      document.getElementById('print').addEventListener('click', () => window.print());
+      if (adminPreview) {
+        const titleEl = document.getElementById('topbarTitle');
+        if (titleEl) titleEl.textContent = '报告详情（管理端预览）';
+      } else {
+        const titleEl = document.getElementById('topbarTitle');
+        if (titleEl) titleEl.textContent = '报告详情';
+      }
+      if (adminPreview) {
+        document.body.style.margin = '0';
+      }
+      document.getElementById('back').href =
+        (location.pathname.indexOf('/api/public/') === 0
+          ? '/api/public/scan?token='
+          : '/scan.html?token=') + encodeURIComponent(token);
+
+      const wxBrowserGuide = document.getElementById('wxBrowserGuide');
+      const wxGuideCopyHint = document.getElementById('wxGuideCopyHint');
+      function showWxBrowserGuide() {
+        if (!wxBrowserGuide) return;
+        if (wxGuideCopyHint) wxGuideCopyHint.textContent = '';
+        wxBrowserGuide.classList.add('is-visible');
+        wxBrowserGuide.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+      }
+      function hideWxBrowserGuide() {
+        if (!wxBrowserGuide) return;
+        wxBrowserGuide.classList.remove('is-visible');
+        wxBrowserGuide.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+      }
+      const wxGuideClose = document.getElementById('wxGuideClose');
+      if (wxGuideClose) wxGuideClose.addEventListener('click', hideWxBrowserGuide);
+      const wxGuideCopyUrl = document.getElementById('wxGuideCopyUrl');
+      if (wxGuideCopyUrl) {
+        wxGuideCopyUrl.addEventListener('click', function () {
+          const url = location.href;
+          function copyWithExecCommand(text) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '-9999px';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            let ok = false;
+            try {
+              ok = document.execCommand('copy');
+            } catch (e) {
+              ok = false;
+            }
+            document.body.removeChild(ta);
+            return ok;
+          }
+          function setHint(msg) {
+            if (wxGuideCopyHint) wxGuideCopyHint.textContent = msg;
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(function () {
+              setHint('复制成功，可直接粘贴打开');
+            }).catch(function () {
+              if (copyWithExecCommand(url)) {
+                setHint('复制成功，可直接粘贴打开');
+              } else {
+                setHint('复制失败，请长按地址栏手动复制');
+              }
+            });
+          } else if (copyWithExecCommand(url)) {
+            setHint('复制成功，可直接粘贴打开');
+          } else {
+            setHint('复制失败，请长按地址栏手动复制');
+          }
+        });
+      }
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'Escape') return;
+        if (wxBrowserGuide && wxBrowserGuide.classList.contains('is-visible')) hideWxBrowserGuide();
+      });
+
+      function buildPdfDownloadUrl() {
+        const base = '/api/public/report/' + encodeURIComponent(id) + '/pdf';
+        return base + '?token=' + encodeURIComponent(token);
+      }
+
+      document.getElementById('print').addEventListener('click', () => {
+        if (isWeChatBrowser()) {
+          showWxBrowserGuide();
+          return;
+        }
+        if (!id || !token) {
+          window.print();
+          return;
+        }
+        const btn = document.getElementById('print');
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = '生成PDF中…';
+        }
+        window.location.href = buildPdfDownloadUrl();
+        setTimeout(function () {
+          if (!btn) return;
+          btn.disabled = false;
+          btn.textContent = '打印/导出PDF';
+        }, 2400);
+      });
 
       function esc(s) {
         return String(s)
@@ -713,7 +1176,56 @@ router.get('/miniprogram/report.html', (req, res) => {
         'inspection_table'
       ]);
 
+      /** A4 版心布局宽度不变；仅当可用宽度小于版心时整体等比缩小（X/Y 同一 scale） */
+      function fitMobilePaperScale() {
+        const outer = document.getElementById('paperScaleOuter');
+        const paper = document.querySelector('.paper');
+        if (!outer || !paper) return;
+        const wrap = document.querySelector('.wrap');
+        const pl = wrap ? parseFloat(getComputedStyle(wrap).paddingLeft) || 0 : 0;
+        const pr = wrap ? parseFloat(getComputedStyle(wrap).paddingRight) || 0 : 0;
+        const vw = document.documentElement.clientWidth || window.innerWidth || 0;
+        const wrapInner = wrap ? wrap.clientWidth - pl - pr : vw - pl - pr;
+        const avail = Math.max(200, Math.min(wrapInner, vw - pl - pr) - 6);
+        const w = paper.offsetWidth;
+        if (!w) return;
+        let s = Math.min(1, avail / w);
+        if (s >= 0.998) s = 1;
+        if (s >= 1) {
+          paper.style.transform = '';
+          paper.style.transformOrigin = '';
+          outer.style.height = '';
+          paper.classList.remove('paper--mobile-scale');
+          return;
+        }
+        paper.classList.add('paper--mobile-scale');
+        paper.style.transformOrigin = 'top center';
+        paper.style.transform = 'scale(' + s + ')';
+        const h = paper.offsetHeight;
+        outer.style.height = Math.max(0, Math.ceil(h * s)) + 'px';
+      }
+
+      function scheduleFitMobilePaperScale() {
+        requestAnimationFrame(function () {
+          fitMobilePaperScale();
+          requestAnimationFrame(fitMobilePaperScale);
+        });
+        setTimeout(fitMobilePaperScale, 200);
+        setTimeout(fitMobilePaperScale, 500);
+      }
+
+      let resizeTimer = null;
+      window.addEventListener('resize', function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(scheduleFitMobilePaperScale, 80);
+      });
+      window.addEventListener('orientationchange', function () {
+        setTimeout(scheduleFitMobilePaperScale, 300);
+      });
+
       async function load() {
+        window.__REPORT_READY = false;
+        try {
         document.getElementById('err').textContent = '';
         document.getElementById('items').innerHTML = '';
         document.getElementById('others').innerHTML = '';
@@ -760,6 +1272,7 @@ router.get('/miniprogram/report.html', (req, res) => {
 
           const logoEl = document.getElementById('logo');
           if (company.logo_url) {
+            logoEl.onload = function () { scheduleFitMobilePaperScale(); };
             logoEl.src = company.logo_url;
             logoEl.style.display = 'block';
           } else {
@@ -950,6 +1463,10 @@ router.get('/miniprogram/report.html', (req, res) => {
         } catch (e) {
           document.getElementById('err').textContent = '加载失败：' + (e?.message || e);
         }
+        } finally {
+          scheduleFitMobilePaperScale();
+          window.__REPORT_READY = true;
+        }
       }
 
       document.getElementById('refresh').addEventListener('click', load);
@@ -957,7 +1474,10 @@ router.get('/miniprogram/report.html', (req, res) => {
     </script>
   </body>
 </html>`);
-});
+}
+
+router.get('/miniprogram/report.html', sendReportCustomerHtml);
+router.get('/api/public/report.html', sendReportCustomerHtml);
 
 // Public API: summary list by token (for mini program).
 router.get('/api/public/summary', async (req, res) => {
@@ -984,7 +1504,8 @@ router.get('/api/public/summary', async (req, res) => {
   );
 
   const company = await getCompanySettings(pool);
-  res.json({ token: qr.token, createdAt: qr.createdAt, company, stamps, reports });
+  const { company: companyOut, stamps: stampsOut } = normalizePublicSummaryAssets(company, stamps);
+  res.json({ token: qr.token, createdAt: qr.createdAt, company: companyOut, stamps: stampsOut, reports });
 });
 
 // Public API: report detail (for mini program).
@@ -1007,5 +1528,57 @@ router.get('/api/public/report/:id', async (req, res) => {
   const payload = await getReportCustomerPayload(pool, id);
   if (!payload) return res.status(404).json({ error: 'NOT_FOUND' });
   res.json(payload);
+});
+
+// Public API: server-side generated PDF (stable on mobile/WeChat external browser).
+router.get('/api/public/report/:id/pdf', async (req, res) => {
+  const id = Number(req.params.id);
+  const token = String(req.query.token || '').trim();
+  if (!token || !Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+
+  const pool = getPool();
+  const [qrRows] = await pool.query('SELECT id FROM qrcodes WHERE token=? LIMIT 1', [token]);
+  const qr = qrRows?.[0];
+  if (!qr) return res.status(404).json({ error: 'NOT_FOUND' });
+
+  const [bindRows] = await pool.query(
+    'SELECT 1 FROM qrcode_reports WHERE qrcode_id=? AND report_id=? LIMIT 1',
+    [qr.id, id]
+  );
+  if (!bindRows?.[0]) return res.status(403).json({ error: 'FORBIDDEN' });
+
+  const payload = await getReportCustomerPayload(pool, id);
+  if (!payload) return res.status(404).json({ error: 'NOT_FOUND' });
+
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim();
+  const origin = `${proto}://${host}`;
+  const reportUrl =
+    `${origin}/miniprogram/report.html?token=${encodeURIComponent(token)}` +
+    `&id=${encodeURIComponent(String(id))}&pdfMode=1`;
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1400, height: 2000, deviceScaleFactor: 1 });
+    await page.goto(reportUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.waitForFunction(() => window.__REPORT_READY === true, { timeout: 15000 });
+    await page.emulateMediaType('print');
+    const pdf = await page.pdf({
+      printBackground: true,
+      preferCSSPageSize: true
+    });
+
+    const reportNo = String(payload?.report?.reportNo || id).replace(/[\\/:*?"<>|\s]+/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="report-${reportNo}.pdf"`);
+    res.status(200).send(Buffer.from(pdf));
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
 });
 
