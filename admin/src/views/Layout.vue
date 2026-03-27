@@ -1,108 +1,140 @@
 <template>
   <el-container class="app-shell" style="height: 100%">
-    <el-aside :width="isMenuCollapsed ? '64px' : '240px'" class="aside">
-      <div class="brand">
-        <div class="logo" v-if="!isMenuCollapsed">QC</div>
-        <div class="brand-text" v-if="!isMenuCollapsed">
-          <div class="name">质检报告系统</div>
-          <div class="sub">员工端后台</div>
+    <el-aside
+      v-if="!isMobile"
+      :width="isMenuCollapsed ? '64px' : '240px'"
+      class="aside"
+      :class="{ 'is-collapsed': isMenuCollapsed }"
+    >
+      <div class="aside-column">
+        <div class="brand">
+          <div class="logo" v-if="!isMenuCollapsed">QC</div>
+          <div class="brand-text" v-if="!isMenuCollapsed">
+            <div class="name">质检报告系统</div>
+            <div class="sub">员工端后台</div>
+          </div>
+          <el-button class="collapse-btn" text @click="toggleMenu">
+            <el-icon :size="18">
+              <Expand v-if="isMenuCollapsed" />
+              <Fold v-else />
+            </el-icon>
+          </el-button>
         </div>
-        <el-button
-          class="collapse-btn"
-          type="text"
-          :icon="isMenuCollapsed ? 'el-icon-s-unfold' : 'el-icon-s-fold'"
-          @click="toggleMenu"
-        />
-      </div>
-      <el-menu
-        :default-active="$route.path"
-        :default-openeds="menuDefaultOpeneds"
-        :collapse="isMenuCollapsed"
-        router
-        class="menu"
-      >
+        <div class="aside-menu-wrap">
+          <el-menu
+            :default-active="$route.path"
+            :default-openeds="menuDefaultOpeneds"
+            :collapse="isMenuCollapsed"
+            router
+            class="menu"
+          >
         <el-menu-item v-if="perm('reports', 'list')" index="/reports">
-          <i class="el-icon-document-copy" />
+          <el-icon><DocumentCopy /></el-icon>
           <span>报告管理</span>
         </el-menu-item>
         <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
-          <i class="el-icon-link" />
+          <el-icon><Link /></el-icon>
           <span>二维码管理</span>
         </el-menu-item>
         <el-menu-item v-if="perm('stamps', 'manage')" index="/stamps">
-          <i class="el-icon-postcard" />
+          <el-icon><Medal /></el-icon>
           <span>公司章管理</span>
         </el-menu-item>
         <el-menu-item v-if="perm('company', 'manage')" index="/company">
-          <i class="el-icon-office-building" />
+          <el-icon><OfficeBuilding /></el-icon>
           <span>公司信息</span>
         </el-menu-item>
-        <el-submenu v-if="isSuperAdminUser" index="account-submenu">
-          <template slot="title">
-            <i class="el-icon-user" />
+        <el-sub-menu v-if="isSuperAdminUser" index="account-submenu" class="no-parent-active">
+          <template #title>
+            <el-icon><User /></el-icon>
             <span>账号管理</span>
           </template>
           <el-menu-item index="/employee-categories">
-            <i class="el-icon-collection-tag" />
+            <el-icon><FolderOpened /></el-icon>
             <span>员工类别</span>
           </el-menu-item>
           <el-menu-item index="/users">
-            <i class="el-icon-user-solid" />
+            <el-icon><UserFilled /></el-icon>
             <span>员工账号</span>
           </el-menu-item>
-        </el-submenu>
-        <el-submenu v-if="isSuperAdminUser" index="audit-submenu">
-          <template slot="title">
-            <i class="el-icon-notebook-2" />
+          <el-menu-item index="/support-contact">
+            <el-icon><Service /></el-icon>
+            <span>技术支持联系</span>
+          </el-menu-item>
+        </el-sub-menu>
+        <el-sub-menu v-if="isSuperAdminUser" index="audit-submenu" class="no-parent-active">
+          <template #title>
+            <el-icon><Notebook /></el-icon>
             <span>安全日志</span>
           </template>
           <el-menu-item index="/audit/login-logs">
-            <i class="el-icon-key" />
+            <el-icon><Key /></el-icon>
             <span>登录日志</span>
           </el-menu-item>
           <el-menu-item index="/audit/operations">
-            <i class="el-icon-tickets" />
+            <el-icon><Tickets /></el-icon>
             <span>操作日志</span>
           </el-menu-item>
           <el-menu-item index="/audit/errors">
-            <i class="el-icon-warning-outline" />
+            <el-icon><Warning /></el-icon>
             <span>错误日志</span>
           </el-menu-item>
           <el-menu-item index="/security">
-            <i class="el-icon-lock" />
+            <el-icon><Lock /></el-icon>
             <span>系统安全</span>
           </el-menu-item>
-        </el-submenu>
+        </el-sub-menu>
         <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
-          <i class="el-icon-document" />
+          <el-icon><Document /></el-icon>
           <span>我的操作日志</span>
         </el-menu-item>
-      </el-menu>
+          </el-menu>
+        </div>
+        <SidebarGuide :collapsed="isMenuCollapsed" />
+      </div>
     </el-aside>
-    <el-container>
+    <el-container class="main-column">
       <el-header height="64px" class="header">
-        <div class="header-left">
-          <div class="page-title">{{ pageTitle }}</div>
-          <div class="text-muted">{{ pageDesc }}</div>
+        <div class="header-leading">
+          <el-tooltip v-if="!isMobile" content="返回首页" placement="bottom">
+            <el-button class="home-btn" @click="goDashboard">
+              <el-icon><HomeFilled /></el-icon>
+              <span>首页</span>
+            </el-button>
+          </el-tooltip>
+          <div class="header-left">
+            <el-button v-if="isMobile" class="mobile-menu-btn" text @click="openMobileMenu">
+              <el-icon :size="18"><Expand /></el-icon>
+            </el-button>
+            <div class="page-title">{{ pageTitle }}</div>
+            <div class="text-muted" v-if="!isMobile">{{ pageDesc }}</div>
+          </div>
         </div>
         <div class="header-right">
-          <div class="meta-info">
+          <div class="meta-info" v-if="!isMobile">
             <span>{{ currentTimeText }}</span>
             <span class="divider">|</span>
-            <span>{{ weatherText }}</span>
+            <span class="weather-info">
+              <span class="weather-icon" aria-hidden="true">{{ weatherEmoji }}</span>
+              <span>{{ weatherText }}</span>
+            </span>
           </div>
           <el-dropdown trigger="click">
             <span class="user">
               <span class="avatar-wrap">
-                <el-avatar size="small" icon="el-icon-user-solid" />
+                <el-avatar :size="24">
+                  <el-icon><UserFilled /></el-icon>
+                </el-avatar>
               </span>
               <span class="text">{{ loginName || '已登录' }}</span>
               <span class="online-dot" />
             </span>
-            <el-dropdown-menu slot="dropdown">
-              <el-dropdown-item @click.native="openChangePassword">修改密码</el-dropdown-item>
-              <el-dropdown-item divided @click.native="logout">退出登录</el-dropdown-item>
-            </el-dropdown-menu>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="openChangePassword">修改密码</el-dropdown-item>
+                <el-dropdown-item divided @click="logout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
           </el-dropdown>
         </div>
       </el-header>
@@ -110,7 +142,97 @@
         <router-view />
       </el-main>
     </el-container>
-    <el-dialog title="修改密码" :visible.sync="pwDialog" width="420px" @close="resetPw">
+    <el-drawer
+      v-model="mobileMenuVisible"
+      direction="ltr"
+      size="280px"
+      :with-header="false"
+      class="mobile-menu-drawer"
+    >
+      <div class="mobile-drawer-body">
+        <div class="brand mobile-brand">
+          <div class="logo">QC</div>
+          <div class="brand-text">
+            <div class="name">质检报告系统</div>
+            <div class="sub">员工端后台</div>
+          </div>
+        </div>
+        <div class="mobile-meta">
+          <span>{{ currentTimeText }}</span>
+          <span class="divider">|</span>
+          <span>{{ weatherText }}</span>
+        </div>
+        <el-menu
+          :default-active="$route.path"
+          :default-openeds="menuDefaultOpeneds"
+          router
+          class="menu mobile-menu"
+          @select="onMobileMenuSelect"
+        >
+          <el-menu-item v-if="perm('reports', 'list')" index="/reports">
+            <el-icon><DocumentCopy /></el-icon>
+            <span>报告管理</span>
+          </el-menu-item>
+          <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
+            <el-icon><Link /></el-icon>
+            <span>二维码管理</span>
+          </el-menu-item>
+          <el-menu-item v-if="perm('stamps', 'manage')" index="/stamps">
+            <el-icon><Medal /></el-icon>
+            <span>公司章管理</span>
+          </el-menu-item>
+          <el-menu-item v-if="perm('company', 'manage')" index="/company">
+            <el-icon><OfficeBuilding /></el-icon>
+            <span>公司信息</span>
+          </el-menu-item>
+          <el-sub-menu v-if="isSuperAdminUser" index="account-submenu-mobile" class="no-parent-active">
+            <template #title>
+              <el-icon><User /></el-icon>
+              <span>账号管理</span>
+            </template>
+            <el-menu-item index="/employee-categories">
+              <el-icon><FolderOpened /></el-icon>
+              <span>员工类别</span>
+            </el-menu-item>
+            <el-menu-item index="/users">
+              <el-icon><UserFilled /></el-icon>
+              <span>员工账号</span>
+            </el-menu-item>
+            <el-menu-item index="/support-contact">
+              <el-icon><Service /></el-icon>
+              <span>技术支持联系</span>
+            </el-menu-item>
+          </el-sub-menu>
+          <el-sub-menu v-if="isSuperAdminUser" index="audit-submenu-mobile" class="no-parent-active">
+            <template #title>
+              <el-icon><Notebook /></el-icon>
+              <span>安全日志</span>
+            </template>
+            <el-menu-item index="/audit/login-logs">
+              <el-icon><Key /></el-icon>
+              <span>登录日志</span>
+            </el-menu-item>
+            <el-menu-item index="/audit/operations">
+              <el-icon><Tickets /></el-icon>
+              <span>操作日志</span>
+            </el-menu-item>
+            <el-menu-item index="/audit/errors">
+              <el-icon><Warning /></el-icon>
+              <span>错误日志</span>
+            </el-menu-item>
+            <el-menu-item index="/security">
+              <el-icon><Lock /></el-icon>
+              <span>系统安全</span>
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
+            <el-icon><Document /></el-icon>
+            <span>我的操作日志</span>
+          </el-menu-item>
+        </el-menu>
+      </div>
+    </el-drawer>
+    <el-dialog title="修改密码" v-model="pwDialog" width="420px" @close="resetPw">
       <el-form :model="pwForm" label-width="100px">
         <el-form-item label="当前密码">
           <el-input v-model="pwForm.oldPassword" type="password" show-password autocomplete="off" />
@@ -122,10 +244,10 @@
           <el-input v-model="pwForm.newPassword2" type="password" show-password autocomplete="off" />
         </el-form-item>
       </el-form>
-      <span slot="footer">
+      <template #footer>
         <el-button @click="pwDialog = false">取消</el-button>
         <el-button type="primary" :loading="pwSaving" @click="submitPassword">保存</el-button>
-      </span>
+      </template>
     </el-dialog>
   </el-container>
 </template>
@@ -134,20 +256,25 @@
 import { isSuperAdmin, perm } from '../utils/permissions';
 import { changePassword, getMe } from '../api';
 import { useAuthStore } from '../stores/auth';
+import SidebarGuide from '../components/SidebarGuide.vue';
 
 export default {
   name: 'Layout',
+  components: { SidebarGuide },
   data() {
     return {
       isMenuCollapsed: false,
       loginName: '',
       currentTimeText: '',
       weatherText: '天气定位中...',
+      weatherCode: null,
       pwDialog: false,
       pwSaving: false,
       pwForm: { oldPassword: '', newPassword: '', newPassword2: '' },
       idleTimer: null,
-      clockTimer: null
+      clockTimer: null,
+      isMobile: false,
+      mobileMenuVisible: false
     };
   },
   computed: {
@@ -159,21 +286,25 @@ export default {
     },
     pageTitle() {
       const p = this.$route.path;
+      if (p === '/dashboard') return '控制台';
       if (p.startsWith('/reports')) return '报告管理';
       if (p.startsWith('/qrcodes')) return '二维码管理';
       if (p.startsWith('/stamps')) return '公司章管理';
       if (p.startsWith('/company')) return '公司信息';
       if (p.startsWith('/employee-categories')) return '账号管理 · 员工类别';
       if (p.startsWith('/users')) return '账号管理 · 员工账号';
+      if (p.startsWith('/support-contact')) return '账号管理 · 技术支持联系';
       if (p === '/security') return '系统安全';
       if (p.startsWith('/audit/login-logs')) return '安全日志 · 登录';
       if (p.startsWith('/audit/operations')) return '安全日志 · 操作';
       if (p.startsWith('/audit/errors')) return '安全日志 · 错误';
       if (p.startsWith('/my-operation-logs')) return '我的操作日志';
+      if (p === '/operation-guide') return '操作指南';
       return '控制台';
     },
     pageDesc() {
       const p = this.$route.path;
+      if (p === '/dashboard') return '系统概览：报表趋势与状态分布';
       if (p === '/reports') return '查询、编辑、作废报告，批量生成二维码';
       if (p.startsWith('/reports')) return '录入报告与自定义字段';
       if (p.startsWith('/qrcodes')) return '查看二维码与绑定报告';
@@ -181,15 +312,31 @@ export default {
       if (p.startsWith('/company')) return '管理logo、描述语、公司名与报告标题';
       if (p.startsWith('/employee-categories')) return '维护品管、客服等类别及各类别默认权限';
       if (p.startsWith('/users')) return '创建员工账号、分配类别与个性化权限';
+      if (p.startsWith('/support-contact')) return '配置技术工程师微信号，供全员在操作指南中复制';
       if (p === '/security') return '密码策略、登录锁定、会话超时、日志保留';
       if (p.startsWith('/audit/login-logs')) return '全部账号登录记录，不可删改';
       if (p.startsWith('/audit/operations')) return '全站操作审计';
       if (p.startsWith('/audit/errors')) return '服务端错误，可导出';
       if (p.startsWith('/my-operation-logs')) return '仅本人操作记录';
+      if (p === '/operation-guide') return '功能说明、常见问题与联系技术工程师';
       return '';
+    },
+    weatherEmoji() {
+      const code = Number(this.weatherCode);
+      if (!Number.isFinite(code)) return '🌤️';
+      if (code === 0 || code === 1) return '☀️';
+      if (code === 2 || code === 3) return '⛅';
+      if (code === 45 || code === 48) return '🌫️';
+      if ([51, 53, 55, 61, 63, 80, 81].includes(code)) return '🌦️';
+      if ([65, 82].includes(code)) return '🌧️';
+      if ([71, 73, 75].includes(code)) return '🌨️';
+      if (code === 95) return '⛈️';
+      return '🌤️';
     }
   },
   async mounted() {
+    this.handleViewportChange();
+    window.addEventListener('resize', this.handleViewportChange, { passive: true });
     const bindActivity = () => {
       ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach((ev) => {
         window.addEventListener(ev, this.onUserActivity, true);
@@ -214,7 +361,8 @@ export default {
     this.fetchWeather();
     this.setupIdleTimer();
   },
-  beforeDestroy() {
+  beforeUnmount() {
+    window.removeEventListener('resize', this.handleViewportChange);
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.clockTimer) clearInterval(this.clockTimer);
     ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach((ev) => {
@@ -239,8 +387,23 @@ export default {
     setupIdleTimer() {
       this.resetIdleTimer();
     },
+    handleViewportChange() {
+      this.isMobile = window.innerWidth <= 992;
+      if (!this.isMobile) {
+        this.mobileMenuVisible = false;
+      }
+    },
+    openMobileMenu() {
+      this.mobileMenuVisible = true;
+    },
+    onMobileMenuSelect() {
+      this.mobileMenuVisible = false;
+    },
     toggleMenu() {
       this.isMenuCollapsed = !this.isMenuCollapsed;
+    },
+    goDashboard() {
+      if (this.$route.path !== '/dashboard') this.$router.push('/dashboard');
     },
     tickClock() {
       const now = new Date();
@@ -292,10 +455,13 @@ export default {
         const cw = data?.current_weather;
         if (!cw) throw new Error('weather_data_missing');
         const t = Math.round(Number(cw.temperature));
-        const codeText = this.weatherCodeText(cw.weathercode);
+        const code = Number(cw.weathercode);
+        const codeText = this.weatherCodeText(code);
+        this.weatherCode = Number.isFinite(code) ? code : null;
         this.weatherText = `${cityLabel} ${codeText} ${t}°C`;
         return true;
       } catch (_) {
+        this.weatherCode = null;
         return false;
       }
     },
@@ -355,7 +521,29 @@ export default {
 
 <style scoped>
 .aside {
-  padding: 14px 12px;
+  padding: 14px 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.aside-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+.aside-menu-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.aside-menu-wrap::-webkit-scrollbar {
+  display: none;
 }
 .brand {
   height: 64px;
@@ -366,7 +554,7 @@ export default {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  margin-bottom: 12px;
+  margin: 0 12px 12px;
 }
 .collapse-btn {
   margin-left: auto;
@@ -374,6 +562,23 @@ export default {
 }
 .collapse-btn:hover {
   color: #ffffff;
+}
+
+/* When sidebar is collapsed, only collapse button is shown in brand;
+   center it and adjust hover background. */
+.aside.is-collapsed .brand {
+  justify-content: center;
+}
+
+.aside.is-collapsed .collapse-btn {
+  margin-left: 0;
+  width: 100%;
+  justify-content: center;
+}
+
+.aside.is-collapsed .collapse-btn:hover {
+  background: rgba(34, 197, 94, 0.14) !important;
+  border-radius: 12px;
 }
 .logo {
   width: 38px;
@@ -390,6 +595,11 @@ export default {
 .brand-text .name {
   font-weight: 700;
   color: rgba(255, 255, 255, 0.95);
+  white-space: nowrap; /* 防止“质检报告系统”换行 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px; /* 侧栏宽度收起时也不换行 */
+  line-height: 1.2;
 }
 .brand-text .sub {
   font-size: 12px;
@@ -398,6 +608,7 @@ export default {
 }
 .menu {
   padding-top: 6px;
+  padding-bottom: 8px;
 }
 .header {
   display: flex;
@@ -406,10 +617,17 @@ export default {
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
   padding: 0 18px;
 }
+.header-leading {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+}
 .header-left {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 .page-title {
   font-size: 16px;
@@ -420,12 +638,34 @@ export default {
   align-items: center;
   gap: 14px;
 }
+.mobile-menu-btn {
+  align-self: flex-start;
+  margin-bottom: 2px;
+}
+.home-btn {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  color: #334155;
+  padding: 8px 12px;
+}
+.home-btn:hover {
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.35);
+}
 .meta-info {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
   color: #64748b;
+}
+.weather-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.weather-icon {
+  line-height: 1;
 }
 .divider {
   color: #cbd5e1;
@@ -460,8 +700,91 @@ export default {
   font-size: 12px;
   color: #334155;
 }
+/* 右侧主区域：占满侧栏以外的空间并正确参与 flex 高度计算，避免主内容出现“多余”滚动条 */
+.main-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .main {
   padding: 18px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.mobile-drawer-body {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-brand {
+  margin: 0 0 10px;
+}
+
+.mobile-meta {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+
+.mobile-menu {
+  color: #0f172a;
+}
+
+.mobile-menu :deep(.el-menu-item),
+.mobile-menu :deep(.el-sub-menu__title) {
+  color: #0f172a;
+}
+
+.menu :deep(.no-parent-active.is-active > .el-sub-menu__title) {
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.84) !important;
+  border-right-color: transparent !important;
+}
+
+.menu :deep(.no-parent-active.is-active > .el-sub-menu__title .el-icon) {
+  color: rgba(255, 255, 255, 0.84) !important;
+}
+
+.mobile-menu :deep(.no-parent-active.is-active > .el-sub-menu__title) {
+  background: transparent !important;
+  color: #0f172a !important;
+  border-right-color: transparent !important;
+}
+
+.mobile-menu :deep(.no-parent-active.is-active > .el-sub-menu__title .el-icon) {
+  color: #0f172a !important;
+}
+
+@media (max-width: 992px) {
+  .header {
+    padding: 0 12px;
+  }
+  .page-title {
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 50vw;
+  }
+  .header-right {
+    gap: 8px;
+  }
+  .user {
+    padding: 6px 8px;
+  }
+  .user .text {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .main {
+    padding: 12px;
+  }
 }
 </style>
 

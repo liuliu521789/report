@@ -30,7 +30,7 @@
           class="login-form"
           :model="form"
           label-position="top"
-          @submit.native.prevent="onLogin"
+          @submit.prevent="onLogin"
         >
           <el-form-item label="账号">
             <el-input
@@ -48,7 +48,7 @@
               show-password
               placeholder="密码"
               clearable
-              @keyup.enter.native="onLogin"
+              @keyup.enter="onLogin"
             />
           </el-form-item>
           <el-form-item class="login-form__actions">
@@ -92,7 +92,7 @@ export default {
       try {
         const data = await login(this.form.username, this.form.password);
         useAuthStore().applyLoginResponse(data);
-        this.$router.push('/reports');
+        this.$router.push('/dashboard');
       } catch (e) {
         const err = e?.response?.data?.error;
         const st = e?.response?.status;
@@ -296,11 +296,11 @@ export default {
   color: #64748b;
 }
 
-.login-form >>> .el-form-item {
+.login-form :deep(.el-form-item) {
   margin-bottom: 20px;
 }
 
-.login-form >>> .el-form-item__label {
+.login-form :deep(.el-form-item__label) {
   padding: 0 0 8px;
   line-height: 1.3;
   font-size: 13px;
@@ -308,16 +308,15 @@ export default {
   color: #334155;
 }
 
-.login-form >>> .el-input__inner {
-  height: 44px;
-  line-height: 44px;
+.login-form :deep(.el-input__wrapper) {
+  min-height: 44px;
   border-radius: 12px;
   border-color: rgba(15, 23, 42, 0.1);
   background: #fafbfc;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
-.login-form >>> .el-input__inner:focus {
+.login-form :deep(.el-input__wrapper.is-focus) {
   background: #fff;
   border-color: rgba(14, 165, 233, 0.45);
   box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12);
@@ -371,6 +370,25 @@ export default {
   .panel {
     align-items: flex-start;
     padding: 16px 20px 24px;
+  }
+  .panel-card {
+    max-width: 520px;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero {
+    padding: 24px 18px 16px;
+  }
+  .hero-sub {
+    display: none;
+  }
+  .panel {
+    padding: 12px;
+  }
+  .panel-card {
+    padding: 22px 16px;
+    border-radius: 14px;
   }
 }
 </style>

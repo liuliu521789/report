@@ -37,15 +37,53 @@ body {
 }
 
 .app-shell .aside .menu .el-menu-item,
-.app-shell .aside .menu .el-submenu__title {
+.app-shell .aside .menu .el-sub-menu__title {
   width: 100% !important;
   box-sizing: border-box;
   border-right: 3px solid transparent;
 }
 
+/* EP 默认给箭头 width:inherit，在窄侧栏里会像一整行宽条盖在文字上；限制宽度并靠右贴齐 */
+.app-shell .aside .menu:not(.el-menu--collapse) .el-sub-menu__icon-arrow {
+  width: 1em !important;
+  min-width: 1em;
+}
+
+.app-shell .aside .menu:not(.el-menu--collapse) .el-sub-menu__title > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .app-shell .aside .menu.el-menu--collapse .el-menu-item,
-.app-shell .aside .menu.el-menu--collapse .el-submenu__title {
+.app-shell .aside .menu.el-menu--collapse .el-sub-menu__title {
   width: 100% !important;
+}
+
+/* Sidebar collapse: icon centered + suitable hover background */
+.app-shell .aside .menu.el-menu--collapse .el-menu-item,
+.app-shell .aside .menu.el-menu--collapse .el-sub-menu__title {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+.app-shell .aside .menu.el-menu--collapse .el-menu-item .el-icon,
+.app-shell .aside .menu.el-menu--collapse .el-sub-menu__title .el-icon {
+  margin-right: 0 !important;
+}
+
+.app-shell .aside .menu.el-menu--collapse .el-sub-menu__icon-arrow {
+  display: none !important;
+}
+
+.app-shell .aside .menu.el-menu--collapse .el-menu-item:hover,
+.app-shell .aside .menu.el-menu--collapse .el-sub-menu__title:hover {
+  background: rgba(34, 197, 94, 0.14) !important;
+  color: #ffffff !important;
 }
 
 .app-shell .el-header {
@@ -88,6 +126,10 @@ body {
   border-radius: 10px;
 }
 
+.el-input__wrapper {
+  border-radius: 10px;
+}
+
 .el-input__inner,
 .el-textarea__inner {
   border-radius: 10px;
@@ -99,7 +141,7 @@ body {
 }
 
 .el-menu-item,
-.el-submenu__title {
+.el-sub-menu__title {
   color: rgba(255, 255, 255, 0.84);
 }
 
@@ -109,34 +151,33 @@ body {
   border-right-color: var(--primary) !important;
 }
 
-.el-menu-item.is-active i {
+.el-menu-item.is-active .el-icon {
   color: var(--primary) !important;
 }
 
 .el-menu-item.is-active:hover {
-  background: rgba(34, 197, 94, 0.12) !important;
+  background: rgba(34, 197, 94, 0.14) !important;
   color: var(--primary) !important;
 }
 
 .el-menu-item:hover {
-  background: rgba(255, 255, 255, 0.06) !important;
+  background: rgba(34, 197, 94, 0.14) !important;
   color: #ffffff !important;
 }
 
-.el-submenu__title:hover {
-  background: rgba(255, 255, 255, 0.06) !important;
+.el-sub-menu__title:hover {
+  background: rgba(34, 197, 94, 0.14) !important;
   color: #ffffff !important;
 }
 
-.el-submenu.is-active > .el-submenu__title {
-  /* ElementUI will mark parent submenu as active when any child is active.
-     Keep parent in normal style so only the selected menu item shows green. */
+.el-sub-menu.is-active > .el-sub-menu__title {
+  /* 父级不因子项选中而高亮，仅当前菜单项显示绿色 */
   color: rgba(255, 255, 255, 0.84) !important;
   background: transparent !important;
   border-right-color: transparent !important;
 }
 
-.el-submenu.is-active > .el-submenu__title i {
+.el-sub-menu.is-active > .el-sub-menu__title .el-icon {
   color: rgba(255, 255, 255, 0.84) !important;
 }
 
@@ -145,26 +186,25 @@ body {
 }
 
 .el-menu--popup .el-menu-item,
-.el-menu--popup .el-submenu__title {
+.el-menu--popup .el-sub-menu__title {
   color: rgba(255, 255, 255, 0.9) !important;
 }
 
 .el-menu--popup .el-menu-item:hover,
-.el-menu--popup .el-submenu__title:hover {
+.el-menu--popup .el-sub-menu__title:hover {
   background: rgba(255, 255, 255, 0.08) !important;
   color: #ffffff !important;
 }
 
 .el-menu--popup .el-menu-item.is-active,
-.el-menu--popup .el-submenu.is-active > .el-submenu__title {
-  /* Only submenu child items should show active style */
+.el-menu--popup .el-sub-menu.is-active > .el-sub-menu__title {
   background: transparent !important;
   color: rgba(255, 255, 255, 0.9) !important;
   border-right-color: transparent !important;
 }
 
-.el-menu--popup .el-menu-item.is-active i,
-.el-menu--popup .el-submenu.is-active > .el-submenu__title i {
+.el-menu--popup .el-menu-item.is-active .el-icon,
+.el-menu--popup .el-sub-menu.is-active > .el-sub-menu__title .el-icon {
   color: rgba(255, 255, 255, 0.9) !important;
 }
 
@@ -176,5 +216,26 @@ body {
 .text-muted {
   color: var(--muted);
   font-size: 12px;
+}
+
+@media (max-width: 992px) {
+  .el-dialog {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    margin-top: 6vh !important;
+  }
+  .el-dialog__body {
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .el-table {
+    font-size: 13px;
+  }
+  .el-card {
+    border-radius: 12px;
+  }
+  .el-form-item__label {
+    line-height: 1.3;
+  }
 }
 

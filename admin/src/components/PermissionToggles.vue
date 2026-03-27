@@ -53,7 +53,7 @@ import { REPORT_FIELD_EDIT_DEFINITIONS } from '../utils/reportFieldEditDefinitio
 export default {
   name: 'PermissionToggles',
   props: {
-    value: {
+    modelValue: {
       type: Object,
       default: () => ({})
     }
@@ -61,11 +61,11 @@ export default {
   data() {
     return {
       fieldDefs: REPORT_FIELD_EDIT_DEFINITIONS,
-      inner: mergeIntoShape(emptyPermissionShape(), this.value)
+      inner: mergeIntoShape(emptyPermissionShape(), this.modelValue)
     };
   },
   watch: {
-    value: {
+    modelValue: {
       deep: true,
       handler(v) {
         this.inner = mergeIntoShape(emptyPermissionShape(), v);
@@ -74,7 +74,7 @@ export default {
   },
   methods: {
     emit() {
-      this.$emit('input', JSON.parse(JSON.stringify(this.inner)));
+      this.$emit('update:modelValue', JSON.parse(JSON.stringify(this.inner)));
     }
   }
 };
@@ -118,5 +118,22 @@ export default {
   display: inline-block;
   margin-right: 12px;
   margin-bottom: 6px;
+}
+@media (max-width: 992px) {
+  .perm-toggles {
+    font-size: 12px;
+  }
+  .perm-block {
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+  }
+  .el-checkbox {
+    display: block;
+    margin-right: 0;
+    margin-bottom: 8px;
+  }
+  .perm-field-grid {
+    gap: 0;
+  }
 }
 </style>

@@ -1,37 +1,37 @@
 <template>
-  <div>
+  <div class="reports-list">
     <div class="toolbar">
       <div class="left">
-        <el-input v-model="q" placeholder="报告编号/产品名称" clearable style="width: 260px" @keyup.enter.native="onSearch" />
-        <el-input v-model="batchNo" placeholder="批次" clearable style="width: 180px; margin-left: 8px" @keyup.enter.native="onSearch" />
-        <el-select v-model="status" placeholder="状态" clearable style="width: 140px; margin-left: 8px" @change="onSearch">
+        <el-input v-model="q" placeholder="报告编号/产品名称" clearable class="field-q" @keyup.enter="onSearch" />
+        <el-input v-model="batchNo" placeholder="批次" clearable class="field-batch" @keyup.enter="onSearch" />
+        <el-select v-model="status" placeholder="状态" clearable class="field-status" @change="onSearch">
           <el-option label="有效" value="active" />
           <el-option label="作废" value="void" />
         </el-select>
-        <el-button type="primary" style="margin-left: 8px" @click="onSearch">查询</el-button>
+        <el-button type="primary" @click="onSearch">查询</el-button>
       </div>
       <div class="right">
         <el-button
           v-if="canBulkPass"
-          icon="el-icon-check"
+          :icon="Check"
           :disabled="selected.length === 0"
           @click="onBulkPass"
         >批量判定合格</el-button>
         <el-button
           v-if="canBulkVoid"
-          icon="el-icon-warning-outline"
+          :icon="Warning"
           :disabled="selected.length === 0"
           @click="onBulkVoid"
         >批量作废</el-button>
         <el-button
           v-if="canBulkActivate"
-          icon="el-icon-refresh-right"
+          :icon="RefreshRight"
           :disabled="selected.length === 0"
           @click="onBulkActivate"
         >批量有效</el-button>
         <el-button
           v-if="canBulkDelete"
-          icon="el-icon-delete"
+          :icon="Delete"
           type="danger"
           plain
           :disabled="selected.length === 0"
@@ -50,40 +50,42 @@
       </div>
     </div>
 
-    <el-table :data="items" border @selection-change="selected = $event">
+    <div class="table-wrap">
+      <el-table :data="items" border @selection-change="selected = $event">
       <el-table-column type="selection" width="48" />
       <el-table-column prop="reportNo" label="报告编号" width="180" />
       <el-table-column prop="productName" label="产品名称" min-width="180" />
       <el-table-column prop="batchNo" label="批次" width="140" />
       <el-table-column prop="conclusion" label="判定" width="90">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <el-tag v-if="row.conclusion === 'pass'" type="success">合格</el-tag>
           <el-tag v-else-if="row.conclusion === 'fail'" type="danger">不合格</el-tag>
           <el-tag v-else type="info">未知</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="status" label="状态" width="90">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <el-tag v-if="row.status === 'active'">有效</el-tag>
           <el-tag v-else type="warning">作废</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="360">
-        <template slot-scope="{ row }">
-          <el-button v-if="perm('reports', 'previewPrint')" type="text" @click="onPreview(row)">预览</el-button>
-          <el-button v-if="perm('reports', 'previewPrint')" type="text" @click="onPrint(row)">打印</el-button>
+        <template #default="{ row }">
+          <el-button v-if="perm('reports', 'previewPrint')" link @click="onPreview(row)">预览</el-button>
+          <el-button v-if="perm('reports', 'previewPrint')" link @click="onPrint(row)">打印</el-button>
           <el-button
             v-if="perm('reports', 'view') || perm('reports', 'edit')"
-            type="text"
+            link
             @click="$router.push(`/reports/${row.id}`)"
           >
             {{ perm('reports', 'edit') ? '编辑' : '查看' }}
           </el-button>
-          <el-button v-if="row.status === 'active' && perm('reports', 'void')" type="text" @click="onVoid(row)">作废</el-button>
-          <el-button v-else-if="row.status !== 'active' && perm('reports', 'activate')" type="text" @click="onActivate(row)">恢复有效</el-button>
+          <el-button v-if="row.status === 'active' && perm('reports', 'void')" link @click="onVoid(row)">作废</el-button>
+          <el-button v-else-if="row.status !== 'active' && perm('reports', 'activate')" link @click="onActivate(row)">恢复有效</el-button>
         </template>
       </el-table-column>
-    </el-table>
+      </el-table>
+    </div>
     <div class="pagination-wrap">
       <el-pagination
         background
@@ -97,7 +99,7 @@
       />
     </div>
 
-    <el-dialog title="二维码" :visible.sync="qrDialog" width="580px" :close-on-click-modal="false">
+    <el-dialog title="二维码" v-model="qrDialog" width="580px" :close-on-click-modal="false">
       <div v-if="qrResult" class="qr-dialog-body">
         <div class="qr-image-wrap">
           <img :src="qrResult.qrDataUrl" alt="qr" class="qr-image" />
@@ -112,7 +114,7 @@
 
     <el-dialog
       title="报告预览"
-      :visible.sync="previewDialog"
+      v-model="previewDialog"
       width="920px"
       top="4vh"
       :close-on-click-modal="false"
@@ -126,10 +128,10 @@
           @load="previewLoading = false"
         />
       </div>
-      <span slot="footer">
+      <template #footer>
         <el-button @click="previewDialog = false">关闭</el-button>
         <el-button type="primary" :disabled="!previewUrl" @click="printPreview">打印</el-button>
-      </span>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -137,11 +139,12 @@
 <script>
 import { activateReport, createQrcode, listReports, voidReport } from '../api';
 import { bulkActivateReports, bulkDeleteReports, bulkPassReports, bulkVoidReports } from '../api';
+import { Check, Delete, RefreshRight, Warning } from '@element-plus/icons-vue';
 import { perm } from '../utils/permissions';
 import { getAuthToken } from '../stores/auth';
 
 function customerReportPreviewUrl(reportId, { autoPrint = false } = {}) {
-  const base = process.env.VUE_APP_API_BASE_URL || 'http://localhost:3001';
+  const base = import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001';
   const token = getAuthToken();
   const q = new URLSearchParams({
     id: String(reportId),
@@ -154,6 +157,7 @@ function customerReportPreviewUrl(reportId, { autoPrint = false } = {}) {
 
 export default {
   name: 'ReportsList',
+  components: { Check, Delete, RefreshRight, Warning },
   data() {
     return {
       q: '',
@@ -356,11 +360,30 @@ export default {
   display: flex;
   justify-content: space-between;
   margin-bottom: 12px;
+  gap: 10px;
 }
 .left,
 .right {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.field-q {
+  width: 260px;
+}
+.field-batch {
+  width: 180px;
+}
+.field-status {
+  width: 140px;
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.table-wrap :deep(.el-table) {
+  min-width: 980px;
 }
 .pagination-wrap {
   margin-top: 12px;
@@ -428,6 +451,30 @@ export default {
   gap: 10px;
   margin-top: 10px;
   justify-content: space-between;
+}
+
+@media (max-width: 992px) {
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .left,
+  .right {
+    width: 100%;
+  }
+  .field-q,
+  .field-batch,
+  .field-status {
+    width: 100%;
+  }
+  .left .el-button,
+  .right .el-button {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 120px;
+  }
+  .pagination-wrap {
+    justify-content: center;
+  }
 }
 </style>
 

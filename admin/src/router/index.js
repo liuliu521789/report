@@ -1,5 +1,4 @@
-import Vue from 'vue';
-import Router from 'vue-router';
+import { createRouter, createWebHashHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 
 import Login from '../views/Login.vue';
@@ -16,18 +15,20 @@ import AuditLoginLogs from '../views/AuditLoginLogs.vue';
 import AuditOperationLogs from '../views/AuditOperationLogs.vue';
 import AuditErrorLogs from '../views/AuditErrorLogs.vue';
 import MyOperationLogs from '../views/MyOperationLogs.vue';
+import SupportContactSettings from '../views/SupportContactSettings.vue';
+import OperationGuide from '../views/OperationGuide.vue';
+import Dashboard from '../views/Dashboard.vue';
 
-Vue.use(Router);
-
-const router = new Router({
-  mode: 'hash',
+const router = createRouter({
+  history: createWebHashHistory(),
   routes: [
     { path: '/login', component: Login },
     {
       path: '/',
       component: Layout,
       children: [
-        { path: '', redirect: '/reports' },
+        { path: '', redirect: '/dashboard' },
+        { path: '/dashboard', component: Dashboard },
         { path: '/reports', component: ReportsList },
         { path: '/reports/new', component: ReportEdit, meta: { needPerm: ['reports', 'create'] } },
         {
@@ -41,12 +42,14 @@ const router = new Router({
         { path: '/company', component: CompanySettings },
         { path: '/employee-categories', component: EmployeeCategories, meta: { superAdminOnly: true } },
         { path: '/users', component: UsersManage, meta: { superAdminOnly: true } },
+        { path: '/support-contact', component: SupportContactSettings, meta: { superAdminOnly: true } },
         { path: '/audit', redirect: '/audit/login-logs', meta: { superAdminOnly: true } },
         { path: '/audit/login-logs', component: AuditLoginLogs, meta: { superAdminOnly: true } },
         { path: '/audit/operations', component: AuditOperationLogs, meta: { superAdminOnly: true } },
         { path: '/audit/errors', component: AuditErrorLogs, meta: { superAdminOnly: true } },
         { path: '/security', component: SecuritySettings, meta: { superAdminOnly: true } },
-        { path: '/my-operation-logs', component: MyOperationLogs }
+        { path: '/my-operation-logs', component: MyOperationLogs },
+        { path: '/operation-guide', component: OperationGuide }
       ]
     }
   ]
@@ -59,7 +62,6 @@ function canRoutePerm(mod, key) {
   return !!(perms[mod] && perms[mod][key]);
 }
 
-/** 满足任一 (module,key) 即可，用于「查看详情」与「编辑」共用路由 */
 function canRouteAnyPerm(pairs) {
   const auth = useAuthStore();
   if (auth.accountType === 'super_admin') return true;
@@ -68,20 +70,20 @@ function canRouteAnyPerm(pairs) {
   return pairs.some(([mod, key]) => !!(perms[mod] && perms[mod][key]));
 }
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
   const auth = useAuthStore();
   const token = auth.token;
+  if (to.path === '/') return next(token ? '/dashboard' : '/login');
   if (to.path !== '/login' && !token) return next('/login');
-  if (to.path === '/login' && token) return next('/reports');
+  if (to.path === '/login' && token) return next('/dashboard');
   if (to.matched.some((r) => r.meta?.superAdminOnly) && auth.accountType !== 'super_admin') {
-    return next('/reports');
+    return next('/dashboard');
   }
   const needAny = to.matched.find((r) => r.meta?.needAnyPerm)?.meta?.needAnyPerm;
-  if (needAny && !canRouteAnyPerm(needAny)) return next('/reports');
+  if (needAny && !canRouteAnyPerm(needAny)) return next('/dashboard');
   const need = to.matched.find((r) => r.meta?.needPerm)?.meta?.needPerm;
-  if (need && !canRoutePerm(need[0], need[1])) return next('/reports');
+  if (need && !canRoutePerm(need[0], need[1])) return next('/dashboard');
   return next();
 });
 
 export default router;
-

@@ -35,9 +35,41 @@ export async function listLoginLogs(params) {
   return data;
 }
 
+export async function bulkDeleteLoginLogs(ids) {
+  const { data } = await http.delete('/api/audit/login/bulk', { data: { ids } });
+  return data;
+}
+
+export async function exportLoginLogs(ids) {
+  const res = await http.post('/api/audit/login/export', { ids }, { responseType: 'blob' });
+  const blob = new Blob([res.data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `login-logs-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function listAuditOperations(params) {
   const { data } = await http.get('/api/audit/operations', { params });
   return data;
+}
+
+export async function bulkDeleteAuditOperations(ids) {
+  const { data } = await http.delete('/api/audit/operations/bulk', { data: { ids } });
+  return data;
+}
+
+export async function exportAuditOperations(ids) {
+  const res = await http.post('/api/audit/operations/export', { ids }, { responseType: 'blob' });
+  const blob = new Blob([res.data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `operation-logs-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function listMyOperations(params) {
@@ -48,6 +80,22 @@ export async function listMyOperations(params) {
 export async function listErrorLogs(params) {
   const { data } = await http.get('/api/audit/errors', { params });
   return data;
+}
+
+export async function bulkDeleteErrorLogs(ids) {
+  const { data } = await http.delete('/api/audit/errors/bulk', { data: { ids } });
+  return data;
+}
+
+export async function exportErrorLogs(ids) {
+  const res = await http.post('/api/audit/errors/export', { ids }, { responseType: 'blob' });
+  const blob = new Blob([res.data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `error-logs-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function downloadErrorLogsExport() {
@@ -263,6 +311,21 @@ export async function getCompanySettings() {
 
 export async function updateCompanySettings(payload) {
   const { data } = await http.put('/api/company/settings', payload);
+  return data;
+}
+
+export async function getSupportContact() {
+  const { data } = await http.get('/api/support-contact');
+  return data;
+}
+
+export async function updateSupportContact(payload) {
+  const { data } = await http.put('/api/support-contact', payload);
+  return data;
+}
+
+export async function getDashboardSummary() {
+  const { data } = await http.get('/api/dashboard/summary');
   return data;
 }
 

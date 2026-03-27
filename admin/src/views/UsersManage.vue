@@ -1,36 +1,53 @@
 <template>
-  <div>
+  <div class="users-page">
     <div class="toolbar">
       <el-button type="primary" @click="openCreate">新建账号</el-button>
       <span class="hint">仅超级管理员可操作；须至少保留一名启用的超级管理员。</span>
     </div>
 
-    <el-table v-loading="loading" :data="items" border style="width: 100%">
+    <el-table v-loading="loading" :data="items" border style="width: 100%" class="desktop-table">
       <el-table-column prop="id" label="ID" width="72" />
       <el-table-column prop="username" label="用户名" min-width="120" />
       <el-table-column label="类型" width="120">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <el-tag v-if="row.accountType === 'super_admin'" type="danger" size="small">超级管理员</el-tag>
           <el-tag v-else type="info" size="small">员工</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="categoryNameZh" label="员工类别" width="120" />
       <el-table-column label="状态" width="90">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <el-tag v-if="row.isActive" type="success" size="small">启用</el-tag>
           <el-tag v-else type="info" size="small">停用</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="createdAt" label="创建时间" width="180" />
       <el-table-column label="操作" width="100" fixed="right">
-        <template slot-scope="{ row }">
-          <el-button type="text" @click="openEdit(row)">编辑</el-button>
+        <template #default="{ row }">
+          <el-button link @click="openEdit(row)">编辑</el-button>
         </template>
       </el-table-column>
     </el-table>
+    <div class="mobile-list" v-loading="loading">
+      <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
+        <div class="mobile-head">
+          <strong>{{ row.username }}</strong>
+          <el-tag v-if="row.accountType === 'super_admin'" type="danger" size="small">超级管理员</el-tag>
+          <el-tag v-else type="info" size="small">员工</el-tag>
+        </div>
+        <div class="mobile-line"><span>ID</span><span>{{ row.id }}</span></div>
+        <div class="mobile-line"><span>员工类别</span><span>{{ row.categoryNameZh || '-' }}</span></div>
+        <div class="mobile-line"><span>状态</span><span>{{ row.isActive ? '启用' : '停用' }}</span></div>
+        <div class="mobile-line"><span>创建时间</span><span>{{ row.createdAt }}</span></div>
+        <div class="mobile-actions">
+          <el-button size="small" @click="openEdit(row)">编辑</el-button>
+        </div>
+      </div>
+      <el-empty v-if="!items.length && !loading" description="暂无账号" />
+    </div>
 
-    <el-dialog :title="dialogMode === 'create' ? '新建账号' : '编辑账号'" :visible.sync="dialog" width="640px" top="6vh" @close="resetForm">
-      <el-form ref="formRef" :model="form" :rules="formRules" label-width="108px">
+    <el-dialog :title="dialogMode === 'create' ? '新建账号' : '编辑账号'" v-model="dialog" width="640px" top="6vh" @close="resetForm">
+      <el-form ref="formRef" :model="form" :rules="formRules" label-width="108px" class="users-form">
         <el-form-item v-if="dialogMode === 'create'" label="用户名" prop="username">
           <el-input v-model="form.username" autocomplete="off" maxlength="64" />
         </el-form-item>
@@ -59,10 +76,10 @@
           <el-input v-model="form.passwordEdit" type="password" show-password placeholder="不修改请留空" autocomplete="new-password" />
         </el-form-item>
       </el-form>
-      <span slot="footer">
+      <template #footer>
         <el-button @click="dialog = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submit">确定</el-button>
-      </span>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -238,6 +255,7 @@ export default {
   align-items: center;
   gap: 16px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 .hint {
   font-size: 12px;
@@ -247,5 +265,54 @@ export default {
   font-size: 12px;
   color: #64748b;
   margin-bottom: 8px;
+}
+.mobile-list {
+  display: none;
+}
+.mobile-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+  margin-bottom: 8px;
+}
+.mobile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.mobile-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 3px 0;
+  font-size: 13px;
+  color: #475569;
+}
+.mobile-actions {
+  margin-top: 10px;
+}
+@media (max-width: 992px) {
+  .toolbar {
+    gap: 8px;
+  }
+  .toolbar .el-button {
+    width: 100%;
+  }
+  .desktop-table {
+    display: none;
+  }
+  .mobile-list {
+    display: block;
+  }
+  .users-form :deep(.el-form-item__label) {
+    width: 100% !important;
+    text-align: left;
+    margin-bottom: 6px;
+  }
+  .users-form :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+  }
 }
 </style>

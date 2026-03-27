@@ -1,20 +1,20 @@
 <template>
-  <div>
+  <div class="categories-page">
     <div class="toolbar">
       <el-button type="primary" @click="openCreate">新增类别</el-button>
       <span class="hint">内置「品管」「客服」不可删除；可新增其他类别并配置默认权限。</span>
     </div>
 
-    <el-table v-loading="loading" :data="items" border>
+    <el-table v-loading="loading" :data="items" border class="desktop-table">
       <el-table-column prop="id" label="ID" width="72" />
       <el-table-column prop="nameZh" label="名称" min-width="120" />
       <el-table-column prop="code" label="代码" width="120" />
       <el-table-column prop="sortOrder" label="排序" width="80" />
       <el-table-column label="操作" width="160" fixed="right">
-        <template slot-scope="{ row }">
-          <el-button type="text" @click="openEdit(row)">编辑</el-button>
+        <template #default="{ row }">
+          <el-button link @click="openEdit(row)">编辑</el-button>
           <el-button
-            type="text"
+            link
             :disabled="row.code === 'qc' || row.code === 'cs'"
             @click="onDelete(row)"
           >
@@ -23,9 +23,30 @@
         </template>
       </el-table-column>
     </el-table>
+    <div class="mobile-list" v-loading="loading">
+      <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
+        <div class="mobile-head">
+          <strong>{{ row.nameZh }}</strong>
+          <span class="mobile-code">{{ row.code }}</span>
+        </div>
+        <div class="mobile-line"><span>ID</span><span>{{ row.id }}</span></div>
+        <div class="mobile-line"><span>排序</span><span>{{ row.sortOrder }}</span></div>
+        <div class="mobile-actions">
+          <el-button size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button
+            size="small"
+            :disabled="row.code === 'qc' || row.code === 'cs'"
+            @click="onDelete(row)"
+          >
+            删除
+          </el-button>
+        </div>
+      </div>
+      <el-empty v-if="!items.length && !loading" description="暂无类别" />
+    </div>
 
-    <el-dialog :title="dialogMode === 'create' ? '新增员工类别' : '编辑员工类别'" :visible.sync="dialog" width="560px" @close="resetForm">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+    <el-dialog :title="dialogMode === 'create' ? '新增员工类别' : '编辑员工类别'" v-model="dialog" width="560px" @close="resetForm">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" class="categories-form">
         <el-form-item v-if="dialogMode === 'create'" label="代码" prop="code">
           <el-input v-model="form.code" placeholder="英文标识，如 warehouse" maxlength="32" />
         </el-form-item>
@@ -39,10 +60,10 @@
           <permission-toggles v-model="form.defaultPermissions" />
         </el-form-item>
       </el-form>
-      <span slot="footer">
+      <template #footer>
         <el-button @click="dialog = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
-      </span>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -175,9 +196,65 @@ export default {
   align-items: center;
   gap: 16px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 .hint {
   font-size: 12px;
   color: #64748b;
+}
+.mobile-list {
+  display: none;
+}
+.mobile-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+  margin-bottom: 8px;
+}
+.mobile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.mobile-code {
+  font-size: 12px;
+  color: #64748b;
+}
+.mobile-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 3px 0;
+  font-size: 13px;
+  color: #475569;
+}
+.mobile-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+@media (max-width: 992px) {
+  .toolbar {
+    gap: 8px;
+  }
+  .toolbar .el-button {
+    width: 100%;
+  }
+  .desktop-table {
+    display: none;
+  }
+  .mobile-list {
+    display: block;
+  }
+  .categories-form :deep(.el-form-item__label) {
+    width: 100% !important;
+    text-align: left;
+    margin-bottom: 6px;
+  }
+  .categories-form :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+  }
 }
 </style>

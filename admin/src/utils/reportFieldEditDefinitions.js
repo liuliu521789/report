@@ -34,6 +34,7 @@ export function isCustomFieldKey(fieldKey) {
 }
 
 export function canEditReportFieldKeyFromPermissions(effective, fieldKey) {
+  if (!fieldKey || typeof fieldKey !== 'string') return false;
   if (!effective || typeof effective !== 'object') return true;
   if (!effective.reports?.edit) return false;
   const fe = effective.reports.fieldEdit;

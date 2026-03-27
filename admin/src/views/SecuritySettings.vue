@@ -1,8 +1,10 @@
 <template>
-  <div>
+  <div class="security-page">
     <el-card v-loading="loading">
-      <div slot="header">系统安全策略（仅超级管理员）</div>
-      <el-form v-if="form" :model="form" label-width="180px" style="max-width: 720px">
+      <template #header>
+        <div>系统安全策略（仅超级管理员）</div>
+      </template>
+      <el-form v-if="form" :model="form" label-width="180px" class="security-form">
         <el-form-item label="密码最小长度">
           <el-input-number v-model="form.minPasswordLength" :min="4" :max="128" />
         </el-form-item>
@@ -87,9 +89,32 @@ export default {
 </script>
 
 <style scoped>
+.security-form {
+  max-width: 720px;
+}
 .hint {
   margin-left: 8px;
   font-size: 12px;
   color: #909399;
+}
+@media (max-width: 992px) {
+  .security-form {
+    max-width: 100%;
+  }
+  .security-form :deep(.el-form-item__label) {
+    width: 100% !important;
+    text-align: left;
+    margin-bottom: 6px;
+  }
+  .security-form :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .hint {
+    margin-left: 0;
+    width: 100%;
+  }
 }
 </style>

@@ -9,7 +9,7 @@
         <el-select
           v-model="form.conclusion"
           size="small"
-          style="width: 110px; margin-right: 12px"
+          class="conclusion-select"
           :disabled="!fieldEditable('conclusion')"
         >
           <el-option label="合格" value="pass" />
@@ -53,9 +53,11 @@
     />
 
     <el-card v-if="isNew" class="tpl-card">
-      <div slot="header" class="field-header">
-        <div>创建方式</div>
-      </div>
+      <template #header>
+        <div class="field-header">
+          <div>创建方式</div>
+        </div>
+      </template>
       <div class="create-row">
         <el-select
           v-model="selectedTemplateId"
@@ -128,10 +130,10 @@
             />
             <div v-if="rowEditable(row)" class="action-icons">
               <span class="edit-icon" title="编辑标签" @click="focusLabel(row)">
-                <i class="el-icon-edit"></i>
+                <el-icon><Edit /></el-icon>
               </span>
               <span class="del-icon" title="删除行" @click="deleteMetaRow(row)">
-                <i class="el-icon-delete"></i>
+                <el-icon><Delete /></el-icon>
               </span>
             </div>
           </div>
@@ -216,7 +218,7 @@
               <td v-if="fieldEditable('inspection_table')">
                 <div class="table-action">
                   <span class="del-icon" title="删除检验项" @click="removeTableRow(ri)">
-                    <i class="el-icon-delete"></i>
+                    <el-icon><Delete /></el-icon>
                   </span>
                 </div>
               </td>
@@ -353,7 +355,7 @@
           <span class="text-muted">盖章操作（可取消）</span>
           <el-button
             type="primary"
-            size="mini"
+            size="small"
             :disabled="hasSeal('department_qc')"
             :loading="sealLoading"
             @click="onStampAction('department_qc')"
@@ -362,7 +364,7 @@
           </el-button>
           <el-button
             type="primary"
-            size="mini"
+            size="small"
             :disabled="hasSeal('inspector')"
             :loading="sealLoading"
             @click="onStampAction('inspector')"
@@ -371,7 +373,7 @@
           </el-button>
           <el-button
             type="primary"
-            size="mini"
+            size="small"
             :disabled="hasSeal('supervisor')"
             :loading="sealLoading"
             @click="onStampAction('supervisor')"
@@ -380,7 +382,7 @@
           </el-button>
           <el-button
             type="success"
-            size="mini"
+            size="small"
             :disabled="hasSeal('pass')"
             :loading="sealLoading"
             @click="onStampAction('pass')"
@@ -389,7 +391,7 @@
           </el-button>
           <el-button
             type="warning"
-            size="mini"
+            size="small"
             :disabled="hasSeal('recheck')"
             :loading="sealLoading"
             @click="onStampAction('recheck')"
@@ -400,7 +402,7 @@
       </div>
     </div>
 
-    <el-dialog title="保存为模板" :visible.sync="tplDialog" width="520px">
+    <el-dialog title="保存为模板" v-model="tplDialog" width="520px">
       <el-form :model="tplForm" label-width="110px">
         <el-form-item label="模板名称">
           <el-input v-model="tplForm.name" placeholder="例如：常规化工检测报告模板" />
@@ -413,10 +415,10 @@
           <div class="text-muted" style="margin-top: 6px">开启后会把当前字段的「值」作为模板默认值</div>
         </el-form-item>
       </el-form>
-      <span slot="footer">
+      <template #footer>
         <el-button @click="tplDialog = false">取消</el-button>
         <el-button type="primary" :loading="tplSaving" @click="saveAsTemplate">保存</el-button>
-      </span>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -436,6 +438,7 @@ import {
   translateZhToEn,
   updateReport
 } from '../api';
+import { Delete, Edit } from '@element-plus/icons-vue';
 import { canEditReportFieldKey, perm } from '../utils/permissions';
 import { isCustomFieldKey } from '../utils/reportFieldEditDefinitions';
 
@@ -450,6 +453,7 @@ const LOGO_FALLBACK_SVG = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2
 
 export default {
   name: 'ReportEdit',
+  components: { Delete, Edit },
   props: {
     id: { type: [String, Number], default: null }
   },
@@ -574,12 +578,12 @@ export default {
     perm,
     fieldEditable(key) {
       if (this.isNew) return true;
-      return canEditReportFieldKey(key);
+      return canEditReportFieldKey({ fieldKey: key });
     },
     rowEditable(row) {
       if (this.isNew) return true;
-      if (isCustomFieldKey(row.fieldKey)) return canEditReportFieldKey('custom_fields');
-      return canEditReportFieldKey(row.fieldKey);
+      if (isCustomFieldKey(row.fieldKey)) return canEditReportFieldKey({ fieldKey: 'custom_fields' });
+      return canEditReportFieldKey({ fieldKey: row.fieldKey });
     },
     defaultColumnLabels() {
       return [
@@ -1106,6 +1110,9 @@ export default {
   font-size: 13px;
   color: #606266;
 }
+.conclusion-select {
+  width: 120px;
+}
 .top-alert {
   margin-bottom: 12px;
 }
@@ -1293,8 +1300,8 @@ export default {
   justify-content: center;
   border-radius: 4px;
 }
-.edit-icon i,
-.del-icon i {
+.edit-icon :deep(.el-icon),
+.del-icon :deep(.el-icon) {
   font-size: 16px;
 }
 .edit-icon {
@@ -1497,6 +1504,63 @@ export default {
   }
   .report-container {
     box-shadow: none;
+  }
+}
+
+@media (max-width: 992px) {
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .toolbar-right {
+    width: 100%;
+  }
+  .toolbar-right .el-button {
+    flex: 1 1 calc(50% - 8px);
+  }
+  .conclusion-select {
+    width: 100%;
+    margin-right: 0;
+  }
+  .paper-wrap {
+    padding: 10px;
+  }
+  .report-container {
+    min-width: 780px;
+    width: 780px;
+    min-height: auto;
+    padding: 18mm 12mm 12mm;
+  }
+  .edit-icon,
+  .del-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+  }
+  .edit-icon :deep(.el-icon),
+  .del-icon :deep(.el-icon) {
+    font-size: 18px;
+  }
+  .add-row-btn {
+    min-height: 36px;
+    padding: 8px 14px;
+  }
+  .seal-toolbar {
+    gap: 10px;
+    padding: 12px;
+  }
+  .seal-toolbar .el-button {
+    min-height: 36px;
+    min-width: 90px;
+  }
+  .stamp-remove {
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    font-size: 14px;
+    right: -10px;
+    top: -10px;
   }
 }
 </style>

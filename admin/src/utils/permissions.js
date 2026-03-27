@@ -42,7 +42,14 @@ export function perm(module, key) {
 }
 
 /** 编辑已有报告时按 permissions.reports.fieldEdit 控制；新建报告不限制（避免无法通过必填校验） */
-export function canEditReportFieldKey(fieldKey) {
+export function canEditReportFieldKey(input) {
+  // Backward compatibility: allow old string signature canEditReportFieldKey('field_key')
+  const opts = (input && typeof input === 'object')
+    ? input
+    : { fieldKey: input };
+  const fieldKey = opts?.fieldKey;
+  const effectivePermissions = opts?.effectivePermissions;
   if (isSuperAdmin()) return true;
-  return canEditReportFieldKeyFromPermissions(getPermissions(), fieldKey);
+  const effective = effectivePermissions != null ? effectivePermissions : getPermissions();
+  return canEditReportFieldKeyFromPermissions(effective, fieldKey);
 }

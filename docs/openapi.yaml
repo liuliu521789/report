@@ -1,0 +1,1675 @@
+openapi: 3.0.3
+info:
+  title: 化工厂质检报告系统 API
+  description: |
+    Node.js + Express 后端接口规范。需登录接口使用 JWT Bearer。
+    公开扫码与客户报告接口无需 Bearer（见 Public 分组）。
+  version: 0.1.0
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:3001
+    description: 本地开发
+  - url: '{protocol}://{host}'
+    description: 部署环境（替换 protocol/host）
+    variables:
+      protocol:
+        default: http
+      host:
+        default: api.example.com
+
+tags:
+  - name: Health
+  - name: Auth
+  - name: Reports
+  - name: Qrcodes
+  - name: Stamps
+  - name: Templates
+  - name: Company
+  - name: Translate
+  - name: Security
+  - name: Audit
+  - name: EmployeeCategories
+  - name: Users
+  - name: Public
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      summary: 健康检查
+      security: []
+      responses:
+        '200':
+          description: 正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  ts: { type: integer, format: int64, example: 1710000000000 }
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: 登录
+      description: 返回 JWT；令牌过期时间受系统安全策略 idleTimeoutMinutes 与上限约束。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              username: admin
+              password: '******'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                idleTimeoutMinutes: 60
+                user:
+                  id: 1
+                  username: admin
+                  accountType: super_admin
+                  employeeCategoryId: null
+                  permissions: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: 凭据无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                invalid:
+                  value:
+                    error: INVALID_CREDENTIALS
+                lockedTrigger:
+                  value:
+                    error: INVALID_CREDENTIALS
+                    locked: true
+        '403':
+          description: 账号锁定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error: ACCOUNT_LOCKED
+                lockedUntil: '2025-03-26T12:00:00.000Z'
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: 当前用户与安全提示
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/JwtUserPayload'
+                  idleTimeoutMinutes: { type: integer, example: 60 }
+                  confirmSensitiveOperations: { type: boolean, example: true }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/change-password:
+    post:
+      tags: [Auth]
+      summary: 修改当前用户密码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [oldPassword, newPassword]
+              properties:
+                oldPassword: { type: string, minLength: 1, maxLength: 128 }
+                newPassword: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkTrue'
+        '400':
+          description: 原密码错误或新密码不符合策略
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                oldWrong:
+                  value:
+                    error: OLD_PASSWORD_WRONG
+                policy:
+                  value:
+                    error: PASSWORD_TOO_SHORT
+                    message: 密码长度不足
+
+  /api/auth/bootstrap-admin:
+    post:
+      tags: [Auth]
+      summary: 初始化或创建超级管理员
+      description: |
+        users 表为空时无需认证；已有用户时需超管 JWT。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, minLength: 1, maxLength: 64 }
+                password: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  id: { type: integer, example: 1 }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: 用户名已存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error: USERNAME_EXISTS
+
+  /api/reports:
+    get:
+      tags: [Reports]
+      summary: 报告列表（分页/筛选）
+      parameters:
+        - $ref: '#/components/parameters/QueryQ'
+        - name: batchNo
+          in: query
+          schema: { type: string }
+          description: 精确批号
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, void]
+        - $ref: '#/components/parameters/Limit50'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Reports]
+      summary: 新建报告
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportUpsertBody'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer, example: 100 }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: 报告编号重复
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error: REPORT_NO_EXISTS
+
+  /api/reports/bulk/conclusion-pass:
+    post:
+      tags: [Reports]
+      summary: 批量结论设为合格
+      requestBody:
+        $ref: '#/components/requestBodies/IdListBody500'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkAffectedResponse'
+
+  /api/reports/bulk/void:
+    post:
+      tags: [Reports]
+      summary: 批量作废
+      requestBody:
+        $ref: '#/components/requestBodies/IdListBody500'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkAffectedResponse'
+
+  /api/reports/bulk/activate:
+    post:
+      tags: [Reports]
+      summary: 批量恢复有效
+      requestBody:
+        $ref: '#/components/requestBodies/IdListBody500'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkAffectedResponse'
+
+  /api/reports/bulk:
+    delete:
+      tags: [Reports]
+      summary: 批量删除报告
+      requestBody:
+        $ref: '#/components/requestBodies/IdListBody500'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  deletedCount: { type: integer }
+
+  /api/reports/bulk/generate-test:
+    post:
+      tags: [Reports]
+      summary: 批量生成测试报告
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                count:
+                  type: integer
+                  minimum: 1
+                  maximum: 500
+                  default: 100
+                templateId:
+                  type: integer
+                  nullable: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  createdCount: { type: integer }
+                  firstId: { type: integer, nullable: true }
+                  lastId: { type: integer, nullable: true }
+
+  /api/reports/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    get:
+      tags: [Reports]
+      summary: 报告详情（含字段）
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report:
+                    allOf:
+                      - $ref: '#/components/schemas/ReportHead'
+                      - type: object
+                        properties:
+                          fields:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/ReportField'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Reports]
+      summary: 更新报告（整表替换字段）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportUpsertBody'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkTrue'
+        '409':
+          description: 报告号冲突
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+
+  /api/reports/{id}/customer-preview:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    get:
+      tags: [Reports]
+      summary: 客户视图同构 JSON（管理端预览）
+      responses:
+        '200':
+          description: 与公开 report payload 结构一致
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/reports/{id}/save-as-template:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      tags: [Reports]
+      summary: 将当前报告另存为模板
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 128 }
+                description: { type: string, maxLength: 255, nullable: true }
+                includeValues: { type: boolean, default: false }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+
+  /api/reports/{id}/void:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      tags: [Reports]
+      summary: 作废报告
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkTrue'
+
+  /api/reports/{id}/activate:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      tags: [Reports]
+      summary: 恢复报告有效
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkTrue'
+
+  /api/reports/{id}/seals:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    get:
+      tags: [Reports]
+      summary: 已应用用印快照
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appliedSeals:
+                    type: object
+                    additionalProperties:
+                      nullable: true
+                      oneOf:
+                        - type: 'null'
+                        - $ref: '#/components/schemas/SealSnapshot'
+    post:
+      tags: [Reports]
+      summary: 应用用印（从当前激活公司章复制）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sealTypes]
+              properties:
+                sealTypes:
+                  type: array
+                  minItems: 1
+                  maxItems: 5
+                  items:
+                    $ref: '#/components/schemas/SealType'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkTrue'
+        '400':
+          description: 某类型无激活章
+          content:
+            application/json:
+              example:
+                error: SEAL_NOT_ACTIVE
+                sealType: pass
+
+  /api/reports/{id}/seals/{sealType}:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+      - name: sealType
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/SealType'
+    delete:
+      tags: [Reports]
+      summary: 移除某类型用印
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkTrue'
+
+  /api/qrcodes:
+    get:
+      tags: [Qrcodes]
+      summary: 二维码列表
+      parameters:
+        - $ref: '#/components/parameters/QueryQ'
+        - $ref: '#/components/parameters/Limit50'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QrcodeListResponse'
+    post:
+      tags: [Qrcodes]
+      summary: 创建二维码并绑定报告
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reportIds]
+              properties:
+                reportIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    type: integer
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  token: { type: string }
+                  scanUrl: { type: string, format: uri }
+                  qrDataUrl: { type: string, description: data:image/png;base64,... }
+    delete:
+      tags: [Qrcodes]
+      summary: 批量删除二维码
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items: { type: integer }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  deletedCount: { type: integer }
+
+  /api/qrcodes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/QrcodeId'
+    get:
+      tags: [Qrcodes]
+      summary: 二维码详情（含绑定报告）
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  qrcode:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      token: { type: string }
+                      createdAt: {}
+                      reports:
+                        type: array
+                        items:
+                          type: object
+
+  /api/qrcodes/{id}/qr:
+    parameters:
+      - $ref: '#/components/parameters/QrcodeId'
+    get:
+      tags: [Qrcodes]
+      summary: 重新生成二维码图片 DataURL
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  token: { type: string }
+                  scanUrl: { type: string }
+                  qrDataUrl: { type: string }
+
+  /api/stamps/upload:
+    post:
+      tags: [Stamps]
+      summary: 上传印章图片
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imageUrl: { type: string }
+
+  /api/stamps:
+    get:
+      tags: [Stamps]
+      summary: 公司章列表
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CompanyStamp'
+    post:
+      tags: [Stamps]
+      summary: 新增公司章
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StampUpsertBody'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+
+  /api/stamps/bulk:
+    delete:
+      tags: [Stamps]
+      summary: 批量删除公司章
+      requestBody:
+        $ref: '#/components/requestBodies/IdListBody500Stamp'
+
+  /api/stamps/{id}:
+    parameters:
+      - $ref: '#/components/parameters/StampId'
+    put:
+      tags: [Stamps]
+      summary: 更新公司章
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StampUpsertBody'
+    delete:
+      tags: [Stamps]
+      summary: 删除单条
+
+  /api/stamps/{id}/activate:
+    parameters:
+      - $ref: '#/components/parameters/StampId'
+    post:
+      tags: [Stamps]
+      summary: 激活该条（同类型仅一条激活）
+
+  /api/templates:
+    get:
+      tags: [Templates]
+      summary: 模板列表
+      parameters:
+        - $ref: '#/components/parameters/QueryQ'
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 200 }
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TemplateListItem'
+    post:
+      tags: [Templates]
+      summary: 新建模板
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateUpsertBody'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+        '409':
+          description: 字段 key 重复
+          content:
+            application/json:
+              example:
+                error: DUPLICATE_FIELD_KEY
+
+  /api/templates/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TemplateId'
+    get:
+      tags: [Templates]
+      summary: 模板详情
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  template:
+                    type: object
+    put:
+      tags: [Templates]
+      summary: 更新模板
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateUpsertBody'
+    delete:
+      tags: [Templates]
+      summary: 删除模板
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkTrue'
+
+  /api/company/settings:
+    get:
+      tags: [Company]
+      summary: 读取公司设置
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings:
+                    nullable: true
+                    type: object
+    put:
+      tags: [Company]
+      summary: 更新公司设置
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanySettingsBody'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkTrue'
+
+  /api/company/settings/logo:
+    post:
+      tags: [Company]
+      summary: 上传公司 Logo
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logoUrl: { type: string }
+
+  /api/translate:
+    post:
+      tags: [Translate]
+      summary: 文本翻译（LibreTranslate 代理）
+      description: |
+        未配置 LIBRETRANSLATE_ENABLED / URL 时返回原文 translatedText=q。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [q]
+              properties:
+                q: { type: string, minLength: 1, maxLength: 2000 }
+                source: { type: string, default: zh }
+                target: { type: string, default: en }
+                format: { type: string, default: text }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  translatedText: { type: string }
+        '502':
+          content:
+            application/json:
+              example:
+                error: TRANSLATE_FAILED
+                details: upstream message
+
+  /api/security:
+    get:
+      tags: [Security]
+      summary: 获取系统安全策略
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings:
+                    $ref: '#/components/schemas/SecuritySettings'
+    put:
+      tags: [Security]
+      summary: 更新安全策略（部分字段）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecuritySettingsUpdate'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings:
+                    $ref: '#/components/schemas/SecuritySettings'
+
+  /api/audit/my-operations:
+    get:
+      tags: [Audit]
+      summary: 本人操作日志（非超管）
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit50'
+        - $ref: '#/components/parameters/Offset'
+        - name: module
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string }
+        - name: to
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationLogPage'
+        '403':
+          description: 超级管理员不可用此接口
+          content:
+            application/json:
+              example:
+                error: FORBIDDEN
+
+  /api/audit/login:
+    get:
+      tags: [Audit]
+      summary: 登录日志（超管）
+      parameters:
+        - name: username
+          in: query
+          schema: { type: string }
+        - name: success
+          in: query
+          schema: { type: string, enum: ['0', '1'] }
+        - name: from
+          in: query
+          schema: { type: string }
+        - name: to
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit50'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginLogPage'
+
+  /api/audit/operations:
+    get:
+      tags: [Audit]
+      summary: 操作日志（超管）
+      parameters:
+        - name: username
+          in: query
+          schema: { type: string }
+        - name: userId
+          in: query
+          schema: { type: integer }
+        - name: module
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string }
+        - name: to
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit50'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationLogPage'
+
+  /api/audit/errors:
+    get:
+      tags: [Audit]
+      summary: 错误日志（超管）
+      parameters:
+        - name: module
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string }
+        - name: to
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit50'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                  total: { type: integer }
+
+  /api/audit/errors/export:
+    get:
+      tags: [Audit]
+      summary: 导出错误日志 JSON（最多 5000 条）
+      responses:
+        '200':
+          description: application/json 附件
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /api/employee-categories:
+    get:
+      tags: [EmployeeCategories]
+      summary: 员工类别列表
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+    post:
+      tags: [EmployeeCategories]
+      summary: 新建类别
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nameZh, code]
+              properties:
+                nameZh: { type: string, maxLength: 64 }
+                code:
+                  type: string
+                  maxLength: 32
+                  pattern: '^[a-z][a-z0-9_]*$'
+                sortOrder: { type: integer }
+                defaultPermissions: { type: object }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+
+  /api/employee-categories/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CategoryId'
+    put:
+      tags: [EmployeeCategories]
+      summary: 更新类别
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nameZh: { type: string }
+                sortOrder: { type: integer }
+                defaultPermissions: { type: object }
+    delete:
+      tags: [EmployeeCategories]
+      summary: 删除类别
+      responses:
+        '400':
+          content:
+            application/json:
+              examples:
+                builtin:
+                  value:
+                    error: CANNOT_DELETE_BUILTIN
+                inUse:
+                  value:
+                    error: CATEGORY_IN_USE
+
+  /api/users:
+    get:
+      tags: [Users]
+      summary: 用户列表
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+    post:
+      tags: [Users]
+      summary: 创建用户
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, accountType]
+              properties:
+                username: { type: string }
+                password: { type: string, minLength: 6 }
+                accountType:
+                  type: string
+                  enum: [super_admin, employee]
+                employeeCategoryId: { type: integer, nullable: true }
+                permissions: { nullable: true }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+
+  /api/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    put:
+      tags: [Users]
+      summary: 更新用户
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                accountType: { type: string, enum: [super_admin, employee] }
+                employeeCategoryId: { type: integer, nullable: true }
+                permissions: { nullable: true }
+                isActive: { type: boolean }
+                password: { type: string, minLength: 6 }
+      responses:
+        '400':
+          content:
+            application/json:
+              examples:
+                lastSuper:
+                  value:
+                    error: LAST_SUPER_ADMIN
+
+  /api/public/summary:
+    get:
+      tags: [Public]
+      summary: 按 token 获取二维码摘要（报告列表等）
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  createdAt: {}
+                  company: { type: object }
+                  stamps: { type: object }
+                  reports:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/public/report/{id}:
+    get:
+      tags: [Public]
+      summary: 报告详情 JSON（需 token 且报告绑定该码）
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '403':
+          description: token 与 report 未绑定
+          content:
+            application/json:
+              example:
+                error: FORBIDDEN
+
+  /api/public/report/{id}/pdf:
+    get:
+      tags: [Public]
+      summary: 服务端生成报告 PDF（Puppeteer）
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: application/pdf 附件
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: 未绑定
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/public/qr/{token}:
+    get:
+      tags: [Public]
+      summary: 扫码入口（302 跳转）
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '302':
+          description: Location → /api/public/scan?token=...
+        '404':
+          description: text/plain not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 登录接口返回的 token
+
+  parameters:
+    ReportId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    QrcodeId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    StampId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    TemplateId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    CategoryId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    QueryQ:
+      name: q
+      in: query
+      schema: { type: string }
+      description: 搜索关键词
+    Limit50:
+      name: limit
+      in: query
+      schema: { type: integer, default: 50, maximum: 200 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, default: 0, minimum: 0 }
+
+  requestBodies:
+    IdListBody500:
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ids]
+            properties:
+              ids:
+                type: array
+                minItems: 1
+                maxItems: 500
+                items: { type: integer }
+    IdListBody500Stamp:
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ids]
+            properties:
+              ids:
+                type: array
+                minItems: 1
+                maxItems: 500
+                items: { type: integer }
+
+  responses:
+    BadRequest:
+      description: 请求参数无效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error: BAD_REQUEST
+    Unauthorized:
+      description: 未认证
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error: UNAUTHORIZED
+    Forbidden:
+      description: 无权限
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error: FORBIDDEN
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error: NOT_FOUND
+
+  schemas:
+    ErrorBody:
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }
+        details: { type: string }
+        lockedUntil: { type: string, format: date-time }
+        locked: { type: boolean }
+        sealType:
+          type: string
+          description: 与 SEAL_NOT_ACTIVE 等连用
+
+    OkTrue:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 64 }
+        password: { type: string, minLength: 1, maxLength: 128 }
+
+    LoginResponse:
+      type: object
+      properties:
+        token: { type: string }
+        idleTimeoutMinutes: { type: integer }
+        user:
+          type: object
+          properties:
+            id: { type: integer }
+            username: { type: string }
+            accountType: { type: string, enum: [super_admin, employee] }
+            employeeCategoryId: { type: integer, nullable: true }
+            permissions:
+              nullable: true
+              description: 超管为 null
+              type: object
+
+    JwtUserPayload:
+      type: object
+      description: JWT 解码后的 user 对象（字段因版本略有差异）
+      properties:
+        sub: { type: string }
+        userId: { type: integer }
+        username: { type: string }
+        accountType: { type: string }
+        employeeCategoryId: { type: integer, nullable: true }
+        permissions: { nullable: true, type: object }
+
+    ReportHead:
+      type: object
+      properties:
+        id: { type: integer }
+        reportNo: { type: string }
+        batchNo: { type: string, nullable: true }
+        batchNoEn: { type: string, nullable: true }
+        productName: { type: string }
+        productNameEn: { type: string, nullable: true }
+        conclusion: { type: string, enum: [pass, fail, unknown] }
+        status: { type: string, enum: [active, void] }
+        createdAt: {}
+        updatedAt: {}
+
+    ReportField:
+      type: object
+      properties:
+        fieldKey: { type: string }
+        fieldLabel: { type: string }
+        fieldLabelEn: { type: string, nullable: true }
+        fieldType: { type: string }
+        fieldValue: {}
+        sortOrder: { type: integer }
+
+    ReportUpsertBody:
+      type: object
+      required: [reportNo, productName]
+      properties:
+        reportNo: { type: string, maxLength: 64 }
+        batchNo: { type: string, maxLength: 64, nullable: true }
+        batchNoEn: { type: string, maxLength: 128, nullable: true }
+        productName: { type: string, maxLength: 128 }
+        productNameEn: { type: string, maxLength: 128, nullable: true }
+        templateId: { type: integer, nullable: true }
+        conclusion: { type: string, enum: [pass, fail, unknown], default: unknown }
+        fields:
+          type: array
+          items:
+            type: object
+            required: [fieldKey, fieldLabel, fieldType]
+            properties:
+              fieldKey: { type: string, maxLength: 64 }
+              fieldLabel: { type: string, maxLength: 128 }
+              fieldLabelEn: { type: string, maxLength: 128 }
+              fieldType: { type: string, maxLength: 16 }
+              fieldValue: {}
+              sortOrder: { type: integer }
+
+    ReportListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              reportNo: { type: string }
+              batchNo: { type: string }
+              productName: { type: string }
+              conclusion: { type: string }
+              status: { type: string }
+              createdAt: {}
+              updatedAt: {}
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    BulkAffectedResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        affectedCount: { type: integer }
+
+    SealType:
+      type: string
+      enum:
+        - department_qc
+        - inspector
+        - supervisor
+        - pass
+        - recheck
+
+    SealSnapshot:
+      type: object
+      properties:
+        name: { type: string }
+        imageUrl: { type: string }
+
+    QrcodeListItem:
+      type: object
+      properties:
+        id: { type: integer }
+        token: { type: string }
+        createdAt: {}
+        reportCount: { type: integer }
+        reportTags:
+          type: array
+          items:
+            type: object
+        qrThumbDataUrl: { type: string }
+
+    QrcodeListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QrcodeListItem'
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    CompanyStamp:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        sealType: { $ref: '#/components/schemas/SealType' }
+        imageUrl: { type: string }
+        isActive: { type: boolean }
+        createdAt: {}
+
+    StampUpsertBody:
+      type: object
+      required: [name, sealType, imageUrl]
+      properties:
+        name: { type: string, maxLength: 128 }
+        sealType: { $ref: '#/components/schemas/SealType' }
+        imageUrl: { type: string, maxLength: 512 }
+        isActive: { type: boolean, default: true }
+
+    TemplateListItem:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        createdAt: {}
+        updatedAt: {}
+
+    TemplateUpsertBody:
+      type: object
+      required: [name, fields]
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 255, nullable: true }
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: object
+            required: [fieldKey, fieldLabel, fieldType]
+            properties:
+              fieldKey: { type: string }
+              fieldLabel: { type: string }
+              fieldLabelEn: { type: string }
+              fieldType: { type: string }
+              defaultValue: {}
+              sortOrder: { type: integer }
+
+    CompanySettingsBody:
+      type: object
+      properties:
+        companyNameZh: { type: string, maxLength: 128 }
+        companyNameEn: { type: string, maxLength: 256 }
+        reportTitleZh: { type: string, maxLength: 128 }
+        reportTitleEn: { type: string, maxLength: 256 }
+        descriptionZh: { type: string, maxLength: 256, nullable: true }
+        descriptionEn: { type: string, maxLength: 256, nullable: true }
+        logoUrl: { type: string, maxLength: 512, nullable: true }
+
+    SecuritySettings:
+      type: object
+      properties:
+        minPasswordLength: { type: integer }
+        bannedPasswords:
+          type: array
+          items: { type: string }
+        idleTimeoutMinutes: { type: integer }
+        loginFailMaxAttempts: { type: integer }
+        loginLockMinutes: { type: integer }
+        confirmSensitiveOperations: { type: boolean }
+        errorLogRetentionDays: { type: integer }
+
+    SecuritySettingsUpdate:
+      type: object
+      properties:
+        minPasswordLength: { type: integer, minimum: 4, maximum: 128 }
+        bannedPasswords:
+          type: array
+          maxItems: 500
+          items: { type: string, maxLength: 64 }
+        idleTimeoutMinutes: { type: integer, minimum: 5, maximum: 1440 }
+        loginFailMaxAttempts: { type: integer, minimum: 3, maximum: 20 }
+        loginLockMinutes: { type: integer, minimum: 5, maximum: 1440 }
+        confirmSensitiveOperations: { type: boolean }
+        errorLogRetentionDays: { type: integer, minimum: 30, maximum: 3650 }
+
+    OperationLogPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              userId: { type: integer, nullable: true }
+              username: { type: string }
+              module: { type: string }
+              action: { type: string }
+              detailJson: {}
+              success: { type: boolean }
+              ip: { type: string }
+              userAgent: { type: string }
+              createdAt: {}
+        total: { type: integer }
+
+    LoginLogPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+        total: { type: integer }

@@ -1,10 +1,14 @@
 import { Router } from 'express';
+import { z } from 'zod';
 
 import { getPool } from '../db/pool.js';
 import { requireAuth, requireSuperAdmin } from '../middleware/auth.js';
-import { purgeExpiredErrorLogs } from '../lib/audit.js';
+import { logOperationFromReq, purgeExpiredErrorLogs } from '../lib/audit.js';
 
 export const router = Router();
+const bulkIdsSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(1000)
+});
 
 router.use(requireAuth);
 
@@ -90,6 +94,45 @@ router.get('/login', async (req, res) => {
   res.json({ items: rows, total: Number(cRows?.[0]?.c || 0) });
 });
 
+router.delete('/login/bulk', async (req, res) => {
+  const parsed = bulkIdsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const { ids } = parsed.data;
+  const pool = getPool();
+  const [result] = await pool.query(`DELETE FROM login_logs WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+  await logOperationFromReq(req, {
+    module: '审计日志',
+    action: '批量删除登录日志',
+    detail: { count: ids.length },
+    success: true
+  });
+  res.json({ ok: true, deletedCount: Number(result?.affectedRows || 0) });
+});
+
+router.post('/login/export', async (req, res) => {
+  const parsed = bulkIdsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const { ids } = parsed.data;
+  const pool = getPool();
+  const [rows] = await pool.query(
+    `SELECT id, user_id AS userId, username, ip, user_agent AS userAgent, device_summary AS deviceSummary,
+            success, fail_reason AS failReason, created_at AS createdAt
+     FROM login_logs
+     WHERE id IN (${ids.map(() => '?').join(',')})
+     ORDER BY id DESC`,
+    ids
+  );
+  await logOperationFromReq(req, {
+    module: '审计日志',
+    action: '批量导出登录日志',
+    detail: { count: ids.length },
+    success: true
+  });
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="login-logs.json"');
+  res.send(JSON.stringify(rows, null, 2));
+});
+
 router.get('/operations', async (req, res) => {
   const username = String(req.query.username || '').trim();
   const userId = req.query.userId != null && req.query.userId !== '' ? Number(req.query.userId) : null;
@@ -135,6 +178,48 @@ router.get('/operations', async (req, res) => {
   res.json({ items: rows, total: Number(cRows?.[0]?.c || 0) });
 });
 
+router.delete('/operations/bulk', async (req, res) => {
+  const parsed = bulkIdsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const { ids } = parsed.data;
+  const pool = getPool();
+  const [result] = await pool.query(
+    `DELETE FROM operation_logs WHERE id IN (${ids.map(() => '?').join(',')})`,
+    ids
+  );
+  await logOperationFromReq(req, {
+    module: '审计日志',
+    action: '批量删除操作日志',
+    detail: { count: ids.length },
+    success: true
+  });
+  res.json({ ok: true, deletedCount: Number(result?.affectedRows || 0) });
+});
+
+router.post('/operations/export', async (req, res) => {
+  const parsed = bulkIdsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const { ids } = parsed.data;
+  const pool = getPool();
+  const [rows] = await pool.query(
+    `SELECT id, user_id AS userId, username, module, action, detail_json AS detailJson, success,
+            ip, user_agent AS userAgent, created_at AS createdAt
+     FROM operation_logs
+     WHERE id IN (${ids.map(() => '?').join(',')})
+     ORDER BY id DESC`,
+    ids
+  );
+  await logOperationFromReq(req, {
+    module: '审计日志',
+    action: '批量导出操作日志',
+    detail: { count: ids.length },
+    success: true
+  });
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="operation-logs.json"');
+  res.send(JSON.stringify(rows, null, 2));
+});
+
 router.get('/errors', async (req, res) => {
   await purgeExpiredErrorLogs();
   const module = String(req.query.module || '').trim();
@@ -168,6 +253,44 @@ router.get('/errors', async (req, res) => {
   );
   const [cRows] = await pool.query(`SELECT COUNT(*) AS c FROM error_logs ${sqlWhere}`, params);
   res.json({ items: rows, total: Number(cRows?.[0]?.c || 0) });
+});
+
+router.delete('/errors/bulk', async (req, res) => {
+  const parsed = bulkIdsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const { ids } = parsed.data;
+  const pool = getPool();
+  const [result] = await pool.query(`DELETE FROM error_logs WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+  await logOperationFromReq(req, {
+    module: '审计日志',
+    action: '批量删除错误日志',
+    detail: { count: ids.length },
+    success: true
+  });
+  res.json({ ok: true, deletedCount: Number(result?.affectedRows || 0) });
+});
+
+router.post('/errors/export', async (req, res) => {
+  const parsed = bulkIdsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const { ids } = parsed.data;
+  const pool = getPool();
+  const [rows] = await pool.query(
+    `SELECT id, module, message, stack, code, meta_json AS metaJson, created_at AS createdAt
+     FROM error_logs
+     WHERE id IN (${ids.map(() => '?').join(',')})
+     ORDER BY id DESC`,
+    ids
+  );
+  await logOperationFromReq(req, {
+    module: '审计日志',
+    action: '批量导出错误日志',
+    detail: { count: ids.length },
+    success: true
+  });
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="error-logs.json"');
+  res.send(JSON.stringify(rows, null, 2));
 });
 
 router.get('/errors/export', async (req, res) => {

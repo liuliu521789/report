@@ -2,7 +2,7 @@ import axios from 'axios';
 import { getActivePinia } from 'pinia';
 import { useAuthStore } from '../stores/auth';
 
-const baseURL = process.env.VUE_APP_API_BASE_URL || 'http://localhost:3001';
+const baseURL = import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001';
 
 export const http = axios.create({
   baseURL,

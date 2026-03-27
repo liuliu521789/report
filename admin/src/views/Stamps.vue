@@ -1,35 +1,36 @@
 <template>
-  <div>
+  <div class="stamps-page">
     <div class="toolbar">
-      <div>
+      <div class="toolbar-left">
         <el-button
           v-if="canBulkDelete"
           type="danger"
           plain
-          icon="el-icon-delete"
+          :icon="Delete"
           :disabled="selected.length === 0"
           @click="removeSelected"
         >
           批量删除
         </el-button>
       </div>
-      <div>
+      <div class="toolbar-right">
         <el-button @click="load">刷新</el-button>
         <el-button type="primary" @click="openCreate">新增印章</el-button>
       </div>
     </div>
 
-    <el-table class="stamps-table" :data="items" border size="small" row-key="id" @selection-change="selected = $event">
+    <div class="table-wrap">
+      <el-table class="stamps-table desktop-table" :data="items" border size="small" row-key="id" @selection-change="selected = $event">
       <el-table-column type="selection" width="48" />
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="sealType" label="印章类型" width="130">
-        <template slot-scope="{ row }">
-          <el-tag size="mini">{{ sealTypeLabel(row.sealType) }}</el-tag>
+        <template #default="{ row }">
+          <el-tag size="small">{{ sealTypeLabel(row.sealType) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="name" label="名称" width="200" />
       <el-table-column label="印章预览" width="120" align="center">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <img
             v-if="row.imageUrl"
             :src="row.imageUrl"
@@ -41,22 +42,40 @@
         </template>
       </el-table-column>
       <el-table-column prop="isActive" label="激活" width="90" align="center">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <el-tag v-if="row.isActive" type="success">是</el-tag>
           <el-tag v-else type="info">否</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="操作" min-width="220" align="center">
-        <template slot-scope="{ row }">
-          <el-button type="text" :disabled="row.isActive" @click="activate(row)">设为激活</el-button>
-          <el-button type="text" @click="openEdit(row)">修改</el-button>
-          <el-button type="text" @click="remove(row)">删除</el-button>
+        <template #default="{ row }">
+          <el-button link :disabled="row.isActive" @click="activate(row)">设为激活</el-button>
+          <el-button link @click="openEdit(row)">修改</el-button>
+          <el-button link @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
-    </el-table>
+      </el-table>
+    </div>
+    <div class="mobile-list">
+      <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
+        <div class="mobile-head">
+          <strong>{{ row.name || sealTypeLabel(row.sealType) }}</strong>
+          <el-tag size="small">{{ sealTypeLabel(row.sealType) }}</el-tag>
+        </div>
+        <div class="mobile-line"><span>ID</span><span>{{ row.id }}</span></div>
+        <div class="mobile-line"><span>激活</span><span>{{ row.isActive ? '是' : '否' }}</span></div>
+        <img v-if="row.imageUrl" :src="row.imageUrl" alt="seal-thumb" class="seal-thumb mobile-thumb" @click="openPreview(row.imageUrl)" />
+        <div class="mobile-actions">
+          <el-button size="small" :disabled="row.isActive" @click="activate(row)">设为激活</el-button>
+          <el-button size="small" @click="openEdit(row)">修改</el-button>
+          <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
+        </div>
+      </div>
+      <el-empty v-if="!items.length" description="暂无印章" />
+    </div>
 
-    <el-dialog :title="editId ? '修改印章' : '新增印章'" :visible.sync="dialog" width="520px">
-      <el-form :model="form" label-width="90px">
+    <el-dialog :title="editId ? '修改印章' : '新增印章'" v-model="dialog" width="520px">
+      <el-form :model="form" label-width="90px" class="stamps-form">
         <el-form-item label="印章类型">
           <el-select v-model="form.sealType" style="width: 100%">
             <el-option label="质检章（盖部门）" value="department_qc" />
@@ -79,7 +98,9 @@
             :on-error="onUploadError"
           >
             <el-button>选择图片并上传</el-button>
-            <div slot="tip" class="el-upload__tip">支持 png/jpg/webp，建议透明背景，大小 ≤ 2MB</div>
+            <template #tip>
+              <div class="el-upload__tip">支持 png/jpg/webp，建议透明背景，大小 ≤ 2MB</div>
+            </template>
           </el-upload>
           <div v-if="form.imageUrl" style="margin-top: 10px">
             <div class="muted" style="margin-bottom: 6px">已上传：</div>
@@ -93,31 +114,32 @@
           <el-switch v-model="form.isActive" />
         </el-form-item>
       </el-form>
-      <span slot="footer">
+      <template #footer>
         <el-button @click="dialog = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submit">
           {{ editId ? '保存修改' : '保存' }}
         </el-button>
-      </span>
+      </template>
     </el-dialog>
 
     <el-dialog
       title="印章预览"
-      :visible.sync="previewDialog"
+      v-model="previewDialog"
       width="520px"
       :close-on-click-modal="false"
     >
       <div v-if="previewImageUrl" class="preview-wrap">
         <img :src="previewImageUrl" alt="seal-preview" class="preview-image" />
       </div>
-      <span slot="footer">
+      <template #footer>
         <el-button @click="previewDialog = false">关闭</el-button>
-      </span>
+      </template>
     </el-dialog>
   </div>
 </template>
 
 <script>
+import { Delete } from '@element-plus/icons-vue';
 import { mapState } from 'pinia';
 import { activateStamp, bulkDeleteStamps, createStamp, deleteStamp, listStamps, updateStamp } from '../api';
 import { perm } from '../utils/permissions';
@@ -125,6 +147,7 @@ import { useAuthStore } from '../stores/auth';
 
 export default {
   name: 'Stamps',
+  components: { Delete },
   data() {
     return {
       items: [],
@@ -143,7 +166,7 @@ export default {
       return perm('stamps', 'manage');
     },
     uploadAction() {
-      const base = process.env.VUE_APP_API_BASE_URL || 'http://localhost:3001';
+      const base = import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001';
       return `${base}/api/stamps/upload`;
     },
     uploadHeaders() {
@@ -296,6 +319,55 @@ export default {
   justify-content: space-between;
   margin-bottom: 12px;
   align-items: center;
+  gap: 8px;
+}
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.desktop-table {
+  min-width: 900px;
+}
+.mobile-list {
+  display: none;
+}
+.mobile-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+  margin-bottom: 8px;
+}
+.mobile-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mobile-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 4px 0;
+  font-size: 13px;
+  color: #475569;
+}
+.mobile-thumb {
+  margin-top: 8px;
+}
+.mobile-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .muted {
   color: #666;
@@ -345,5 +417,31 @@ export default {
   padding-left: 6px;
   padding-right: 6px;
 }
+@media (max-width: 992px) {
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .toolbar-left,
+  .toolbar-right {
+    width: 100%;
+  }
+  .toolbar .el-button {
+    flex: 1 1 calc(50% - 8px);
+  }
+  .desktop-table {
+    display: none;
+  }
+  .mobile-list {
+    display: block;
+  }
+  .stamps-form :deep(.el-form-item__label) {
+    width: 100% !important;
+    text-align: left;
+    margin-bottom: 6px;
+  }
+  .stamps-form :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+  }
+}
 </style>
-

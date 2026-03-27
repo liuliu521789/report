@@ -18,6 +18,8 @@ import { router as publicRouter } from './routes/public.js';
 import { router as translateRouter } from './routes/translate.js';
 import { router as securitySettingsRouter } from './routes/securitySettings.js';
 import { router as auditLogsRouter } from './routes/auditLogs.js';
+import { router as supportContactRouter } from './routes/supportContact.js';
+import { router as dashboardRouter } from './routes/dashboard.js';
 import { logErrorEntry, purgeExpiredErrorLogs } from './lib/audit.js';
 import { getPool, pingDb } from './db/pool.js';
 
@@ -60,11 +62,25 @@ app.use('/api/users', usersRouter);
 app.use('/api/translate', translateRouter);
 app.use('/api/security', securitySettingsRouter);
 app.use('/api/audit', auditLogsRouter);
+app.use('/api/dashboard', dashboardRouter);
+app.use('/api/support-contact', supportContactRouter);
 app.use('/', publicRouter);
 
 app.get('/', (req, res) => {
   res.type('text').send('qc-report-server');
 });
+
+if (String(process.env.ENABLE_API_DOCS || '').toLowerCase() === 'true') {
+  try {
+    const { mountApiDocs } = await import('./setupApiDocs.js');
+    mountApiDocs(app);
+    // eslint-disable-next-line no-console
+    console.log('[server] API docs: http://localhost:' + Number(process.env.PORT || 3001) + '/api-docs');
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[server] API docs mount skipped:', e?.message || e);
+  }
+}
 
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);

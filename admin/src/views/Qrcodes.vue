@@ -1,13 +1,13 @@
 <template>
-  <div>
+  <div class="qrcodes-page">
     <div class="toolbar">
-      <div>
+      <div class="toolbar-left">
         <el-input
           v-model="q"
           placeholder="产品名称/批次号"
           clearable
-          style="width: 260px; margin-right: 8px"
-          @keyup.enter.native="onSearch"
+          class="search-input"
+          @keyup.enter="onSearch"
         />
         <el-button type="primary" @click="onSearch">查询</el-button>
         <el-button
@@ -18,16 +18,17 @@
           @click="removeSelected"
         >批量删除</el-button>
       </div>
-      <div>
+      <div class="toolbar-right">
         <el-button @click="load">刷新</el-button>
       </div>
     </div>
 
-    <el-table :data="items" border @selection-change="selected = $event">
+    <div class="table-wrap">
+      <el-table class="desktop-table" :data="items" border @selection-change="selected = $event">
       <el-table-column type="selection" width="48" />
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column label="二维码" width="100">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <img v-if="row.qrThumbDataUrl" :src="row.qrThumbDataUrl" alt="qr-thumb" class="qr-thumb" />
           <span v-else class="muted">-</span>
         </template>
@@ -35,12 +36,12 @@
       <el-table-column prop="token" label="Token" min-width="200" />
       <el-table-column prop="reportCount" label="绑定报告数" width="120" />
       <el-table-column label="关联报告（产品/批次）" min-width="320">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <div class="tag-wrap">
             <el-tag
               v-for="(t, idx) in row.reportTags || []"
               :key="`${row.id}-${idx}`"
-              size="mini"
+              size="small"
               type="info"
               effect="plain"
               class="report-tag"
@@ -53,12 +54,48 @@
       </el-table-column>
       <el-table-column prop="createdAt" label="创建时间" width="200" />
       <el-table-column label="操作" width="180">
-        <template slot-scope="{ row }">
-          <el-button type="text" @click="open(row)">查看</el-button>
-          <el-button v-if="canDeleteQrcode" type="text" style="color:#f56c6c" @click="removeOne(row)">删除</el-button>
+        <template #default="{ row }">
+          <el-button link @click="open(row)">查看</el-button>
+          <el-button v-if="canDeleteQrcode" link type="danger" @click="removeOne(row)">删除</el-button>
         </template>
       </el-table-column>
-    </el-table>
+      </el-table>
+    </div>
+    <div class="mobile-list">
+      <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
+        <div class="mobile-head">
+          <strong>#{{ row.id }}</strong>
+          <span>{{ row.createdAt }}</span>
+        </div>
+        <div class="mobile-line"><span>Token</span><span>{{ row.token }}</span></div>
+        <div class="mobile-line"><span>绑定报告数</span><span>{{ row.reportCount }}</span></div>
+        <div class="mobile-tags">
+          <el-tag
+            v-for="(t, idx) in row.reportTags || []"
+            :key="`${row.id}-m-${idx}`"
+            size="small"
+            type="info"
+            effect="plain"
+          >
+            {{ (t.productName || '未命名产品') + ' / ' + (t.batchNo || '无批次') }}
+          </el-tag>
+          <span v-if="!(row.reportTags && row.reportTags.length)" class="muted">无关联报告</span>
+        </div>
+        <div class="mobile-actions">
+          <el-button size="small" @click="open(row)">查看</el-button>
+          <el-button
+            v-if="canDeleteQrcode"
+            size="small"
+            type="danger"
+            plain
+            @click="removeOne(row)"
+          >
+            删除
+          </el-button>
+        </div>
+      </div>
+      <el-empty v-if="!items.length" description="暂无二维码" />
+    </div>
     <div class="pagination-wrap">
       <el-pagination
         background
@@ -72,20 +109,20 @@
       />
     </div>
 
-    <el-drawer title="二维码详情" :visible.sync="drawer" size="48%">
+    <el-drawer title="二维码详情" v-model="drawer" size="48%" class="qrcode-drawer">
       <div v-loading="qrLoading" v-if="detail">
         <div style="margin-bottom: 12px">
-          <el-table :data="detail.qrcode.reports" border size="mini">
+          <el-table :data="detail.qrcode.reports" border size="small">
             <el-table-column prop="reportNo" label="报告编号" width="160" />
             <el-table-column prop="productName" label="产品名称" />
             <el-table-column prop="batchNo" label="批次" width="140" />
             <el-table-column label="判定" width="90">
-              <template slot-scope="{ row }">
+              <template #default="{ row }">
                 {{ formatConclusion(row.conclusion) }}
               </template>
             </el-table-column>
             <el-table-column label="状态" width="90">
-              <template slot-scope="{ row }">
+              <template #default="{ row }">
                 {{ formatStatus(row.status) }}
               </template>
             </el-table-column>
@@ -94,8 +131,8 @@
         <div v-if="qrDataUrl" class="qr-preview-wrap">
           <img :src="qrDataUrl" alt="qr" class="qr-preview-image" />
           <div class="qr-actions">
-            <el-button size="mini" type="primary" plain :disabled="!qrScanUrl" @click="openScanUrl">预览二维码</el-button>
-            <el-button size="mini" @click="downloadQr">下载二维码</el-button>
+            <el-button size="small" type="primary" plain :disabled="!qrScanUrl" @click="openScanUrl">预览二维码</el-button>
+            <el-button size="small" @click="downloadQr">下载二维码</el-button>
           </div>
         </div>
       </div>
@@ -231,6 +268,65 @@ export default {
   display: flex;
   justify-content: space-between;
   margin-bottom: 12px;
+  gap: 8px;
+}
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.search-input {
+  width: 260px;
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.desktop-table {
+  min-width: 980px;
+}
+.mobile-list {
+  display: none;
+}
+.mobile-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+  margin-bottom: 8px;
+}
+.mobile-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+.mobile-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 4px 0;
+  font-size: 13px;
+  color: #475569;
+}
+.mobile-line span:last-child {
+  text-align: right;
+  word-break: break-all;
+}
+.mobile-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.mobile-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
 }
 .pagination-wrap {
   margin-top: 12px;
@@ -273,6 +369,34 @@ export default {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+}
+@media (max-width: 992px) {
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .toolbar-left,
+  .toolbar-right {
+    width: 100%;
+  }
+  .search-input {
+    width: 100%;
+  }
+  .toolbar .el-button {
+    flex: 1 1 calc(50% - 8px);
+  }
+  .desktop-table {
+    display: none;
+  }
+  .mobile-list {
+    display: block;
+  }
+  .pagination-wrap {
+    justify-content: center;
+  }
+  .qrcode-drawer :deep(.el-drawer) {
+    width: calc(100vw - 20px) !important;
+  }
 }
 </style>
 
