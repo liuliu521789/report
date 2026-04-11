@@ -1,6 +1,18 @@
 /** 员工权限结构（与 employee_categories.default_permissions_json / users.permissions_json 一致） */
 
-export const PERMISSION_MODULES = ['reports', 'qrcodes', 'templates', 'stamps', 'company'];
+export const PERMISSION_MODULES = [
+  'reports',
+  'qrcodes',
+  'templates',
+  'stamps',
+  'company',
+  'audit',
+  'wecom',
+  'order_management',
+  'contract_management',
+  'process_management',
+  'data_management'
+];
 
 export function emptyPermissions() {
   return {
@@ -17,6 +29,8 @@ export function emptyPermissions() {
       bulkDelete: false,
       previewPrint: false,
       seals: false,
+      export: false,
+      chairmanApprove: false,
       fieldEdit: {}
     },
     qrcodes: {
@@ -29,10 +43,53 @@ export function emptyPermissions() {
       use: false
     },
     stamps: {
-      manage: false
+      manage: false,
+      view: false
     },
     company: {
-      manage: false
+      manage: false,
+      view: false
+    },
+    audit: {
+      viewLogin: false,
+      viewOperations: false,
+      viewErrors: false,
+      exportAudit: false
+    },
+    wecom: {
+      manage: false,
+      send: false
+    },
+    order_management: {
+      order_input: false,
+      order_query: false,
+      order_query_all: false,
+      order_edit: false,
+      order_submit: false,
+      order_withdraw: false,
+      order_status_finance: false,
+      order_status_warehouse: false,
+      order_ship: false,
+      order_view_status_logs: false,
+      order_cancel: false,
+      order_delete: false,
+      order_field_config: false
+    },
+    contract_management: {
+      template_manage: false,
+      contract_generate: false,
+      contract_submit: false,
+      contract_review: false,
+      contract_view: false,
+      contract_edit: false,
+      contract_delete: false
+    },
+    process_management: {
+      view_flow: false
+    },
+    data_management: {
+      data_export: false,
+      data_export_all: false
     }
   };
 }
@@ -53,6 +110,8 @@ export function defaultPermissionsQc() {
       bulkDelete: true,
       previewPrint: true,
       seals: true,
+      export: false,
+      chairmanApprove: false,
       fieldEdit: {}
     },
     qrcodes: {
@@ -65,10 +124,53 @@ export function defaultPermissionsQc() {
       use: true
     },
     stamps: {
-      manage: false
+      manage: false,
+      view: false
     },
     company: {
-      manage: false
+      manage: false,
+      view: false
+    },
+    audit: {
+      viewLogin: false,
+      viewOperations: false,
+      viewErrors: false,
+      exportAudit: false
+    },
+    wecom: {
+      manage: false,
+      send: false
+    },
+    order_management: {
+      order_input: false,
+      order_query: false,
+      order_query_all: false,
+      order_edit: false,
+      order_submit: false,
+      order_withdraw: false,
+      order_status_finance: false,
+      order_status_warehouse: false,
+      order_ship: false,
+      order_view_status_logs: false,
+      order_cancel: false,
+      order_delete: false,
+      order_field_config: false
+    },
+    contract_management: {
+      template_manage: false,
+      contract_generate: false,
+      contract_submit: false,
+      contract_review: false,
+      contract_view: false,
+      contract_edit: false,
+      contract_delete: false
+    },
+    process_management: {
+      view_flow: false
+    },
+    data_management: {
+      data_export: false,
+      data_export_all: false
     }
   };
 }
@@ -89,6 +191,8 @@ export function defaultPermissionsCs() {
       bulkDelete: false,
       previewPrint: true,
       seals: false,
+      export: false,
+      chairmanApprove: false,
       fieldEdit: {}
     },
     qrcodes: {
@@ -101,10 +205,53 @@ export function defaultPermissionsCs() {
       use: false
     },
     stamps: {
-      manage: false
+      manage: false,
+      view: false
     },
     company: {
-      manage: false
+      manage: false,
+      view: false
+    },
+    audit: {
+      viewLogin: false,
+      viewOperations: false,
+      viewErrors: false,
+      exportAudit: false
+    },
+    wecom: {
+      manage: false,
+      send: false
+    },
+    order_management: {
+      order_input: false,
+      order_query: false,
+      order_query_all: false,
+      order_edit: false,
+      order_submit: false,
+      order_withdraw: false,
+      order_status_finance: false,
+      order_status_warehouse: false,
+      order_ship: false,
+      order_view_status_logs: false,
+      order_cancel: false,
+      order_delete: false,
+      order_field_config: false
+    },
+    contract_management: {
+      template_manage: false,
+      contract_generate: false,
+      contract_submit: false,
+      contract_review: false,
+      contract_view: false,
+      contract_edit: false,
+      contract_delete: false
+    },
+    process_management: {
+      view_flow: false
+    },
+    data_management: {
+      data_export: false,
+      data_export_all: false
     }
   };
 }

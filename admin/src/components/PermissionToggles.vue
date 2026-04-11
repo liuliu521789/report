@@ -13,6 +13,8 @@
       <el-checkbox v-model="inner.reports.bulkActivate" @change="emit">批量有效</el-checkbox>
       <el-checkbox v-model="inner.reports.bulkDelete" @change="emit">批量删除</el-checkbox>
       <el-checkbox v-model="inner.reports.previewPrint" @change="emit">预览/打印</el-checkbox>
+      <el-checkbox v-model="inner.reports.export" @change="emit">导出报告数据（备案）</el-checkbox>
+      <el-checkbox v-model="inner.reports.chairmanApprove" @change="emit">最高级审批（批量判定合格）</el-checkbox>
       <el-checkbox v-model="inner.reports.seals" @change="emit">盖章</el-checkbox>
       <div class="perm-subtitle">报告字段（勾选为可编辑，未勾选为只读）</div>
       <div class="perm-field-grid">
@@ -40,8 +42,57 @@
     </div>
     <div class="perm-block">
       <div class="perm-title">公司章 / 公司信息</div>
+      <el-checkbox v-model="inner.stamps.view" @change="emit">公司章查看</el-checkbox>
       <el-checkbox v-model="inner.stamps.manage" @change="emit">公司章管理</el-checkbox>
+      <el-checkbox v-model="inner.company.view" @change="emit">公司信息查看</el-checkbox>
       <el-checkbox v-model="inner.company.manage" @change="emit">公司信息管理</el-checkbox>
+    </div>
+    <div class="perm-block">
+      <div class="perm-title">企业微信通知（module=wecom）</div>
+      <el-checkbox v-model="inner.wecom.manage" @change="emit">配置企业与模板、通知对象</el-checkbox>
+      <el-checkbox v-model="inner.wecom.send" @change="emit">仅调用发送接口（自动化/对接，不含密钥配置）</el-checkbox>
+    </div>
+    <div class="perm-block">
+      <div class="perm-title">安全审计（非超管按此处授权；不可删日志、不可改安全策略）</div>
+      <el-checkbox v-model="inner.audit.viewLogin" @change="emit">登录日志查看</el-checkbox>
+      <el-checkbox v-model="inner.audit.viewOperations" @change="emit">操作日志查看</el-checkbox>
+      <el-checkbox v-model="inner.audit.viewErrors" @change="emit">错误日志查看</el-checkbox>
+      <el-checkbox v-model="inner.audit.exportAudit" @change="emit">审计数据导出</el-checkbox>
+    </div>
+    <div class="perm-block">
+      <div class="perm-title">销售 · 订单（module=order_management）</div>
+      <el-checkbox v-model="inner.order_management.order_input" @change="emit">录入 / Excel 导入</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_query" @change="emit">查询列表</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_query_all" @change="emit">查看全部订单（否则仅本人）</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_edit" @change="emit">修改订单</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_submit" @change="emit">提交财务审核</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_withdraw" @change="emit">撤回审核申请</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_status_finance" @change="emit">财务审核 / 完结</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_status_warehouse" @change="emit">仓库（全员订单 / 待发货视图）</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_ship" @change="emit">确认发货（已审核 → 已发货）</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_view_status_logs" @change="emit">状态与修改日志</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_cancel" @change="emit">取消订单</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_delete" @change="emit">删除订单（含批量；非财务角色仅能删本人创建的单据）</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_field_config" @change="emit">订单录入表单字段管理</el-checkbox>
+    </div>
+    <div class="perm-block">
+      <div class="perm-title">销售 · 合同（module=contract_management）</div>
+      <el-checkbox v-model="inner.contract_management.template_manage" @change="emit">合同模板管理</el-checkbox>
+      <el-checkbox v-model="inner.contract_management.contract_generate" @change="emit">生成合同</el-checkbox>
+      <el-checkbox v-model="inner.contract_management.contract_submit" @change="emit">提交合同审核</el-checkbox>
+      <el-checkbox v-model="inner.contract_management.contract_review" @change="emit">合同审核</el-checkbox>
+      <el-checkbox v-model="inner.contract_management.contract_view" @change="emit">查看合同</el-checkbox>
+      <el-checkbox v-model="inner.contract_management.contract_edit" @change="emit">编辑合同（草稿/驳回；非超管仅限本人创建）</el-checkbox>
+      <el-checkbox v-model="inner.contract_management.contract_delete" @change="emit">删除合同（含批量；非超管仅限本人创建的草稿/驳回）</el-checkbox>
+    </div>
+    <div class="perm-block">
+      <div class="perm-title">销售 · 流程（module=process_management）</div>
+      <el-checkbox v-model="inner.process_management.view_flow" @change="emit">流程状态追溯</el-checkbox>
+    </div>
+    <div class="perm-block">
+      <div class="perm-title">销售 · 数据（module=data_management）</div>
+      <el-checkbox v-model="inner.data_management.data_export" @change="emit">导出 Excel（权限范围内）</el-checkbox>
+      <el-checkbox v-model="inner.data_management.data_export_all" @change="emit">全量导出 / 订单号前缀设置</el-checkbox>
     </div>
   </div>
 </template>

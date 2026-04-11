@@ -1,5 +1,7 @@
 import { defineStore, getActivePinia } from 'pinia';
 
+const IMPERSONATION_BACKUP_KEY = 'qc_report_admin_impersonation_backup';
+
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: '',
@@ -7,7 +9,9 @@ export const useAuthStore = defineStore('auth', {
     /** 与后端 permissions 结构一致；超级管理员可为空对象 */
     permissions: {},
     idleTimeoutMinutes: 60,
-    confirmSensitiveOperations: false
+    confirmSensitiveOperations: false,
+    /** 存在超管会话备份（模拟登录中），用于顶栏「恢复超级管理员」 */
+    impersonationBackupActive: false
   }),
   getters: {
     isSuperAdmin: (s) => s.accountType === 'super_admin',
@@ -35,6 +39,11 @@ export const useAuthStore = defineStore('auth', {
         this.idleTimeoutMinutes = 60;
       }
       this.confirmSensitiveOperations = localStorage.getItem('confirmSensitiveOperations') === '1';
+      try {
+        this.impersonationBackupActive = !!sessionStorage.getItem(IMPERSONATION_BACKUP_KEY);
+      } catch {
+        this.impersonationBackupActive = false;
+      }
     },
 
     applyLoginResponse(data) {
@@ -61,6 +70,69 @@ export const useAuthStore = defineStore('auth', {
         this.idleTimeoutMinutes = data.idleTimeoutMinutes;
         localStorage.setItem('idleTimeoutMinutes', String(data.idleTimeoutMinutes));
       }
+    },
+
+    /** 超管快捷入口：备份当前超管会话后切换为员工 JWT */
+    beginImpersonationFromLoginResponse(data) {
+      if (this.accountType !== 'super_admin' || !this.token) {
+        this.applyLoginResponse(data);
+        return;
+      }
+      try {
+        const backup = {
+          token: this.token,
+          accountType: this.accountType,
+          permissions: this.permissions,
+          idleTimeoutMinutes: this.idleTimeoutMinutes,
+          confirmSensitiveOperations: this.confirmSensitiveOperations
+        };
+        sessionStorage.setItem(IMPERSONATION_BACKUP_KEY, JSON.stringify(backup));
+        this.impersonationBackupActive = true;
+      } catch {
+        /* sessionStorage 不可用时仍切换身份，但无法一键恢复超管 */
+      }
+      this.applyLoginResponse(data);
+    },
+
+    /** 从 sessionStorage 恢复超管 token */
+    restoreImpersonationBackup() {
+      let raw = '';
+      try {
+        raw = sessionStorage.getItem(IMPERSONATION_BACKUP_KEY) || '';
+      } catch {
+        return false;
+      }
+      if (!raw) return false;
+      let backup;
+      try {
+        backup = JSON.parse(raw);
+      } catch {
+        return false;
+      }
+      if (!backup?.token || backup.accountType !== 'super_admin') return false;
+      this.token = backup.token;
+      localStorage.setItem('token', backup.token);
+      this.accountType = 'super_admin';
+      localStorage.setItem('accountType', 'super_admin');
+      if (backup.permissions && typeof backup.permissions === 'object' && Object.keys(backup.permissions).length) {
+        this.permissions = backup.permissions;
+        localStorage.setItem('permissions', JSON.stringify(backup.permissions));
+      } else {
+        this.permissions = {};
+        localStorage.removeItem('permissions');
+      }
+      const idle = Number(backup.idleTimeoutMinutes);
+      this.idleTimeoutMinutes = Number.isFinite(idle) && idle >= 1 ? idle : 60;
+      localStorage.setItem('idleTimeoutMinutes', String(this.idleTimeoutMinutes));
+      this.confirmSensitiveOperations = !!backup.confirmSensitiveOperations;
+      localStorage.setItem('confirmSensitiveOperations', this.confirmSensitiveOperations ? '1' : '0');
+      try {
+        sessionStorage.removeItem(IMPERSONATION_BACKUP_KEY);
+      } catch {
+        /* no-op */
+      }
+      this.impersonationBackupActive = false;
+      return true;
     },
 
     /** Layout 内 getMe 成功后同步 */
@@ -99,11 +171,17 @@ export const useAuthStore = defineStore('auth', {
       this.permissions = {};
       this.idleTimeoutMinutes = 60;
       this.confirmSensitiveOperations = false;
+      this.impersonationBackupActive = false;
       localStorage.removeItem('token');
       localStorage.removeItem('accountType');
       localStorage.removeItem('permissions');
       localStorage.removeItem('idleTimeoutMinutes');
       localStorage.removeItem('confirmSensitiveOperations');
+      try {
+        sessionStorage.removeItem(IMPERSONATION_BACKUP_KEY);
+      } catch {
+        /* no-op */
+      }
     }
   }
 });

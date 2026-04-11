@@ -8,9 +8,9 @@
     >
       <div class="aside-column">
         <div class="brand">
-          <div class="logo" v-if="!isMenuCollapsed">QC</div>
+          <div class="logo" v-if="!isMenuCollapsed">NL</div>
           <div class="brand-text" v-if="!isMenuCollapsed">
-            <div class="name">质检报告系统</div>
+            <div class="name">物源数智管控平台</div>
             <div class="sub">员工端后台</div>
           </div>
           <el-button class="collapse-btn" text @click="toggleMenu">
@@ -32,18 +32,50 @@
           <el-icon><DocumentCopy /></el-icon>
           <span>报告管理</span>
         </el-menu-item>
+        <el-menu-item v-if="isSuperAdminUser" index="/reports/image-library">
+          <el-icon><Picture /></el-icon>
+          <span>系统图片库</span>
+        </el-menu-item>
         <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
           <el-icon><Link /></el-icon>
           <span>二维码管理</span>
         </el-menu-item>
-        <el-menu-item v-if="perm('stamps', 'manage')" index="/stamps">
+        <el-menu-item v-if="perm('stamps', 'manage') || perm('stamps', 'view')" index="/stamps">
           <el-icon><Medal /></el-icon>
           <span>公司章管理</span>
         </el-menu-item>
-        <el-menu-item v-if="perm('company', 'manage')" index="/company">
+        <el-menu-item v-if="perm('company', 'manage') || perm('company', 'view')" index="/company">
           <el-icon><OfficeBuilding /></el-icon>
           <span>公司信息</span>
         </el-menu-item>
+        <el-menu-item v-if="perm('wecom', 'manage')" index="/wecom-notifications">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>企业微信通知</span>
+        </el-menu-item>
+        <el-sub-menu v-if="showSalesMenu" index="sales-submenu" class="no-parent-active">
+          <template #title>
+            <el-icon><ShoppingCart /></el-icon>
+            <span>销售数据</span>
+          </template>
+          <el-menu-item
+            v-if="perm('order_management', 'order_query') || perm('order_management', 'order_input')"
+            index="/sales/orders"
+          >
+            <el-icon><Document /></el-icon>
+            <span>订单管理</span>
+          </el-menu-item>
+          <el-menu-item
+            v-if="
+              perm('contract_management', 'contract_view') ||
+              perm('contract_management', 'template_manage') ||
+              perm('process_management', 'view_flow')
+            "
+            index="/sales/contracts"
+          >
+            <el-icon><Tickets /></el-icon>
+            <span>合同管理</span>
+          </el-menu-item>
+        </el-sub-menu>
         <el-sub-menu v-if="isSuperAdminUser" index="account-submenu" class="no-parent-active">
           <template #title>
             <el-icon><User /></el-icon>
@@ -52,6 +84,10 @@
           <el-menu-item index="/employee-categories">
             <el-icon><FolderOpened /></el-icon>
             <span>员工类别</span>
+          </el-menu-item>
+          <el-menu-item index="/departments">
+            <el-icon><Share /></el-icon>
+            <span>部门管理</span>
           </el-menu-item>
           <el-menu-item index="/users">
             <el-icon><UserFilled /></el-icon>
@@ -62,24 +98,24 @@
             <span>技术支持联系</span>
           </el-menu-item>
         </el-sub-menu>
-        <el-sub-menu v-if="isSuperAdminUser" index="audit-submenu" class="no-parent-active">
+        <el-sub-menu v-if="showAuditMenu" index="audit-submenu" class="no-parent-active">
           <template #title>
             <el-icon><Notebook /></el-icon>
             <span>安全日志</span>
           </template>
-          <el-menu-item index="/audit/login-logs">
+          <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewLogin')" index="/audit/login-logs">
             <el-icon><Key /></el-icon>
             <span>登录日志</span>
           </el-menu-item>
-          <el-menu-item index="/audit/operations">
+          <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewOperations')" index="/audit/operations">
             <el-icon><Tickets /></el-icon>
             <span>操作日志</span>
           </el-menu-item>
-          <el-menu-item index="/audit/errors">
+          <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewErrors')" index="/audit/errors">
             <el-icon><Warning /></el-icon>
             <span>错误日志</span>
           </el-menu-item>
-          <el-menu-item index="/security">
+          <el-menu-item v-if="isSuperAdminUser" index="/security">
             <el-icon><Lock /></el-icon>
             <span>系统安全</span>
           </el-menu-item>
@@ -111,6 +147,15 @@
           </div>
         </div>
         <div class="header-right">
+          <el-button
+            v-if="impersonationBackupActive && !isMobile"
+            type="warning"
+            plain
+            class="restore-admin-btn"
+            @click="restoreSuperAdminSession"
+          >
+            恢复超级管理员
+          </el-button>
           <div class="meta-info" v-if="!isMobile">
             <span>{{ currentTimeText }}</span>
             <span class="divider">|</span>
@@ -131,7 +176,10 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="openChangePassword">修改密码</el-dropdown-item>
+                <el-dropdown-item v-if="impersonationBackupActive" @click="restoreSuperAdminSession">
+                  恢复超级管理员
+                </el-dropdown-item>
+                <el-dropdown-item :divided="impersonationBackupActive" @click="openChangePassword">修改密码</el-dropdown-item>
                 <el-dropdown-item divided @click="logout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -158,6 +206,16 @@
           </div>
         </div>
         <div class="mobile-meta">
+          <el-button
+            v-if="impersonationBackupActive"
+            type="warning"
+            plain
+            size="small"
+            class="mobile-restore-admin"
+            @click="restoreSuperAdminSession"
+          >
+            恢复超管
+          </el-button>
           <span>{{ currentTimeText }}</span>
           <span class="divider">|</span>
           <span>{{ weatherText }}</span>
@@ -173,18 +231,50 @@
             <el-icon><DocumentCopy /></el-icon>
             <span>报告管理</span>
           </el-menu-item>
+          <el-menu-item v-if="isSuperAdminUser" index="/reports/image-library">
+            <el-icon><Picture /></el-icon>
+            <span>系统图片库</span>
+          </el-menu-item>
           <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
             <el-icon><Link /></el-icon>
             <span>二维码管理</span>
           </el-menu-item>
-          <el-menu-item v-if="perm('stamps', 'manage')" index="/stamps">
+          <el-menu-item v-if="perm('stamps', 'manage') || perm('stamps', 'view')" index="/stamps">
             <el-icon><Medal /></el-icon>
             <span>公司章管理</span>
           </el-menu-item>
-          <el-menu-item v-if="perm('company', 'manage')" index="/company">
+          <el-menu-item v-if="perm('company', 'manage') || perm('company', 'view')" index="/company">
             <el-icon><OfficeBuilding /></el-icon>
             <span>公司信息</span>
           </el-menu-item>
+          <el-menu-item v-if="perm('wecom', 'manage')" index="/wecom-notifications">
+            <el-icon><ChatDotRound /></el-icon>
+            <span>企业微信通知</span>
+          </el-menu-item>
+          <el-sub-menu v-if="showSalesMenu" index="sales-submenu-mobile" class="no-parent-active">
+            <template #title>
+              <el-icon><ShoppingCart /></el-icon>
+              <span>销售数据</span>
+            </template>
+            <el-menu-item
+              v-if="perm('order_management', 'order_query') || perm('order_management', 'order_input')"
+              index="/sales/orders"
+            >
+              <el-icon><Document /></el-icon>
+              <span>订单管理</span>
+            </el-menu-item>
+            <el-menu-item
+              v-if="
+                perm('contract_management', 'contract_view') ||
+                perm('contract_management', 'template_manage') ||
+                perm('process_management', 'view_flow')
+              "
+              index="/sales/contracts"
+            >
+              <el-icon><Tickets /></el-icon>
+              <span>合同管理</span>
+            </el-menu-item>
+          </el-sub-menu>
           <el-sub-menu v-if="isSuperAdminUser" index="account-submenu-mobile" class="no-parent-active">
             <template #title>
               <el-icon><User /></el-icon>
@@ -193,6 +283,10 @@
             <el-menu-item index="/employee-categories">
               <el-icon><FolderOpened /></el-icon>
               <span>员工类别</span>
+            </el-menu-item>
+            <el-menu-item index="/departments">
+              <el-icon><Share /></el-icon>
+              <span>部门管理</span>
             </el-menu-item>
             <el-menu-item index="/users">
               <el-icon><UserFilled /></el-icon>
@@ -203,24 +297,24 @@
               <span>技术支持联系</span>
             </el-menu-item>
           </el-sub-menu>
-          <el-sub-menu v-if="isSuperAdminUser" index="audit-submenu-mobile" class="no-parent-active">
+          <el-sub-menu v-if="showAuditMenu" index="audit-submenu-mobile" class="no-parent-active">
             <template #title>
               <el-icon><Notebook /></el-icon>
               <span>安全日志</span>
             </template>
-            <el-menu-item index="/audit/login-logs">
+            <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewLogin')" index="/audit/login-logs">
               <el-icon><Key /></el-icon>
               <span>登录日志</span>
             </el-menu-item>
-            <el-menu-item index="/audit/operations">
+            <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewOperations')" index="/audit/operations">
               <el-icon><Tickets /></el-icon>
               <span>操作日志</span>
             </el-menu-item>
-            <el-menu-item index="/audit/errors">
+            <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewErrors')" index="/audit/errors">
               <el-icon><Warning /></el-icon>
               <span>错误日志</span>
             </el-menu-item>
-            <el-menu-item index="/security">
+            <el-menu-item v-if="isSuperAdminUser" index="/security">
               <el-icon><Lock /></el-icon>
               <span>系统安全</span>
             </el-menu-item>
@@ -253,8 +347,10 @@
 </template>
 
 <script>
+import { mapState } from 'pinia';
+import { ElNotification } from 'element-plus';
 import { isSuperAdmin, perm } from '../utils/permissions';
-import { changePassword, getMe } from '../api';
+import { changePassword, getMe, listSalesMessages } from '../api';
 import { useAuthStore } from '../stores/auth';
 import SidebarGuide from '../components/SidebarGuide.vue';
 
@@ -274,12 +370,36 @@ export default {
       idleTimer: null,
       clockTimer: null,
       isMobile: false,
-      mobileMenuVisible: false
+      mobileMenuVisible: false,
+      salesInternalMsgPollTimer: null,
+      /** @type {Set<number>|null} 已知的未读站内信 id，首轮仅建基线不弹窗 */
+      salesInternalMsgSeenUnreadIds: null,
+      /** @type {(() => void) | null} */
+      salesInternalMsgVisibilityHandler: null
     };
   },
   computed: {
+    ...mapState(useAuthStore, ['impersonationBackupActive']),
     isSuperAdminUser() {
       return isSuperAdmin();
+    },
+    showAuditMenu() {
+      if (this.isSuperAdminUser) return true;
+      return (
+        perm('audit', 'viewLogin') ||
+        perm('audit', 'viewOperations') ||
+        perm('audit', 'viewErrors')
+      );
+    },
+    showSalesMenu() {
+      if (this.isSuperAdminUser) return true;
+      return (
+        perm('order_management', 'order_query') ||
+        perm('order_management', 'order_input') ||
+        perm('contract_management', 'contract_view') ||
+        perm('contract_management', 'template_manage') ||
+        perm('process_management', 'view_flow')
+      );
     },
     menuDefaultOpeneds() {
       return [];
@@ -287,11 +407,18 @@ export default {
     pageTitle() {
       const p = this.$route.path;
       if (p === '/dashboard') return '控制台';
+      if (p === '/reports/image-library') return '系统图片库';
       if (p.startsWith('/reports')) return '报告管理';
       if (p.startsWith('/qrcodes')) return '二维码管理';
       if (p.startsWith('/stamps')) return '公司章管理';
       if (p.startsWith('/company')) return '公司信息';
+      if (p.startsWith('/wecom-notifications')) return '企业微信通知';
+      if (p.startsWith('/sales/orders')) return '销售数据 · 订单管理';
+      if (p.startsWith('/sales/contracts/templates')) return '销售数据 · 合同模板';
+      if (p.startsWith('/sales/contracts/editor')) return '销售数据 · 编辑合同';
+      if (p.startsWith('/sales/contracts')) return '销售数据 · 合同管理';
       if (p.startsWith('/employee-categories')) return '账号管理 · 员工类别';
+      if (p.startsWith('/departments')) return '账号管理 · 部门管理';
       if (p.startsWith('/users')) return '账号管理 · 员工账号';
       if (p.startsWith('/support-contact')) return '账号管理 · 技术支持联系';
       if (p === '/security') return '系统安全';
@@ -306,11 +433,22 @@ export default {
       const p = this.$route.path;
       if (p === '/dashboard') return '系统概览：报表趋势与状态分布';
       if (p === '/reports') return '查询、编辑、作废报告，批量生成二维码';
+      if (p === '/reports/image-library') return '仅超级管理员维护，供报告样式设计器选用（服务器存储）';
       if (p.startsWith('/reports')) return '录入报告与自定义字段';
       if (p.startsWith('/qrcodes')) return '查看二维码与绑定报告';
       if (p.startsWith('/stamps')) return '上传公司章并设置激活章';
       if (p.startsWith('/company')) return '管理logo、描述语、公司名与报告标题';
+      if (p.startsWith('/wecom-notifications'))
+        return '绑定企业微信应用、维护成员 UserID 与模板，生成 HTTP 调用示例';
+      if (p.startsWith('/sales/orders')) return '销售订单录入、审核、发货与质检二维码关联';
+      if (p.startsWith('/sales/contracts/templates'))
+        return '参考新建报告：套用已有模板或推荐版式，编辑正文与预览后保存（与报告编辑页同类操作习惯）';
+      if (p.startsWith('/sales/contracts/editor'))
+        return '修改已生成合同的标题与正文 HTML，右侧预览版式；保存后更新合同草稿';
+      if (p.startsWith('/sales/contracts'))
+        return '参照报告管理：查询与分页浏览合同，正文预览与打印；模板维护对应报告的版式配置，订单流程单独追溯';
       if (p.startsWith('/employee-categories')) return '维护品管、客服等类别及各类别默认权限';
+      if (p.startsWith('/departments')) return '多级部门架构，供员工归档与合同等环节选人';
       if (p.startsWith('/users')) return '创建员工账号、分配类别与个性化权限';
       if (p.startsWith('/support-contact')) return '配置技术工程师微信号，供全员在操作指南中复制';
       if (p === '/security') return '密码策略、登录锁定、会话超时、日志保留';
@@ -352,19 +490,33 @@ export default {
         }
         auth.applyMeResponse(d);
         this.$forceUpdate();
-      } catch (_) {
-        /* ignore */
+        this.startSalesInternalMessagePolling();
+      } catch (e) {
+        const status = e?.response?.status;
+        if (status === 401 || !useAuthStore().token) {
+          useAuthStore().clearSession();
+          this.$router.replace('/login');
+        }
       }
     }
     this.tickClock();
     this.clockTimer = setInterval(this.tickClock, 1000);
     this.fetchWeather();
     this.setupIdleTimer();
+    this.salesInternalMsgVisibilityHandler = () => {
+      if (document.visibilityState === 'visible') this.pollSalesInternalMessages();
+    };
+    document.addEventListener('visibilitychange', this.salesInternalMsgVisibilityHandler);
   },
   beforeUnmount() {
     window.removeEventListener('resize', this.handleViewportChange);
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.clockTimer) clearInterval(this.clockTimer);
+    if (this.salesInternalMsgPollTimer) clearInterval(this.salesInternalMsgPollTimer);
+    if (this.salesInternalMsgVisibilityHandler) {
+      document.removeEventListener('visibilitychange', this.salesInternalMsgVisibilityHandler);
+      this.salesInternalMsgVisibilityHandler = null;
+    }
     ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach((ev) => {
       window.removeEventListener(ev, this.onUserActivity, true);
     });
@@ -505,15 +657,88 @@ export default {
         this.pwDialog = false;
         this.logout();
       } catch (e) {
-        this.$message.error(e?.response?.data?.message || e?.response?.data?.error || '修改失败');
+        this.$message.error(this.$apiUserMsg(e, '修改失败'));
       } finally {
         this.pwSaving = false;
       }
     },
+    async restoreSuperAdminSession() {
+      const auth = useAuthStore();
+      if (!auth.restoreImpersonationBackup()) {
+        this.$message.warning('无法恢复：未找到超管会话备份');
+        return;
+      }
+      if (this.salesInternalMsgPollTimer) clearInterval(this.salesInternalMsgPollTimer);
+      this.salesInternalMsgPollTimer = null;
+      this.salesInternalMsgSeenUnreadIds = null;
+      try {
+        const d = await getMe();
+        auth.applyMeResponse(d);
+        if (d?.user?.username) this.loginName = d.user.username;
+      } catch {
+        /* token 已恢复 */
+      }
+      this.$forceUpdate();
+      this.startSalesInternalMessagePolling();
+      this.$message.success('已恢复超级管理员身份');
+      if (this.$route.path !== '/dashboard') {
+        await this.$router.replace('/dashboard');
+      }
+    },
     logout() {
       if (this.idleTimer) clearTimeout(this.idleTimer);
+      if (this.salesInternalMsgPollTimer) clearInterval(this.salesInternalMsgPollTimer);
+      this.salesInternalMsgPollTimer = null;
+      this.salesInternalMsgSeenUnreadIds = null;
       useAuthStore().clearSession();
       this.$router.push('/login');
+    },
+    startSalesInternalMessagePolling() {
+      if (this.salesInternalMsgPollTimer) clearInterval(this.salesInternalMsgPollTimer);
+      this.salesInternalMsgSeenUnreadIds = null;
+      this.salesInternalMsgPollTimer = setInterval(() => this.pollSalesInternalMessages(), 2000);
+      this.$nextTick(() => this.pollSalesInternalMessages());
+    },
+    notifyNewSalesInternalMessages(items) {
+      const opts = {
+        type: 'info',
+        position: 'top-right',
+        showClose: true,
+        customClass: 'sales-internal-msg-notify'
+      };
+      const hint = '请在「销售数据 → 订单管理」中打开站内信查看正文。';
+      if (items.length === 1) {
+        const m = items[0];
+        ElNotification({
+          title: m.title || '新站内信',
+          message: hint,
+          duration: 12000,
+          ...opts
+        });
+      } else {
+        ElNotification({
+          title: '新站内信',
+          message: hint,
+          duration: 11000,
+          ...opts
+        });
+      }
+    },
+    async pollSalesInternalMessages() {
+      if (!useAuthStore().token) return;
+      try {
+        const { items } = await listSalesMessages({ unread: 1 });
+        const list = items || [];
+        const currIds = new Set(list.map((m) => Number(m.id)));
+        const prev = this.salesInternalMsgSeenUnreadIds;
+        if (prev !== null) {
+          const newcomers = list.filter((m) => !prev.has(Number(m.id)));
+          if (newcomers.length) this.notifyNewSalesInternalMessages(newcomers);
+        }
+        this.salesInternalMsgSeenUnreadIds = currIds;
+      } catch {
+        /* 未登录跳转、网络异常等忽略 */
+      }
     }
   }
 };
@@ -537,7 +762,7 @@ export default {
 .aside-menu-wrap {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 0 12px;
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -561,7 +786,7 @@ export default {
   color: rgba(255, 255, 255, 0.9);
 }
 .collapse-btn:hover {
-  color: #ffffff;
+  color: rgba(255, 255, 255, 0.8);
 }
 
 /* When sidebar is collapsed, only collapse button is shown in brand;
@@ -578,7 +803,8 @@ export default {
 
 .aside.is-collapsed .collapse-btn:hover {
   background: rgba(34, 197, 94, 0.14) !important;
-  border-radius: 12px;
+  border-radius: 8px;
+  padding: 4px;
 }
 .logo {
   width: 38px;
@@ -651,6 +877,16 @@ export default {
 .home-btn:hover {
   color: #22c55e;
   border-color: rgba(34, 197, 94, 0.35);
+}
+
+.restore-admin-btn {
+  flex-shrink: 0;
+}
+
+.mobile-restore-admin {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
 }
 .meta-info {
   display: inline-flex;
@@ -788,3 +1024,13 @@ export default {
 }
 </style>
 
+<style>
+/* 站内信弹窗：多行正文与后端 \n 对齐 */
+.sales-internal-msg-notify .el-notification__content {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+  text-align: left;
+}
+</style>

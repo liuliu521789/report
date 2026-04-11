@@ -62,6 +62,48 @@
             </span>
           </el-button>
         </div>
+
+        <div class="quick-item" v-if="isSuperAdminUser">
+          <el-button
+            class="quick-btn quick-btn--indigo"
+            :loading="quickRoleEntering === 'sales'"
+            @click="enterQuickRole('sales')"
+          >
+            <el-icon><ShoppingCart /></el-icon>
+            <span class="quick-btn-texts">
+              <span class="quick-btn-zh">销售角色</span>
+              <span class="quick-btn-en">Sales Role</span>
+            </span>
+          </el-button>
+        </div>
+
+        <div class="quick-item" v-if="isSuperAdminUser">
+          <el-button
+            class="quick-btn quick-btn--indigo"
+            :loading="quickRoleEntering === 'finance'"
+            @click="enterQuickRole('finance')"
+          >
+            <el-icon><Money /></el-icon>
+            <span class="quick-btn-texts">
+              <span class="quick-btn-zh">财务角色</span>
+              <span class="quick-btn-en">Finance Role</span>
+            </span>
+          </el-button>
+        </div>
+
+        <div class="quick-item" v-if="isSuperAdminUser">
+          <el-button
+            class="quick-btn quick-btn--indigo"
+            :loading="quickRoleEntering === 'warehouse'"
+            @click="enterQuickRole('warehouse')"
+          >
+            <el-icon><Box /></el-icon>
+            <span class="quick-btn-texts">
+              <span class="quick-btn-zh">仓库角色</span>
+              <span class="quick-btn-en">Warehouse Role</span>
+            </span>
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -280,7 +322,7 @@
                       <el-tag :type="loginSuccessTag(row) ? 'success' : 'danger'" size="small" effect="plain" class="audit-li-tag">
                         {{ loginSuccessTag(row) ? '成功' : '失败' }}
                       </el-tag>
-                      <span class="audit-li-time">{{ formatAuditTime(row.createdAt) }}</span>
+                      <span class="audit-li-time">{{ $dt(row.createdAt, { empty: '' }) }}</span>
                     </div>
                     <div class="audit-li-sub">{{ loginSubText(row) }}</div>
                   </li>
@@ -303,7 +345,7 @@
                     <div class="audit-li-main">
                       <span class="audit-li-user">{{ row.username || '—' }}</span>
                       <span class="audit-li-module">{{ row.module || '—' }}</span>
-                      <span class="audit-li-time">{{ formatAuditTime(row.createdAt) }}</span>
+                      <span class="audit-li-time">{{ $dt(row.createdAt, { empty: '' }) }}</span>
                     </div>
                     <div class="audit-li-sub">{{ row.action || '' }}</div>
                   </li>
@@ -320,7 +362,8 @@
 <script>
 import * as echarts from 'echarts';
 import { isSuperAdmin, perm } from '../utils/permissions';
-import { getDashboardSummary, listAuditOperations, listLoginLogs, listMyOperations } from '../api';
+import { getDashboardSummary, getQuickRoleUsers, impersonateUser, listAuditOperations, listLoginLogs, listMyOperations } from '../api';
+import { useAuthStore } from '../stores/auth';
 
 function safeNumber(v) {
   const n = Number(v);
@@ -352,7 +395,13 @@ export default {
       trendChart: null,
       donutChart: null,
       trendResizeObserver: null,
-      donutResizeObserver: null
+      donutResizeObserver: null,
+      quickRoles: {
+        salesUserId: null,
+        financeUserId: null,
+        warehouseUserId: null
+      },
+      quickRoleEntering: ''
     };
   },
   computed: {
@@ -388,6 +437,12 @@ export default {
       return this.securityTrendPct >= 0;
     }
   },
+  watch: {
+    /** 在首页从「模拟员工」恢复超管时路由可能仍为 /dashboard，不会 remount；须重新拉取快捷角色绑定 */
+    isSuperAdminUser(isSa) {
+      if (isSa) this.refreshQuickRoles();
+    }
+  },
   async mounted() {
     this.loading = true;
     try {
@@ -416,6 +471,7 @@ export default {
       this.renderCharts();
     }
     this.loadAuditFeeds();
+    if (this.isSuperAdminUser) await this.refreshQuickRoles();
   },
   beforeUnmount() {
     this.disposeCharts();
@@ -423,6 +479,60 @@ export default {
   methods: {
     perm,
     isSuperAdmin,
+    async refreshQuickRoles() {
+      if (!isSuperAdmin()) return;
+      try {
+        const qr = await getQuickRoleUsers();
+        this.quickRoles = {
+          salesUserId: qr?.salesUserId ?? null,
+          financeUserId: qr?.financeUserId ?? null,
+          warehouseUserId: qr?.warehouseUserId ?? null
+        };
+      } catch {
+        /* ignore */
+      }
+    },
+    quickRoleMap() {
+      return {
+        sales: this.quickRoles.salesUserId,
+        finance: this.quickRoles.financeUserId,
+        warehouse: this.quickRoles.warehouseUserId
+      };
+    },
+    async enterQuickRole(role) {
+      let userId = this.quickRoleMap()[role];
+      if (!userId) {
+        await this.refreshQuickRoles();
+        userId = this.quickRoleMap()[role];
+      }
+      if (!userId) {
+        this.$message.warning('请先在「公司信息」页面底部绑定对应员工账号并保存');
+        this.$router.push('/company');
+        return;
+      }
+      this.quickRoleEntering = role;
+      try {
+        const data = await impersonateUser(userId);
+        useAuthStore().beginImpersonationFromLoginResponse(data);
+        if (role === 'sales') {
+          await this.$router.push('/sales/orders');
+        } else if (role === 'finance') {
+          await this.$router.push({ path: '/sales/orders', query: { view: 'finance' } });
+        } else {
+          await this.$router.push({ path: '/sales/orders', query: { view: 'warehouse' } });
+        }
+        this.$message.success(`已切换为「${data?.user?.username || '员工'}」身份`);
+      } catch (e) {
+        const err = e?.response?.data?.error;
+        if (err === 'INVALID_IMPERSONATION_TARGET') {
+          this.$message.error('目标账号不可用（须为已启用的员工或管理账号）');
+        } else {
+          this.$message.error(this.$apiUserMsg(e, '切换失败'));
+        }
+      } finally {
+        this.quickRoleEntering = '';
+      }
+    },
     formatMaybeNumber(v) {
       const n = safeNumber(v);
       if (n == null) return '--';
@@ -434,14 +544,6 @@ export default {
       if (!Number.isFinite(n)) return '0%';
       const sign = n >= 0 ? '+' : '';
       return `${sign}${n}%`;
-    },
-
-    formatAuditTime(iso) {
-      if (!iso) return '';
-      const d = new Date(iso);
-      if (Number.isNaN(d.getTime())) return String(iso);
-      const p = (n) => String(n).padStart(2, '0');
-      return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
     },
 
     loginSuccessTag(row) {
@@ -679,16 +781,16 @@ export default {
 
 .quick-top {
   flex: 0 0 auto;
-  border: 1px solid rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(30, 58, 95, 0.12);
   background: rgba(255, 255, 255, 0.72);
   border-radius: 14px;
-  box-shadow: var(--shadow);
+  box-shadow: 0 4px 20px rgba(30, 58, 95, 0.08);
   padding: 10px 12px 12px;
 }
 
 .quick-top-title {
   font-weight: 800;
-  color: rgba(15, 23, 42, 0.92);
+  color: #1e3a5f;
   margin-bottom: 8px;
 }
 
@@ -707,7 +809,7 @@ export default {
   height: 64px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 26px rgba(30, 58, 95, 0.15);
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
@@ -772,9 +874,9 @@ export default {
 
 .stat-card {
   height: 104px;
-  border: 1px solid rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(30, 58, 95, 0.1);
   background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 4px 20px rgba(30, 58, 95, 0.08);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -849,13 +951,13 @@ export default {
 
 .stat-label {
   font-size: 13px;
-  color: rgba(100, 116, 139, 1);
+  color: #1e3a5f;
   font-weight: 600;
 }
 
 .stat-hint {
   font-size: 12px;
-  color: rgba(100, 116, 139, 0.78);
+  color: #2d5a87;
   line-height: 1.1;
 }
 
@@ -1063,7 +1165,7 @@ export default {
 .audit-panel-title {
   font-weight: 800;
   font-size: 14px;
-  color: rgba(15, 23, 42, 0.92);
+  color: #1e3a5f;
 }
 
 .audit-list {

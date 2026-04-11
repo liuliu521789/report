@@ -168,7 +168,7 @@ router.get('/:id', requirePermission('qrcodes', 'viewDetail'), async (req, res) 
   if (!qrcode) return res.status(404).json({ error: 'NOT_FOUND' });
 
   const [rRows] = await pool.query(
-    `SELECT r.id, r.report_no AS reportNo, r.batch_no AS batchNo, r.product_name AS productName, r.conclusion, r.status
+    `SELECT r.id, r.report_uid AS reportUid, r.report_no AS reportNo, r.batch_no AS batchNo, r.product_name AS productName, r.conclusion, r.status
      FROM qrcode_reports qr
      JOIN reports r ON r.id = qr.report_id
      WHERE qr.qrcode_id = ?

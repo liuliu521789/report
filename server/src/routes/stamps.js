@@ -7,12 +7,13 @@ import { nanoid } from 'nanoid';
 
 import { getPool } from '../db/pool.js';
 import { logOperationFromReq } from '../lib/audit.js';
-import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { requireAuth, requireAnyPermission, requirePermission } from '../middleware/auth.js';
 
 export const router = Router();
 
+const canViewStamps = requireAnyPermission('stamps', ['manage', 'view']);
+
 router.use(requireAuth);
-router.use(requirePermission('stamps', 'manage'));
 
 const SealType = {
   DEPARTMENT_QC: 'department_qc',
@@ -41,7 +42,7 @@ function extFromMime(mime) {
 }
 
 // Upload stamp image (local file) => returns imageUrl
-router.post('/upload', upload.single('file'), async (req, res) => {
+router.post('/upload', requirePermission('stamps', 'manage'), upload.single('file'), async (req, res) => {
   const f = req.file;
   if (!f) return res.status(400).json({ error: 'NO_FILE' });
   const ext = extFromMime(f.mimetype);
@@ -58,7 +59,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   res.json({ imageUrl: `${base}/uploads/stamps/${filename}` });
 });
 
-router.get('/', async (req, res) => {
+router.get('/', canViewStamps, async (req, res) => {
   const pool = getPool();
   const [rows] = await pool.query(
     'SELECT id, name, seal_type AS sealType, image_url AS imageUrl, is_active AS isActive, created_at AS createdAt FROM company_stamps ORDER BY created_at DESC, id DESC'
@@ -77,7 +78,7 @@ const bulkIdsSchema = z.object({
   ids: z.array(z.number().int().positive()).min(1).max(500)
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requirePermission('stamps', 'manage'), async (req, res) => {
   const parsed = upsertSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
   const { name, sealType, imageUrl, isActive = true } = parsed.data;
@@ -109,7 +110,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.delete('/bulk', async (req, res) => {
+router.delete('/bulk', requirePermission('stamps', 'manage'), async (req, res) => {
   const parsed = bulkIdsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
   const { ids } = parsed.data;
@@ -137,7 +138,7 @@ router.delete('/bulk', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requirePermission('stamps', 'manage'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
 
@@ -182,7 +183,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.post('/:id/activate', async (req, res) => {
+router.post('/:id/activate', requirePermission('stamps', 'manage'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
 
@@ -214,7 +215,7 @@ router.post('/:id/activate', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requirePermission('stamps', 'manage'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
   const pool = getPool();

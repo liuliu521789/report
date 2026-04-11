@@ -14,23 +14,41 @@ CREATE TABLE IF NOT EXISTS employee_categories (
   code VARCHAR(32) NOT NULL,
   sort_order INT NOT NULL DEFAULT 0,
   default_permissions_json JSON NOT NULL,
+  require_two_factor TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
   UNIQUE KEY uk_employee_categories_code (code)
 ) ENGINE=InnoDB;
 
-INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json) VALUES
-('品管', 'qc', 1, CAST('{"reports":{"list":true,"view":true,"create":true,"edit":true,"void":true,"activate":true,"bulkPass":true,"bulkVoid":true,"bulkActivate":true,"bulkDelete":true,"previewPrint":true,"seals":true},"qrcodes":{"list":true,"create":true,"viewDetail":true,"delete":true},"templates":{"use":true},"stamps":{"manage":false},"company":{"manage":false}}' AS JSON)),
-('客服', 'cs', 2, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":false},"stamps":{"manage":false},"company":{"manage":false}}' AS JSON));
+INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor) VALUES
+('品管', 'qc', 1, CAST('{"reports":{"list":true,"view":true,"create":true,"edit":true,"void":true,"activate":true,"bulkPass":true,"bulkVoid":true,"bulkActivate":true,"bulkDelete":true,"previewPrint":true,"seals":true},"qrcodes":{"list":true,"create":true,"viewDetail":true,"delete":true},"templates":{"use":true},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false}}' AS JSON), 0),
+('客服', 'cs', 2, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false}}' AS JSON), 0),
+('董事长', 'chairman', 3, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false,"export":true,"chairmanApprove":true,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":true},"stamps":{"manage":false,"view":true},"company":{"manage":false,"view":true},"audit":{"viewLogin":true,"viewOperations":true,"viewErrors":true,"exportAudit":true}}' AS JSON), 1);
 
--- 超级管理员（无类别）或员工（必选类别，可有个性化权限 JSON）
+-- 组织架构（钉钉式部门树）
+CREATE TABLE IF NOT EXISTS departments (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  parent_id BIGINT UNSIGNED NULL,
+  name_zh VARCHAR(128) NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_departments_parent (parent_id),
+  CONSTRAINT fk_departments_parent FOREIGN KEY (parent_id) REFERENCES departments(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 超级管理员（无类别）或员工（必选类别，可有个性化权限 JSON）；员工可选主部门
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   username VARCHAR(64) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
-  account_type ENUM('super_admin', 'employee') NOT NULL,
+  account_type ENUM('super_admin', 'employee', 'manager') NOT NULL,
   employee_category_id BIGINT UNSIGNED NULL,
+  department_id BIGINT UNSIGNED NULL,
+  wecom_userid VARCHAR(64) NULL DEFAULT NULL COMMENT '企业微信通讯录成员UserID',
   permissions_json JSON NULL,
+  totp_secret VARCHAR(64) NULL DEFAULT NULL,
+  totp_enabled_at DATETIME(3) NULL DEFAULT NULL,
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   failed_login_count INT UNSIGNED NOT NULL DEFAULT 0,
   locked_until DATETIME(3) NULL DEFAULT NULL,
@@ -39,8 +57,10 @@ CREATE TABLE IF NOT EXISTS users (
   PRIMARY KEY (id),
   UNIQUE KEY uk_users_username (username),
   KEY idx_users_employee_category (employee_category_id),
+  KEY idx_users_department (department_id),
   CONSTRAINT fk_users_employee_category FOREIGN KEY (employee_category_id) REFERENCES employee_categories(id)
-    ON DELETE SET NULL
+    ON DELETE SET NULL,
+  CONSTRAINT fk_users_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 -- Company stamp (single active)
@@ -65,11 +85,16 @@ CREATE TABLE IF NOT EXISTS company_settings (
   id TINYINT UNSIGNED NOT NULL DEFAULT 1,
   company_name_zh VARCHAR(128) NOT NULL DEFAULT '',
   company_name_en VARCHAR(256) NOT NULL DEFAULT '',
+  company_email VARCHAR(128) NULL,
+  company_address VARCHAR(256) NULL,
   report_title_zh VARCHAR(128) NOT NULL DEFAULT '',
   report_title_en VARCHAR(256) NOT NULL DEFAULT '',
   description_zh VARCHAR(256) NULL,
   description_en VARCHAR(256) NULL,
   logo_url VARCHAR(512) NULL,
+  quick_role_sales_user_id BIGINT UNSIGNED NULL,
+  quick_role_finance_user_id BIGINT UNSIGNED NULL,
+  quick_role_warehouse_user_id BIGINT UNSIGNED NULL,
   created_by BIGINT UNSIGNED NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
@@ -93,9 +118,49 @@ CREATE TABLE IF NOT EXISTS support_contact_settings (
 
 INSERT IGNORE INTO support_contact_settings (id, engineer_wechat_id) VALUES (1, '');
 
+-- 企业微信应用消息（后台配置 + 模板发送）
+CREATE TABLE IF NOT EXISTS wecom_config (
+  id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+  corp_id VARCHAR(32) NOT NULL DEFAULT '',
+  agent_id INT UNSIGNED NOT NULL DEFAULT 0,
+  corp_secret VARCHAR(255) NOT NULL DEFAULT '',
+  remark VARCHAR(255) NULL,
+  receive_token VARCHAR(64) NOT NULL DEFAULT '',
+  encoding_aes_key VARCHAR(64) NOT NULL DEFAULT '',
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB;
+
+INSERT IGNORE INTO wecom_config (id, corp_id, agent_id, corp_secret) VALUES (1, '', 0, '');
+
+CREATE TABLE IF NOT EXISTS wecom_notify_recipients (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name_zh VARCHAR(128) NOT NULL,
+  wecom_userids_json JSON NOT NULL COMMENT '企业微信成员 UserID 数组',
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_wecom_recipients_sort (sort_order)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS wecom_notify_templates (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code VARCHAR(64) NOT NULL,
+  name_zh VARCHAR(128) NOT NULL,
+  msg_type ENUM('text', 'textcard', 'markdown') NOT NULL DEFAULT 'text',
+  title_template TEXT NULL,
+  body_template TEXT NOT NULL,
+  url_template TEXT NULL,
+  btntxt VARCHAR(16) NULL DEFAULT '详情',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_wecom_notify_templates_code (code)
+) ENGINE=InnoDB;
+
 -- Reports (cannot delete, only void)
 CREATE TABLE IF NOT EXISTS reports (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  report_uid VARCHAR(32) NULL,
   report_no VARCHAR(64) NOT NULL,
   batch_no VARCHAR(64) NULL,
   batch_no_en VARCHAR(128) NULL,
@@ -109,7 +174,8 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
-  UNIQUE KEY uk_reports_report_no (report_no),
+  UNIQUE KEY uk_reports_report_uid (report_uid),
+  KEY idx_reports_report_no (report_no),
   KEY idx_reports_batch_no (batch_no),
   KEY idx_reports_status (status),
   KEY idx_reports_template_id (template_id),
@@ -256,5 +322,33 @@ CREATE TABLE IF NOT EXISTS error_logs (
   PRIMARY KEY (id),
   KEY idx_error_logs_time (created_at),
   KEY idx_error_logs_module (module)
+) ENGINE=InnoDB;
+
+-- 报告样式设计器 · 系统图片库
+CREATE TABLE IF NOT EXISTS report_image_library (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name VARCHAR(255) NOT NULL DEFAULT '',
+  image_url VARCHAR(512) NOT NULL,
+  created_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_report_image_library_created (created_at),
+  CONSTRAINT fk_report_image_library_created_by
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 报告设计器样式（区别于报告模板）
+CREATE TABLE IF NOT EXISTS report_styles (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name VARCHAR(128) NOT NULL,
+  description VARCHAR(255) NULL,
+  elements_json JSON NOT NULL,
+  created_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_report_styles_updated (updated_at),
+  CONSTRAINT fk_report_styles_created_by
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 

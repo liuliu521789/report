@@ -1,9 +1,17 @@
 <template>
   <div class="stamps-page">
+    <el-alert
+      v-if="!canManageStamps"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+      title="当前为只读查看，不可新增、修改或删除印章。"
+    />
     <div class="toolbar">
       <div class="toolbar-left">
         <el-button
-          v-if="canBulkDelete"
+          v-if="canManageStamps"
           type="danger"
           plain
           :icon="Delete"
@@ -15,13 +23,13 @@
       </div>
       <div class="toolbar-right">
         <el-button @click="load">刷新</el-button>
-        <el-button type="primary" @click="openCreate">新增印章</el-button>
+        <el-button v-if="canManageStamps" type="primary" @click="openCreate">新增印章</el-button>
       </div>
     </div>
 
     <div class="table-wrap">
       <el-table class="stamps-table desktop-table" :data="items" border size="small" row-key="id" @selection-change="selected = $event">
-      <el-table-column type="selection" width="48" />
+      <el-table-column v-if="canManageStamps" type="selection" width="48" />
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="sealType" label="印章类型" width="130">
         <template #default="{ row }">
@@ -47,7 +55,7 @@
           <el-tag v-else type="info">否</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" min-width="220" align="center">
+      <el-table-column v-if="canManageStamps" label="操作" min-width="220" align="center">
         <template #default="{ row }">
           <el-button link :disabled="row.isActive" @click="activate(row)">设为激活</el-button>
           <el-button link @click="openEdit(row)">修改</el-button>
@@ -65,7 +73,7 @@
         <div class="mobile-line"><span>ID</span><span>{{ row.id }}</span></div>
         <div class="mobile-line"><span>激活</span><span>{{ row.isActive ? '是' : '否' }}</span></div>
         <img v-if="row.imageUrl" :src="row.imageUrl" alt="seal-thumb" class="seal-thumb mobile-thumb" @click="openPreview(row.imageUrl)" />
-        <div class="mobile-actions">
+        <div v-if="canManageStamps" class="mobile-actions">
           <el-button size="small" :disabled="row.isActive" @click="activate(row)">设为激活</el-button>
           <el-button size="small" @click="openEdit(row)">修改</el-button>
           <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
@@ -78,11 +86,11 @@
       <el-form :model="form" label-width="90px" class="stamps-form">
         <el-form-item label="印章类型">
           <el-select v-model="form.sealType" style="width: 100%">
-            <el-option label="质检章（盖部门）" value="department_qc" />
-            <el-option label="主检章（盖主检）" value="inspector" />
-            <el-option label="审核章（盖审核）" value="supervisor" />
-            <el-option label="合格章（盖结论）" value="pass" />
-            <el-option label="复检章（盖备注）" value="recheck" />
+            <el-option label="质检章" value="department_qc" />
+            <el-option label="主检章" value="inspector" />
+            <el-option label="审核章" value="supervisor" />
+            <el-option label="合格章" value="pass" />
+            <el-option label="复检章" value="recheck" />
           </el-select>
         </el-form-item>
         <el-form-item label="名称">
@@ -162,7 +170,7 @@ export default {
   },
   computed: {
     ...mapState(useAuthStore, ['token']),
-    canBulkDelete() {
+    canManageStamps() {
       return perm('stamps', 'manage');
     },
     uploadAction() {
@@ -222,7 +230,7 @@ export default {
         this.form = { sealType: 'department_qc', name: '', imageUrl: '', isActive: true };
         this.load();
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '新增失败');
+        this.$message.error(this.$apiUserMsg(e, '新增失败'));
       } finally {
         this.saving = false;
       }
@@ -246,7 +254,7 @@ export default {
         this.form = { sealType: 'department_qc', name: '', imageUrl: '', isActive: true };
         await this.load();
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '修改失败');
+        this.$message.error(this.$apiUserMsg(e, '修改失败'));
       } finally {
         this.saving = false;
       }

@@ -47,7 +47,7 @@ export default {
         const { engineerWechatId } = await getSupportContact();
         this.form.engineerWechatId = engineerWechatId || '';
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '加载失败');
+        this.$message.error(this.$apiUserMsg(e, '加载失败'));
       } finally {
         this.loading = false;
       }
@@ -61,7 +61,7 @@ export default {
         this.form.engineerWechatId = engineerWechatId || '';
         this.$message.success('已保存');
       } catch (e) {
-        this.$message.error(e?.response?.data?.message || e?.response?.data?.error || '保存失败');
+        this.$message.error(this.$apiUserMsg(e, '保存失败'));
       } finally {
         this.saving = false;
       }

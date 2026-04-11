@@ -21,7 +21,7 @@
           :disabled="!canSaveAsTemplate"
           @click="openSaveTemplate"
         >
-          保存为模板
+          {{ designerMode ? '保存报告样式' : '保存为模板' }}
         </el-button>
         <el-button
           v-if="isNew ? perm('reports', 'create') : perm('reports', 'edit')"
@@ -51,6 +51,14 @@
       class="top-alert"
       title="新增报告：可选模板套用，或空白报告；版式与打印预览一致"
     />
+    <el-alert
+      v-if="designerMode"
+      type="success"
+      show-icon
+      :closable="false"
+      class="top-alert"
+      title="设计模式：可拖拽调整字段与检验项目顺序，完成后点「保存报告样式」即可沉淀为模板"
+    />
 
     <el-card v-if="isNew" class="tpl-card">
       <template #header>
@@ -70,6 +78,7 @@
           <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
         </el-select>
         <el-button type="primary" :disabled="!selectedTemplateId" @click="applyTemplate">套用模板</el-button>
+        <el-button v-if="perm('templates', 'use')" @click="openStyleManager">管理模板</el-button>
         <el-button @click="startBlank">空白报告</el-button>
         <span class="text-muted">套用模板会覆盖当前纸张内容</span>
       </div>
@@ -88,21 +97,43 @@
         </div>
 
         <div class="header-doc-no">
-          <input
-            v-model="form.reportNo"
-            type="text"
-            class="doc-no-input"
-            :class="{ 'is-readonly': !fieldEditable('report_no') }"
-            :readonly="!fieldEditable('report_no')"
-            placeholder="报告编号"
-          />
+          <div class="doc-no-row">
+            <span class="doc-no-lbl">报告编号</span>
+            <input
+              v-model="form.reportNo"
+              type="text"
+              class="doc-no-input is-readonly"
+              name="qc-report-no"
+              autocomplete="off"
+              placeholder="JL-8.8-05"
+              readonly
+            />
+          </div>
+          <div class="doc-no-row">
+            <span class="doc-no-lbl">报告ID</span>
+            <input
+              type="text"
+              class="doc-no-input is-readonly"
+              autocomplete="off"
+              :value="form.reportUid || (isNew ? '保存后自动生成' : '—')"
+              readonly
+            />
+          </div>
         </div>
         <div class="company-name">{{ company.companyNameZh || '公司名称' }}</div>
         <h1 class="report-title">{{ company.reportTitleZh || '产品质量检验报告单' }}</h1>
         <div class="report-title-en">{{ company.reportTitleEn || 'Certificate of Analysis' }}</div>
 
         <div id="formContainer" class="form-container-inner">
-          <div v-for="(row, idx) in metaFields" :key="row.fieldKey + '-' + idx" class="form-row">
+          <div
+            v-for="(row, idx) in metaFields"
+            :key="row.fieldKey + '-' + idx"
+            class="form-row"
+            draggable="true"
+            @dragstart="onMetaDragStart(row)"
+            @dragover.prevent
+            @drop="onMetaDrop(row)"
+          >
             <div class="form-label">
               <input
                 v-model="row.fieldLabel"
@@ -129,6 +160,9 @@
               @input="onMetaValueZh(row)"
             />
             <div v-if="rowEditable(row)" class="action-icons">
+              <span class="drag-icon" title="拖拽排序">
+                <el-icon><Rank /></el-icon>
+              </span>
               <span class="edit-icon" title="编辑标签" @click="focusLabel(row)">
                 <el-icon><Edit /></el-icon>
               </span>
@@ -171,7 +205,14 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(tr, ri) in tableDataRows" :key="'tr-' + ri">
+            <tr
+              v-for="(tr, ri) in tableDataRows"
+              :key="'tr-' + ri"
+              draggable="true"
+              @dragstart="onTableRowDragStart(ri)"
+              @dragover.prevent
+              @drop="onTableRowDrop(ri)"
+            >
               <td>
                 <input
                   v-model="tr.item.zh"
@@ -217,6 +258,9 @@
               </td>
               <td v-if="fieldEditable('inspection_table')">
                 <div class="table-action">
+                  <span class="drag-icon" title="拖拽排序">
+                    <el-icon><Rank /></el-icon>
+                  </span>
                   <span class="del-icon" title="删除检验项" @click="removeTableRow(ri)">
                     <el-icon><Delete /></el-icon>
                   </span>
@@ -420,6 +464,44 @@
         <el-button type="primary" :loading="tplSaving" @click="saveAsTemplate">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog title="报告模板管理" v-model="styleManageDialog" width="760px">
+      <div class="style-manage-toolbar">
+        <span class="text-muted">可在此重命名/删除，修改后新建报告页可直接套用。</span>
+        <el-button text type="primary" :loading="styleManageLoading" @click="loadTemplates">刷新</el-button>
+      </div>
+      <el-table :data="templates" border size="small" v-loading="styleManageLoading">
+        <el-table-column prop="name" label="模板名称" min-width="220" />
+        <el-table-column prop="description" label="描述" min-width="240" />
+        <el-table-column label="更新时间" width="180">
+          <template #default="{ row }">{{ $dt(row.updatedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="180">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openStyleEdit(row)">修改</el-button>
+            <el-button link type="danger" :loading="styleDeletingId === row.id" @click="deleteStyle(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="styleManageDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog title="修改模板" v-model="styleEditDialog" width="520px">
+      <el-form :model="styleEditForm" label-width="110px">
+        <el-form-item label="模板名称">
+          <el-input v-model="styleEditForm.name" maxlength="128" show-word-limit />
+        </el-form-item>
+        <el-form-item label="模板描述">
+          <el-input v-model="styleEditForm.description" maxlength="255" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="styleEditDialog = false">取消</el-button>
+        <el-button type="primary" :loading="styleEditSaving" @click="saveStyleEdit">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -434,16 +516,19 @@ import {
   getReportSeals,
   getTemplate,
   listTemplates,
+  deleteTemplate,
   saveReportAsTemplate,
   translateZhToEn,
+  updateTemplate,
   updateReport
 } from '../api';
-import { Delete, Edit } from '@element-plus/icons-vue';
+import { Delete, Edit, Rank } from '@element-plus/icons-vue';
 import { canEditReportFieldKey, perm } from '../utils/permissions';
 import { isCustomFieldKey } from '../utils/reportFieldEditDefinitions';
 
 const TABLE_KEY = 'inspection_table';
 const PROTECTED_KEYS = new Set([TABLE_KEY, 'product_name', 'batch_no', 'test_conclusion', 'remarks']);
+const FIXED_REPORT_NO = 'JL-8.8-05';
 
 function svgUrl(svg) {
   return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
@@ -453,7 +538,7 @@ const LOGO_FALLBACK_SVG = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2
 
 export default {
   name: 'ReportEdit',
-  components: { Delete, Edit },
+  components: { Delete, Edit, Rank },
   props: {
     id: { type: [String, Number], default: null }
   },
@@ -474,6 +559,12 @@ export default {
       tplDialog: false,
       tplSaving: false,
       tplForm: { name: '', description: '', includeValues: false },
+      styleManageDialog: false,
+      styleManageLoading: false,
+      styleDeletingId: null,
+      styleEditDialog: false,
+      styleEditSaving: false,
+      styleEditForm: { id: null, name: '', description: '' },
       translateFallbackToZh: true,
       company: {
         companyNameZh: '',
@@ -485,17 +576,23 @@ export default {
         descriptionEn: ''
       },
       form: {
-        reportNo: '',
+        reportNo: FIXED_REPORT_NO,
+        reportUid: '',
         templateId: null,
         // 默认判定结论：未选择时按“合格”保存
         conclusion: 'pass',
         fields: []
-      }
+      },
+      draggingMetaFieldKey: '',
+      draggingTableRowIndex: -1
     };
   },
   computed: {
     isNew() {
       return !this.id;
+    },
+    designerMode() {
+      return this.isNew && String(this.$route?.query?.designer || '') === '1';
     },
     canSaveAsTemplate() {
       return (this.form.fields || []).length > 0;
@@ -556,7 +653,8 @@ export default {
     if (this.id) {
       const { report } = await getReport(this.id);
       this.form = {
-        reportNo: report.reportNo,
+        reportNo: FIXED_REPORT_NO,
+        reportUid: report.reportUid || '',
         templateId: report.templateId || null,
         conclusion: report.conclusion || 'pass',
         fields: (report.fields || []).map((f) => ({
@@ -572,6 +670,7 @@ export default {
       await this.loadAppliedSeals();
     } else {
       this.seedDefaultPaper();
+      this.loadSuggestedReportNo();
     }
   },
   methods: {
@@ -617,6 +716,11 @@ export default {
         fieldValue: { zh: zh || '', en: en || '' },
         sortOrder: order
       };
+    },
+    loadSuggestedReportNo() {
+      if (!this.isNew || !perm('reports', 'create')) return;
+      this.form.reportNo = FIXED_REPORT_NO;
+      this.form.reportUid = '';
     },
     seedDefaultPaper() {
       this.form.templateId = null;
@@ -805,6 +909,7 @@ export default {
         .then(() => {
           const i = this.form.fields.indexOf(row);
           if (i >= 0) this.form.fields.splice(i, 1);
+          this.reindexSortOrders();
         })
         .catch(() => {});
     },
@@ -817,6 +922,7 @@ export default {
       const row = this.textField(`field_${n}`, '自定义字段', 'Custom Field', '', '', insertAt * 10);
       if (altIdx >= 0) this.form.fields.splice(altIdx, 0, row);
       else this.form.fields.push(row);
+      this.reindexSortOrders();
     },
     addTableRow() {
       if (!this.fieldEditable('inspection_table')) return;
@@ -834,8 +940,49 @@ export default {
       this.$confirm('确定删除该检验项目？', '提示', { type: 'warning' })
         .then(() => {
           this.inspectionTable.fieldValue.rows.splice(ri, 1);
+          this.reindexSortOrders();
         })
         .catch(() => {});
+    },
+    onMetaDragStart(row) {
+      if (!row || !this.rowEditable(row)) return;
+      this.draggingMetaFieldKey = row.fieldKey;
+    },
+    onMetaDrop(targetRow) {
+      if (!this.draggingMetaFieldKey || !targetRow) return;
+      const fromIndex = this.form.fields.findIndex((f) => f.fieldKey === this.draggingMetaFieldKey);
+      const toIndex = this.form.fields.findIndex((f) => f.fieldKey === targetRow.fieldKey);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+      const fromField = this.form.fields[fromIndex];
+      if (!this.rowEditable(fromField) || !this.rowEditable(targetRow)) {
+        this.draggingMetaFieldKey = '';
+        return;
+      }
+      const [moved] = this.form.fields.splice(fromIndex, 1);
+      const targetIndexAfterRemove = this.form.fields.findIndex((f) => f.fieldKey === targetRow.fieldKey);
+      this.form.fields.splice(targetIndexAfterRemove, 0, moved);
+      this.draggingMetaFieldKey = '';
+      this.reindexSortOrders();
+    },
+    onTableRowDragStart(rowIndex) {
+      if (!this.fieldEditable('inspection_table')) return;
+      this.draggingTableRowIndex = rowIndex;
+    },
+    onTableRowDrop(targetIndex) {
+      const rows = this.inspectionTable?.fieldValue?.rows;
+      if (!Array.isArray(rows)) return;
+      const from = this.draggingTableRowIndex;
+      const to = targetIndex;
+      if (from < 0 || to < 0 || from === to || from >= rows.length || to >= rows.length) return;
+      const [moved] = rows.splice(from, 1);
+      rows.splice(to, 0, moved);
+      this.draggingTableRowIndex = -1;
+      this.reindexSortOrders();
+    },
+    reindexSortOrders() {
+      (this.form.fields || []).forEach((f, idx) => {
+        f.sortOrder = (idx + 1) * 10;
+      });
     },
     getSealImage(sealType) {
       return this.appliedSeals?.[sealType]?.imageUrl || '';
@@ -912,7 +1059,7 @@ export default {
         const { appliedSeals } = await getReportSeals(this.id);
         this.appliedSeals = appliedSeals || this.appliedSeals;
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '加载盖章状态失败');
+        this.$message.error(this.$apiUserMsg(e, '加载盖章状态失败'));
       } finally {
         this.sealLoading = false;
       }
@@ -928,7 +1075,7 @@ export default {
         this.$message.success('盖章成功');
         await this.loadAppliedSeals();
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '盖章失败');
+        this.$message.error(this.$apiUserMsg(e, '盖章失败'));
       } finally {
         this.sealLoading = false;
       }
@@ -941,7 +1088,7 @@ export default {
           this.$message.success('已取消盖章');
           await this.loadAppliedSeals();
         } catch (e) {
-          this.$message.error(e?.response?.data?.error || '取消盖章失败');
+          this.$message.error(this.$apiUserMsg(e, '取消盖章失败'));
         } finally {
           this.sealLoading = false;
         }
@@ -951,6 +1098,7 @@ export default {
     },
     async loadTemplates() {
       this.tplLoading = true;
+      if (this.styleManageDialog) this.styleManageLoading = true;
       try {
         const { items } = await listTemplates({ limit: 200 });
         this.templates = items;
@@ -958,6 +1106,61 @@ export default {
         this.templates = [];
       } finally {
         this.tplLoading = false;
+        this.styleManageLoading = false;
+      }
+    },
+    openStyleManager() {
+      this.styleManageDialog = true;
+      this.loadTemplates();
+    },
+    openStyleEdit(row) {
+      this.styleEditForm = {
+        id: row.id,
+        name: row.name || '',
+        description: row.description || ''
+      };
+      this.styleEditDialog = true;
+    },
+    async saveStyleEdit() {
+      const id = Number(this.styleEditForm.id);
+      if (!Number.isFinite(id) || id <= 0) return;
+      const name = String(this.styleEditForm.name || '').trim();
+      if (!name) {
+        this.$message.warning('请输入模板名称');
+        return;
+      }
+      this.styleEditSaving = true;
+      try {
+        const { template } = await getTemplate(id);
+        await updateTemplate(id, {
+          name,
+          description: String(this.styleEditForm.description || '').trim() || null,
+          fields: template.fields || []
+        });
+        this.$message.success('模板已更新');
+        this.styleEditDialog = false;
+        await this.loadTemplates();
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '模板更新失败'));
+      } finally {
+        this.styleEditSaving = false;
+      }
+    },
+    async deleteStyle(row) {
+      const id = Number(row?.id);
+      if (!Number.isFinite(id) || id <= 0) return;
+      const ok = await this.$confirm(`确认删除模板「${row.name || id}」？`, '删除模板', { type: 'warning' }).catch(() => false);
+      if (!ok) return;
+      this.styleDeletingId = id;
+      try {
+        await deleteTemplate(id);
+        if (Number(this.selectedTemplateId) === id) this.selectedTemplateId = null;
+        this.$message.success('模板已删除');
+        await this.loadTemplates();
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '删除模板失败'));
+      } finally {
+        this.styleDeletingId = null;
       }
     },
     async applyTemplate() {
@@ -977,11 +1180,11 @@ export default {
       this.ensurePaperShape(null);
       this.$message.success('已套用模板');
     },
-    startBlank() {
+    async startBlank() {
       this.selectedTemplateId = null;
-      this.form.reportNo = '';
       this.form.conclusion = 'pass';
       this.seedDefaultPaper();
+      await this.loadSuggestedReportNo();
       this.$message.success('已切换为空白版式');
     },
     openSaveTemplate() {
@@ -989,6 +1192,7 @@ export default {
       this.tplForm = { name: '', description: '', includeValues: false };
     },
     buildPayload() {
+      this.reindexSortOrders();
       const prod = this.form.fields.find((f) => f.fieldKey === 'product_name');
       const batch = this.form.fields.find((f) => f.fieldKey === 'batch_no');
       const productName = String(prod?.fieldValue?.zh || '').trim();
@@ -1004,7 +1208,7 @@ export default {
         };
       }
       return {
-        reportNo: this.form.reportNo,
+        reportNo: FIXED_REPORT_NO,
         productName,
         productNameEn: prod?.fieldValue?.en || null,
         batchNo: batch?.fieldValue?.zh?.trim() || null,
@@ -1035,6 +1239,7 @@ export default {
       }
       this.tplSaving = true;
       try {
+        this.reindexSortOrders();
         if (this.id) {
           await saveReportAsTemplate(this.id, this.tplForm);
         } else {
@@ -1056,7 +1261,7 @@ export default {
         this.tplDialog = false;
         this.loadTemplates();
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '保存模板失败');
+        this.$message.error(this.$apiUserMsg(e, '保存模板失败'));
       } finally {
         this.tplSaving = false;
       }
@@ -1066,22 +1271,32 @@ export default {
       if (!this.id && !this.perm('reports', 'create')) return;
       const payload = this.buildPayload();
       if (!payload) return;
-      if (!String(payload.reportNo || '').trim()) {
-        this.$message.warning('请填写报告编号');
-        return;
-      }
       this.saving = true;
       try {
         if (this.id) {
           await updateReport(this.id, payload);
           this.$message.success('已保存');
         } else {
-          await createReport(payload);
-          this.$message.success('已创建');
-          this.$router.push('/reports');
+          const data = await createReport(payload);
+          const uid = data?.reportUid ? `，报告ID：${data.reportUid}` : '';
+          this.$message.success(`已创建${uid}`);
+          if (data?.id) {
+            this.$router.push(`/reports/${data.id}`);
+          } else {
+            this.$router.push('/reports');
+          }
         }
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '保存失败');
+        const code = e?.response?.data?.error;
+        const conflict =
+          code === 'REPORT_NO_EXISTS'
+            ? '报告编号已被使用，请更换为未占用的编号'
+            : code === 'REPORT_UID_EXISTS'
+              ? '报告ID 冲突，请重试保存'
+              : code === 'REPORT_FIELD_KEY_DUPLICATE'
+                ? '字段标识（field key）重复，请检查并删除或合并重复字段'
+                : '';
+        this.$message.error(conflict || code || '保存失败');
       } finally {
         this.saving = false;
       }
@@ -1129,6 +1344,12 @@ export default {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+.style-manage-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
 }
 .text-muted {
   color: #909399;
@@ -1186,6 +1407,21 @@ export default {
   font-size: 14px;
   color: #333;
   margin-bottom: 30px;
+}
+.doc-no-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.doc-no-row:last-child {
+  margin-bottom: 0;
+}
+.doc-no-lbl {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: #606266;
 }
 .doc-no-input {
   border: none;
@@ -1289,7 +1525,8 @@ export default {
   align-items: center;
 }
 .edit-icon,
-.del-icon {
+.del-icon,
+.drag-icon {
   width: 20px;
   height: 20px;
   cursor: pointer;
@@ -1301,8 +1538,12 @@ export default {
   border-radius: 4px;
 }
 .edit-icon :deep(.el-icon),
-.del-icon :deep(.el-icon) {
+.del-icon :deep(.el-icon),
+.drag-icon :deep(.el-icon) {
   font-size: 16px;
+}
+.drag-icon {
+  color: #909399;
 }
 .edit-icon {
   color: #1890ff;
@@ -1533,13 +1774,15 @@ export default {
     padding: 18mm 12mm 12mm;
   }
   .edit-icon,
-  .del-icon {
+  .del-icon,
+  .drag-icon {
     width: 28px;
     height: 28px;
     border-radius: 8px;
   }
   .edit-icon :deep(.el-icon),
-  .del-icon :deep(.el-icon) {
+  .del-icon :deep(.el-icon),
+  .drag-icon :deep(.el-icon) {
     font-size: 18px;
   }
   .add-row-btn {

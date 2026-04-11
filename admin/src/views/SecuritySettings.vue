@@ -59,7 +59,7 @@ export default {
         this.form = { ...settings };
         this.bannedText = (settings.bannedPasswords || []).join('\n');
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '加载失败');
+        this.$message.error(this.$apiUserMsg(e, '加载失败'));
       } finally {
         this.loading = false;
       }
@@ -79,7 +79,7 @@ export default {
         this.bannedText = (settings.bannedPasswords || []).join('\n');
         this.$message.success('已保存');
       } catch (e) {
-        this.$message.error(e?.response?.data?.message || e?.response?.data?.error || '保存失败');
+        this.$message.error(this.$apiUserMsg(e, '保存失败'));
       } finally {
         this.saving = false;
       }

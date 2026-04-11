@@ -1,31 +1,70 @@
 <template>
   <div class="reports-list">
+    <el-card class="report-title-card">
+      <template #header>
+        <div class="field-header">
+          <div>报告标题设置</div>
+        </div>
+      </template>
+      <el-form :model="reportTitleForm" label-width="180px" @submit.prevent>
+        <el-form-item label="报告名称（中文）">
+          <el-input v-model="reportTitleForm.reportTitleZh" :readonly="!canEditReportTitles" />
+        </el-form-item>
+        <el-form-item label="Report Title (English)">
+          <el-input v-model="reportTitleForm.reportTitleEn" :readonly="!canEditReportTitles" />
+        </el-form-item>
+      </el-form>
+      <div v-if="canManageCompany" class="report-title-actions">
+        <el-button v-if="!reportTitleEditMode" @click="startEditReportTitles">编辑</el-button>
+        <template v-else>
+          <el-button @click="cancelEditReportTitles">取消</el-button>
+          <el-button type="primary" :loading="reportTitleSaving" @click="saveReportTitles">保存标题</el-button>
+        </template>
+      </div>
+    </el-card>
+
     <div class="toolbar">
       <div class="left">
-        <el-input v-model="q" placeholder="报告编号/产品名称" clearable class="field-q" @keyup.enter="onSearch" />
+        <el-input v-model="q" placeholder="报告ID/报告编号/产品名称" clearable class="field-q" @keyup.enter="onSearch" />
         <el-input v-model="batchNo" placeholder="批次" clearable class="field-batch" @keyup.enter="onSearch" />
         <el-select v-model="status" placeholder="状态" clearable class="field-status" @change="onSearch">
           <el-option label="有效" value="active" />
           <el-option label="作废" value="void" />
         </el-select>
-        <el-button type="primary" @click="onSearch">查询</el-button>
+        <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
       </div>
       <div class="right">
         <el-button
+          v-if="perm('reports', 'export')"
+          type="info"
+          :icon="Download"
+          size="small"
+          :disabled="selected.length === 0"
+          @click="onExportJson"
+        >
+          导出备案(JSON)
+        </el-button>
+        <el-button
           v-if="canBulkPass"
           :icon="Check"
+          type="success"
+          size="small"
           :disabled="selected.length === 0"
           @click="onBulkPass"
         >批量判定合格</el-button>
         <el-button
           v-if="canBulkVoid"
           :icon="Warning"
+          type="warning"
+          size="small"
           :disabled="selected.length === 0"
           @click="onBulkVoid"
         >批量作废</el-button>
         <el-button
           v-if="canBulkActivate"
           :icon="RefreshRight"
+          type="primary"
+          size="small"
           :disabled="selected.length === 0"
           @click="onBulkActivate"
         >批量有效</el-button>
@@ -33,14 +72,35 @@
           v-if="canBulkDelete"
           :icon="Delete"
           type="danger"
+          size="small"
           plain
           :disabled="selected.length === 0"
           @click="onBulkDelete"
         >批量删除</el-button>
-        <el-button v-if="perm('reports', 'create')" @click="$router.push('/reports/new')">新建报告</el-button>
+        <el-button
+          v-if="perm('templates', 'use') && perm('reports', 'create')"
+          type="info"
+          :icon="Brush"
+          size="small"
+          plain
+          @click="$router.push('/reports/designer')"
+        >
+          设计报告
+        </el-button>
+        <el-button
+          v-if="perm('reports', 'create')"
+          type="primary"
+          :icon="Plus"
+          size="small"
+          @click="$router.push('/reports/new')"
+        >
+          新建报告
+        </el-button>
         <el-button
           v-if="perm('qrcodes', 'create')"
           type="success"
+          :icon="Promotion"
+          size="small"
           :disabled="selected.length === 0"
           :loading="qrLoading"
           @click="onGenQr"
@@ -53,7 +113,8 @@
     <div class="table-wrap">
       <el-table :data="items" border @selection-change="selected = $event">
       <el-table-column type="selection" width="48" />
-      <el-table-column prop="reportNo" label="报告编号" width="180" />
+      <el-table-column prop="reportUid" label="报告ID" width="140" />
+      <el-table-column prop="reportNo" label="报告编号" width="120" />
       <el-table-column prop="productName" label="产品名称" min-width="180" />
       <el-table-column prop="batchNo" label="批次" width="140" />
       <el-table-column prop="conclusion" label="判定" width="90">
@@ -71,17 +132,39 @@
       </el-table-column>
       <el-table-column label="操作" width="360">
         <template #default="{ row }">
-          <el-button v-if="perm('reports', 'previewPrint')" link @click="onPreview(row)">预览</el-button>
-          <el-button v-if="perm('reports', 'previewPrint')" link @click="onPrint(row)">打印</el-button>
+          <el-button v-if="perm('reports', 'previewPrint')" type="info" plain size="small" @click="onPreview(row)">
+            预览
+          </el-button>
+          <el-button v-if="perm('reports', 'previewPrint')" type="primary" plain size="small" @click="onPrint(row)">
+            打印
+          </el-button>
           <el-button
             v-if="perm('reports', 'view') || perm('reports', 'edit')"
-            link
+            type="success"
+            plain
+            size="small"
             @click="$router.push(`/reports/${row.id}`)"
           >
             {{ perm('reports', 'edit') ? '编辑' : '查看' }}
           </el-button>
-          <el-button v-if="row.status === 'active' && perm('reports', 'void')" link @click="onVoid(row)">作废</el-button>
-          <el-button v-else-if="row.status !== 'active' && perm('reports', 'activate')" link @click="onActivate(row)">恢复有效</el-button>
+          <el-button
+            v-if="row.status === 'active' && perm('reports', 'void')"
+            type="warning"
+            plain
+            size="small"
+            @click="onVoid(row)"
+          >
+            作废
+          </el-button>
+          <el-button
+            v-else-if="row.status !== 'active' && perm('reports', 'activate')"
+            type="success"
+            plain
+            size="small"
+            @click="onActivate(row)"
+          >
+            恢复有效
+          </el-button>
         </template>
       </el-table-column>
       </el-table>
@@ -137,27 +220,24 @@
 </template>
 
 <script>
-import { activateReport, createQrcode, listReports, voidReport } from '../api';
+import {
+  activateReport,
+  createQrcode,
+  exportReportsJson,
+  getCompanySettings,
+  listReports,
+  updateCompanySettings,
+  voidReport
+} from '../api';
 import { bulkActivateReports, bulkDeleteReports, bulkPassReports, bulkVoidReports } from '../api';
-import { Check, Delete, RefreshRight, Warning } from '@element-plus/icons-vue';
+import { Brush, Check, Delete, Download, Plus, Promotion, RefreshRight, Search, Warning } from '@element-plus/icons-vue';
 import { perm } from '../utils/permissions';
 import { getAuthToken } from '../stores/auth';
-
-function customerReportPreviewUrl(reportId, { autoPrint = false } = {}) {
-  const base = import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001';
-  const token = getAuthToken();
-  const q = new URLSearchParams({
-    id: String(reportId),
-    adminPreview: '1',
-    accessToken: token
-  });
-  if (autoPrint) q.set('autoPrint', '1');
-  return `${base}/miniprogram/report.html?${q.toString()}`;
-}
+import { customerReportPreviewUrl } from '../utils/customerReportPreviewUrl';
 
 export default {
   name: 'ReportsList',
-  components: { Check, Delete, RefreshRight, Warning },
+  components: { Brush, Check, Delete, Download, Plus, Promotion, RefreshRight, Search, Warning },
   data() {
     return {
       q: '',
@@ -175,12 +255,28 @@ export default {
       previewLoading: false,
       previewUrl: '',
       /** 弹窗内「打印」用；iframe 跨域时不能调用 contentWindow.print() */
-      previewReportId: null
+      previewReportId: null,
+      reportTitleForm: {
+        reportTitleZh: '',
+        reportTitleEn: ''
+      },
+      reportTitleSaving: false,
+      reportTitleEditMode: false
     };
   },
   computed: {
+    canManageCompany() {
+      return this.perm('company', 'manage');
+    },
+    canEditReportTitles() {
+      return this.canManageCompany && this.reportTitleEditMode;
+    },
     canBulkPass() {
-      return this.perm('reports', 'bulkPass') || this.perm('reports', 'edit');
+      return (
+        this.perm('reports', 'bulkPass') ||
+        this.perm('reports', 'edit') ||
+        this.perm('reports', 'chairmanApprove')
+      );
     },
     canBulkVoid() {
       return this.perm('reports', 'bulkVoid') || this.perm('reports', 'void');
@@ -194,9 +290,52 @@ export default {
   },
   mounted() {
     this.load();
+    this.loadReportTitles();
   },
   methods: {
     perm,
+    async loadReportTitles() {
+      try {
+        const { settings } = await getCompanySettings();
+        if (!settings) return;
+        this.reportTitleForm = {
+          reportTitleZh: settings.reportTitleZh || settings.report_title_zh || '',
+          reportTitleEn: settings.reportTitleEn || settings.report_title_en || ''
+        };
+      } catch (_) {
+        // ignore
+      }
+    },
+    startEditReportTitles() {
+      if (!this.canManageCompany) return;
+      this.reportTitleEditMode = true;
+    },
+    async cancelEditReportTitles() {
+      this.reportTitleEditMode = false;
+      await this.loadReportTitles();
+    },
+    async saveReportTitles() {
+      this.reportTitleSaving = true;
+      try {
+        const { settings } = await getCompanySettings();
+        const current = settings || {};
+        await updateCompanySettings({
+          companyNameZh: current.companyNameZh || current.company_name_zh || '',
+          companyNameEn: current.companyNameEn || current.company_name_en || '',
+          reportTitleZh: this.reportTitleForm.reportTitleZh,
+          reportTitleEn: this.reportTitleForm.reportTitleEn,
+          descriptionZh: current.descriptionZh ?? current.description_zh ?? null,
+          descriptionEn: current.descriptionEn ?? current.description_en ?? null,
+          logoUrl: current.logoUrl ?? current.logo_url ?? null
+        });
+        this.$message.success('报告标题已保存');
+        this.reportTitleEditMode = false;
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '保存失败'));
+      } finally {
+        this.reportTitleSaving = false;
+      }
+    },
     async load() {
       const { items, total } = await listReports({
         q: this.q || undefined,
@@ -226,25 +365,29 @@ export default {
       await this.load();
     },
     async onVoid(row) {
-      await this.$confirm(`确认将报告 ${row.reportNo} 作废？作废后客户预览将显示「此报告已作废」印章。`, '作废报告', {
-        type: 'warning'
-      });
+      await this.$confirm(
+        `确认将报告 ${row.reportUid || row.reportNo} 作废？作废后客户预览将显示「此报告已作废」印章。`,
+        '作废报告',
+        { type: 'warning' }
+      );
       try {
         await voidReport(row.id);
         this.$message.success('已设为作废');
         this.load();
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '作废失败');
+        this.$message.error(this.$apiUserMsg(e, '作废失败'));
       }
     },
     async onActivate(row) {
-      await this.$confirm(`确认将报告 ${row.reportNo} 恢复为有效？`, '恢复有效', { type: 'warning' });
+      await this.$confirm(`确认将报告 ${row.reportUid || row.reportNo} 恢复为有效？`, '恢复有效', {
+        type: 'warning'
+      });
       try {
         await activateReport(row.id);
         this.$message.success('已恢复为有效');
         this.load();
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '恢复失败');
+        this.$message.error(this.$apiUserMsg(e, '恢复失败'));
       }
     },
     async onGenQr() {
@@ -255,7 +398,7 @@ export default {
         this.qrResult = res;
         this.qrDialog = true;
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '生成失败');
+        this.$message.error(this.$apiUserMsg(e, '生成失败'));
       } finally {
         this.qrLoading = false;
       }
@@ -270,6 +413,16 @@ export default {
         await this.load();
       } catch (_) {
         // cancelled
+      }
+    },
+    async onExportJson() {
+      const ids = this.selected.map((r) => r.id);
+      if (!ids.length) return;
+      try {
+        await exportReportsJson(ids);
+        this.$message.success('已开始下载');
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '导出失败'));
       }
     },
     async onBulkVoid() {
@@ -356,6 +509,17 @@ export default {
 </script>
 
 <style scoped>
+.report-title-card {
+  margin-bottom: 12px;
+}
+.field-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.report-title-actions {
+  text-align: right;
+}
 .toolbar {
   display: flex;
   justify-content: space-between;
@@ -366,8 +530,29 @@ export default {
 .right {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+.right .el-button {
+  flex: 0 0 auto;
+}
+.right :deep(.el-button) {
+  --el-button-padding-horizontal: 10px;
+  border-radius: 8px;
+}
+.left :deep(.el-button) {
+  border-radius: 8px;
+}
+.reports-list :deep(.el-card),
+.reports-list :deep(.el-input__wrapper),
+.reports-list :deep(.el-select__wrapper),
+.reports-list :deep(.el-textarea__inner),
+.reports-list :deep(.el-dialog),
+.reports-list :deep(.el-table),
+.reports-list :deep(.el-table__inner-wrapper),
+.reports-list :deep(.el-pagination button),
+.reports-list :deep(.el-pagination .el-pager li) {
+  border-radius: 8px;
 }
 .field-q {
   width: 260px;
@@ -454,6 +639,13 @@ export default {
 }
 
 @media (max-width: 992px) {
+  .report-title-actions {
+    text-align: left;
+  }
+  .report-title-actions .el-button {
+    width: 100%;
+    min-height: 38px;
+  }
   .toolbar {
     flex-direction: column;
     align-items: stretch;
@@ -461,6 +653,9 @@ export default {
   .left,
   .right {
     width: 100%;
+  }
+  .right {
+    flex-wrap: wrap;
   }
   .field-q,
   .field-batch,

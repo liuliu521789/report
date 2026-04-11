@@ -6,11 +6,20 @@
           <div>公司信息（页眉固定内容）</div>
         </div>
       </template>
+      <el-alert
+        v-if="!canManageCompany"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="当前为只读查看，不可修改公司信息。"
+      />
 
       <el-form :model="form" label-width="120px" class="company-form" @submit.prevent>
         <el-form-item label="公司logo">
           <div class="logo-upload-row">
             <el-upload
+              v-if="canManageCompany"
               :action="uploadAction"
               :headers="uploadHeaders"
               :show-file-list="false"
@@ -31,29 +40,97 @@
         </el-form-item>
 
         <el-form-item label="描述语（中文）">
-          <el-input type="textarea" :rows="3" v-model="form.descriptionZh" />
+          <el-input type="textarea" :rows="3" v-model="form.descriptionZh" :readonly="!canManageCompany" />
         </el-form-item>
         <el-form-item label="Description (English)">
-          <el-input type="textarea" :rows="3" v-model="form.descriptionEn" />
+          <el-input type="textarea" :rows="3" v-model="form.descriptionEn" :readonly="!canManageCompany" />
         </el-form-item>
 
         <el-form-item label="公司名称（中文）">
-          <el-input v-model="form.companyNameZh" />
+          <el-input v-model="form.companyNameZh" :readonly="!canManageCompany" />
         </el-form-item>
         <el-form-item label="Company Name (English)">
-          <el-input v-model="form.companyNameEn" />
+          <el-input v-model="form.companyNameEn" :readonly="!canManageCompany" />
+        </el-form-item>
+        <el-form-item label="邮箱">
+          <el-input v-model="form.email" :readonly="!canManageCompany" placeholder="例如：contact@company.com" />
+        </el-form-item>
+        <el-form-item label="地址">
+          <el-input v-model="form.address" :readonly="!canManageCompany" />
         </el-form-item>
 
-        <el-form-item label="报告名称（中文）">
-          <el-input v-model="form.reportTitleZh" />
-        </el-form-item>
-        <el-form-item label="Report Title (English)">
-          <el-input v-model="form.reportTitleEn" />
-        </el-form-item>
       </el-form>
 
-      <div class="actions">
+      <div v-if="canManageCompany" class="actions">
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      </div>
+    </el-card>
+
+    <el-card v-if="isSuperAdminUser" class="quick-role-card" shadow="never">
+      <template #header>
+        <div class="field-header">
+          <div>快捷角色账号（仅超级管理员）</div>
+        </div>
+      </template>
+      <p class="quick-role-hint">
+        在控制台点击「销售 / 财务 / 仓库」快捷入口时，将以此处绑定的<strong>员工账号</strong>重新登录，菜单与权限与该员工一致。请先在各「员工类别」中维护好对应权限，再创建员工并绑定到此处。
+      </p>
+      <p class="quick-role-hint">
+        <strong>企业微信：</strong>销售提交订单财务审核时，系统会向此处「财务角色」对应员工发送企业微信（需在「员工账号」中为其填写与通讯录一致的
+        UserID，并完成「企业微信通知」中的应用配置）。未绑定财务快捷账号时，将向所有「财务」类别且填写了 UserID 的员工推送。
+      </p>
+      <el-form label-width="120px" class="company-form" @submit.prevent>
+        <el-form-item label="销售角色">
+          <el-select
+            v-model="quickRoles.salesUserId"
+            clearable
+            filterable
+            placeholder="选择员工账号"
+            class="w-full-select"
+          >
+            <el-option
+              v-for="u in employeeOptions"
+              :key="'s-' + u.id"
+              :label="formatUserOption(u)"
+              :value="u.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="财务角色">
+          <el-select
+            v-model="quickRoles.financeUserId"
+            clearable
+            filterable
+            placeholder="选择员工账号"
+            class="w-full-select"
+          >
+            <el-option
+              v-for="u in employeeOptions"
+              :key="'f-' + u.id"
+              :label="formatUserOption(u)"
+              :value="u.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="仓库角色">
+          <el-select
+            v-model="quickRoles.warehouseUserId"
+            clearable
+            filterable
+            placeholder="选择员工账号"
+            class="w-full-select"
+          >
+            <el-option
+              v-for="u in employeeOptions"
+              :key="'w-' + u.id"
+              :label="formatUserOption(u)"
+              :value="u.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <div class="actions">
+        <el-button type="primary" :loading="quickRoleSaving" @click="saveQuickRoles">保存绑定</el-button>
       </div>
     </el-card>
   </div>
@@ -61,8 +138,9 @@
 
 <script>
 import { mapState } from 'pinia';
-import { getCompanySettings, updateCompanySettings } from '../api';
+import { getCompanySettings, getQuickRoleUsers, listUsers, updateCompanySettings, updateQuickRoleUsers } from '../api';
 import { useAuthStore } from '../stores/auth';
+import { isSuperAdmin, perm } from '../utils/permissions';
 
 export default {
   name: 'CompanySettings',
@@ -72,16 +150,31 @@ export default {
       form: {
         companyNameZh: '',
         companyNameEn: '',
+        email: '',
+        address: '',
         reportTitleZh: '',
         reportTitleEn: '',
         descriptionZh: '',
         descriptionEn: '',
         logoUrl: ''
-      }
+      },
+      quickRoles: {
+        salesUserId: null,
+        financeUserId: null,
+        warehouseUserId: null
+      },
+      employeeOptions: [],
+      quickRoleSaving: false
     };
   },
   computed: {
     ...mapState(useAuthStore, ['token']),
+    isSuperAdminUser() {
+      return isSuperAdmin();
+    },
+    canManageCompany() {
+      return perm('company', 'manage');
+    },
     uploadAction() {
       const base = import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001';
       return `${base}/api/company/settings/logo`;
@@ -92,14 +185,58 @@ export default {
   },
   mounted() {
     this.load();
+    this.loadQuickRoleSection();
   },
   methods: {
+    formatUserOption(u) {
+      const cat = u.categoryNameZh || u.categoryCode || '';
+      return cat ? `${u.username}（${cat}）` : u.username;
+    },
+    async loadQuickRoleSection() {
+      if (!this.isSuperAdminUser) return;
+      try {
+        const [usersRes, qr] = await Promise.all([listUsers(), getQuickRoleUsers()]);
+        const items = usersRes?.items || [];
+        this.employeeOptions = items.filter(
+          (x) => x.accountType === 'employee' && (x.isActive === true || Number(x.isActive) === 1)
+        );
+        this.quickRoles = {
+          salesUserId: qr?.salesUserId ?? null,
+          financeUserId: qr?.financeUserId ?? null,
+          warehouseUserId: qr?.warehouseUserId ?? null
+        };
+      } catch {
+        this.employeeOptions = [];
+      }
+    },
+    async saveQuickRoles() {
+      this.quickRoleSaving = true;
+      try {
+        await updateQuickRoleUsers({
+          salesUserId: this.quickRoles.salesUserId,
+          financeUserId: this.quickRoles.financeUserId,
+          warehouseUserId: this.quickRoles.warehouseUserId
+        });
+        this.$message.success('快捷角色绑定已保存');
+      } catch (e) {
+        const err = e?.response?.data?.error;
+        if (err === 'INVALID_QUICK_ROLE_USER') {
+          this.$message.error('所选账号须为已启用的员工');
+        } else {
+          this.$message.error(this.$apiUserMsg(e, '保存失败'));
+        }
+      } finally {
+        this.quickRoleSaving = false;
+      }
+    },
     async load() {
       const { settings } = await getCompanySettings();
       if (!settings) return;
       this.form = {
         companyNameZh: settings.companyNameZh || settings.company_name_zh || '',
         companyNameEn: settings.companyNameEn || settings.company_name_en || '',
+        email: settings.email || settings.company_email || '',
+        address: settings.address || settings.company_address || '',
         reportTitleZh: settings.reportTitleZh || settings.report_title_zh || '',
         reportTitleEn: settings.reportTitleEn || settings.report_title_en || '',
         descriptionZh: settings.descriptionZh || settings.description_zh || '',
@@ -131,6 +268,8 @@ export default {
         await updateCompanySettings({
           companyNameZh: this.form.companyNameZh,
           companyNameEn: this.form.companyNameEn,
+          email: this.form.email || null,
+          address: this.form.address || null,
           reportTitleZh: this.form.reportTitleZh,
           reportTitleEn: this.form.reportTitleEn,
           descriptionZh: this.form.descriptionZh,
@@ -139,7 +278,7 @@ export default {
         });
         this.$message.success('保存成功');
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '保存失败');
+        this.$message.error(this.$apiUserMsg(e, '保存失败'));
       } finally {
         this.saving = false;
       }
@@ -151,6 +290,22 @@ export default {
 <style scoped>
 .company-page {
   max-width: 920px;
+}
+
+.quick-role-card {
+  margin-top: 16px;
+}
+
+.quick-role-hint {
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.w-full-select {
+  width: 100%;
+  max-width: 420px;
 }
 
 .field-header {

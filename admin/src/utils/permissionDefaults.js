@@ -25,6 +25,8 @@ export function emptyPermissionShape() {
       bulkDelete: false,
       previewPrint: false,
       seals: false,
+      export: false,
+      chairmanApprove: false,
       fieldEdit: defaultFieldEditShape()
     },
     qrcodes: {
@@ -37,10 +39,53 @@ export function emptyPermissionShape() {
       use: false
     },
     stamps: {
-      manage: false
+      manage: false,
+      view: false
     },
     company: {
-      manage: false
+      manage: false,
+      view: false
+    },
+    audit: {
+      viewLogin: false,
+      viewOperations: false,
+      viewErrors: false,
+      exportAudit: false
+    },
+    wecom: {
+      manage: false,
+      send: false
+    },
+    order_management: {
+      order_input: false,
+      order_query: false,
+      order_query_all: false,
+      order_edit: false,
+      order_submit: false,
+      order_withdraw: false,
+      order_status_finance: false,
+      order_status_warehouse: false,
+      order_ship: false,
+      order_view_status_logs: false,
+      order_cancel: false,
+      order_delete: false,
+      order_field_config: false
+    },
+    contract_management: {
+      template_manage: false,
+      contract_generate: false,
+      contract_submit: false,
+      contract_review: false,
+      contract_view: false,
+      contract_edit: false,
+      contract_delete: false
+    },
+    process_management: {
+      view_flow: false
+    },
+    data_management: {
+      data_export: false,
+      data_export_all: false
     }
   };
 }

@@ -25,6 +25,10 @@ export function requireAuth(req, res, next) {
         return res.status(401).json({ error: 'UNAUTHORIZED' });
       }
     }
+    if (payload.userId == null && payload.sub != null) {
+      const n = Number(payload.sub);
+      if (Number.isFinite(n) && n >= 1) payload.userId = n;
+    }
     req.user = payload;
     return next();
   } catch {

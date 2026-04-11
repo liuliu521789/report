@@ -157,7 +157,7 @@ export default {
       }
 
       const text =
-        '【质检报告系统】我需要技术支持，请超级管理员在后台「账号管理 → 技术支持联系」中填写技术工程师微信号，以便我们在操作指南中复制联系。';
+        '【物源数智管控平台】我需要技术支持，请超级管理员在后台「账号管理 → 技术支持联系」中填写技术工程师微信号，以便我们在操作指南中复制联系。';
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).then(
           () =>
@@ -175,6 +175,7 @@ export default {
 <style scoped>
 .op-guide-page {
   max-width: 880px;
+  overflow-x: hidden;
 }
 
 .op-guide-card {

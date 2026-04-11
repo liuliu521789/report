@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "ensure-sales-schema": "node scripts/ensure-sales-schema.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -17,9 +18,11 @@
     "multer": "^2.0.0",
     "mysql2": "^3.11.0",
     "nanoid": "^5.0.7",
+    "otplib": "^12.0.1",
     "puppeteer": "^24.40.0",
     "qrcode": "^1.5.4",
     "swagger-ui-express": "^5.0.1",
+    "xlsx": "^0.18.5",
     "yaml": "^2.8.3",
     "zod": "^3.23.8"
   }

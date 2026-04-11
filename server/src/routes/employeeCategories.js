@@ -18,13 +18,15 @@ const createSchema = z.object({
     .max(32)
     .regex(/^[a-z][a-z0-9_]*$/i, 'code 仅字母数字下划线'),
   sortOrder: z.number().int().optional(),
-  defaultPermissions: z.any().optional()
+  defaultPermissions: z.any().optional(),
+  requireTwoFactor: z.boolean().optional()
 });
 
 const updateSchema = z.object({
   nameZh: z.string().min(1).max(64).optional(),
   sortOrder: z.number().int().optional(),
-  defaultPermissions: z.any().optional()
+  defaultPermissions: z.any().optional(),
+  requireTwoFactor: z.boolean().optional()
 });
 
 router.get('/', async (req, res) => {
@@ -32,12 +34,14 @@ router.get('/', async (req, res) => {
   const [rows] = await pool.query(
     `SELECT id, name_zh AS nameZh, code, sort_order AS sortOrder,
             default_permissions_json AS defaultPermissions,
+            IFNULL(require_two_factor, 0) AS requireTwoFactor,
             created_at AS createdAt
      FROM employee_categories ORDER BY sort_order ASC, id ASC`
   );
   const items = (rows || []).map((r) => ({
     ...r,
-    defaultPermissions: parsePermissionsJson(r.defaultPermissions)
+    defaultPermissions: parsePermissionsJson(r.defaultPermissions),
+    requireTwoFactor: !!(r.requireTwoFactor === 1 || r.requireTwoFactor === true)
   }));
   res.json({ items });
 });
@@ -45,13 +49,13 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const { nameZh, code, sortOrder = 0, defaultPermissions } = parsed.data;
+  const { nameZh, code, sortOrder = 0, defaultPermissions, requireTwoFactor = false } = parsed.data;
   const merged = mergePermissions(emptyPermissions(), defaultPermissions || {});
   const pool = getPool();
   try {
     const [result] = await pool.query(
-      'INSERT INTO employee_categories (name_zh, code, sort_order, default_permissions_json) VALUES (?, ?, ?, ?)',
-      [nameZh, code.toLowerCase(), sortOrder, JSON.stringify(merged)]
+      'INSERT INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor) VALUES (?, ?, ?, ?, ?)',
+      [nameZh, code.toLowerCase(), sortOrder, JSON.stringify(merged), requireTwoFactor ? 1 : 0]
     );
     res.status(201).json({ id: result.insertId });
   } catch (e) {
@@ -65,7 +69,7 @@ router.put('/:id', async (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const { nameZh, sortOrder, defaultPermissions } = parsed.data;
+  const { nameZh, sortOrder, defaultPermissions, requireTwoFactor } = parsed.data;
 
   const pool = getPool();
   const [exist] = await pool.query('SELECT id FROM employee_categories WHERE id=? LIMIT 1', [id]);
@@ -80,6 +84,10 @@ router.put('/:id', async (req, res) => {
   if (sortOrder !== undefined) {
     sets.push('sort_order = ?');
     params.push(sortOrder);
+  }
+  if (requireTwoFactor !== undefined) {
+    sets.push('require_two_factor = ?');
+    params.push(requireTwoFactor ? 1 : 0);
   }
   if (defaultPermissions !== undefined) {
     const [curRows] = await pool.query('SELECT default_permissions_json FROM employee_categories WHERE id=?', [id]);
@@ -101,7 +109,7 @@ router.delete('/:id', async (req, res) => {
   const pool = getPool();
   const [qc] = await pool.query('SELECT code FROM employee_categories WHERE id=?', [id]);
   if (!qc?.[0]) return res.status(404).json({ error: 'NOT_FOUND' });
-  if (qc[0].code === 'qc' || qc[0].code === 'cs') {
+  if (qc[0].code === 'qc' || qc[0].code === 'cs' || qc[0].code === 'chairman') {
     return res.status(400).json({ error: 'CANNOT_DELETE_BUILTIN' });
   }
 

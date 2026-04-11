@@ -7,6 +7,13 @@ import {
   getReportCustomerPayload,
   normalizePublicSummaryAssets
 } from '../lib/reportCustomerPayload.js';
+import { verifyWecomShipToken } from '../lib/wecomShipToken.js';
+import { performWecomQuickShip } from '../lib/wecomOrderQuickShip.js';
+import {
+  attachCustomerNamesToOrders,
+  formatWarehouseWecomOrderDetail,
+  loadOrderFieldDefinitions
+} from '../lib/salesOrderFields.js';
 
 export const router = Router();
 
@@ -163,6 +170,7 @@ function sendScanLandingHtml(req, res) {
         margin: 0;
       }
       .report-card .meta + .meta { margin-top: 4px; }
+      .report-card .no.meta-sm { font-size: 13px; opacity: 0.9; margin-top: 4px; }
       .btn-detail {
         display: block;
         width: 100%;
@@ -319,6 +327,264 @@ function sendScanLandingHtml(req, res) {
 router.get('/scan.html', sendScanLandingHtml);
 router.get('/api/public/scan', sendScanLandingHtml);
 router.get('/miniprogram/index.html', sendScanLandingHtml);
+
+function wecomShipEscapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function wecomOrderShipResultHtml(ok, title, message) {
+  const accent = ok ? '#16a34a' : '#dc2626';
+  const icon = ok ? '✓' : '!';
+  const safeTitle = wecomShipEscapeHtml(title);
+  const safeMsg = wecomShipEscapeHtml(message);
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>${safeTitle}</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #f1f5f9; color: #0f172a; display: flex; align-items: center; justify-content: center; padding: 24px; }
+      .card { background: #fff; border-radius: 12px; padding: 28px 24px; max-width: 400px; width: 100%; box-shadow: 0 4px 24px rgba(15,23,42,0.08); text-align: center; }
+      .icon { width: 52px; height: 52px; margin: 0 auto 16px; border-radius: 50%; background: ${accent}; color: #fff; font-size: 28px; line-height: 52px; font-weight: 700; }
+      h1 { font-size: 18px; margin: 0 0 10px; }
+      p { margin: 0; font-size: 15px; color: #475569; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="icon" aria-hidden="true">${icon}</div>
+      <h1>${safeTitle}</h1>
+      <p>${safeMsg}</p>
+    </div>
+  </body>
+</html>`;
+}
+
+function escapeHtmlAttr(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
+/** 企业微信卡片整块同 URL：先进此页展示摘要，仅页面底部按钮跳转真正发货接口，避免误点正文即发货 */
+function wecomOrderShipConfirmPageHtml({ orderNo, orderDetailText, canShip, shipHref, blockReason }) {
+  const detailRaw =
+    orderDetailText != null && String(orderDetailText).trim() !== ''
+      ? String(orderDetailText)
+      : `订单号：${orderNo || '—'}`;
+  const detailHtml = `<div class="order-detail">${wecomShipEscapeHtml(detailRaw)}</div>`;
+  const reasonHtml = blockReason
+    ? `<p class="hint-warn">${wecomShipEscapeHtml(blockReason)}</p>`
+    : '';
+  const btnHtml = canShip
+    ? `<a class="btn-ship" href="${escapeHtmlAttr(shipHref)}">完成发货</a>`
+    : '';
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>确认发货</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #f1f5f9; color: #0f172a; display: flex; align-items: center; justify-content: center;
+        padding: 24px; padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+      .card { background: #fff; border-radius: 12px; padding: 24px 22px 26px; max-width: 420px; width: 100%;
+        box-shadow: 0 4px 24px rgba(15,23,42,0.08); }
+      h1 { font-size: 18px; margin: 0 0 14px; text-align: center; }
+      .order-detail {
+        white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.55; color: #334155;
+        background: #f8fafc; border: 1px solid #e2e8f0; padding: 14px 14px; border-radius: 10px;
+        margin: 0 0 16px; text-align: left;
+      }
+      p.lead { margin: 0 0 14px; font-size: 15px; color: #334155; line-height: 1.55; }
+      .hint-warn { margin: 0 0 12px; font-size: 14px; color: #b45309; line-height: 1.5; }
+      .btn-ship {
+        display: block; width: 100%; margin-top: 20px; padding: 14px 16px; border-radius: 10px;
+        background: #16a34a; color: #fff !important; font-size: 16px; font-weight: 600; text-align: center;
+        text-decoration: none; -webkit-tap-highlight-color: transparent;
+      }
+      .btn-ship:active { opacity: 0.92; }
+      .fine { margin: 14px 0 0; font-size: 12px; color: #94a3b8; line-height: 1.45; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>确认发货</h1>
+      ${detailHtml}
+      <p class="lead">请对照以上信息确认备货无误后，点击下方按钮将本单标记为「已发货」。打开本页不会自动发货。</p>
+      ${reasonHtml}
+      ${btnHtml}
+      <p class="fine">若按钮不可用，请回到电脑端订单管理处理，或联系财务重新推送。</p>
+    </div>
+  </body>
+</html>`;
+}
+
+/** 自检：在手机/企业微信中打开，确认能访问到本服务（与「完成发货」同机同域） */
+router.get('/api/public/wecom-order-ship-probe', (req, res) => {
+  res.type('text').send('wecom-ship-probe-ok');
+});
+
+router.get('/api/public/wecom-order-ship-confirm', async (req, res) => {
+  try {
+    const token = String(req.query.t || '').trim();
+    if (!token) {
+      return res
+        .status(400)
+        .type('html')
+        .send(
+          wecomOrderShipResultHtml(false, '无法打开', '链接无效，请从企业微信订单卡片重新进入。')
+        );
+    }
+    let orderId;
+    try {
+      ({ orderId } = verifyWecomShipToken(token));
+    } catch {
+      return res
+        .status(400)
+        .type('html')
+        .send(
+          wecomOrderShipResultHtml(
+            false,
+            '链接无效或已过期',
+            '请让财务重新审核通过，或联系管理员检查服务器时间与 JWT 配置。'
+          )
+        );
+    }
+    const pool = getPool();
+    const [rows] = await pool.query('SELECT * FROM sales_orders WHERE id = ? LIMIT 1', [orderId]);
+    const row = rows?.[0];
+    if (!row) {
+      return res
+        .status(404)
+        .type('html')
+        .send(wecomOrderShipResultHtml(false, '订单不存在', '该订单可能已删除。'));
+    }
+    const orderNo = row.order_no != null ? String(row.order_no) : '';
+    const status = row.status != null ? String(row.status) : '';
+    const definitions = await loadOrderFieldDefinitions(pool, { activeOnly: true });
+    const enriched = await attachCustomerNamesToOrders(pool, [row]);
+    const orderDetailText = formatWarehouseWecomOrderDetail(enriched[0], definitions);
+    const pubBase = String(process.env.PUBLIC_BASE_URL || '')
+      .trim()
+      .replace(/\/$/, '');
+    const origin = pubBase || `${req.protocol}://${req.get('host') || ''}`;
+    const shipHref = `${origin}/api/public/wecom-order-ship?t=${encodeURIComponent(token)}`;
+
+    if (status === 'shipped') {
+      return res
+        .type('html')
+        .send(
+          wecomOrderShipConfirmPageHtml({
+            orderNo,
+            orderDetailText,
+            canShip: false,
+            shipHref,
+            blockReason: '该订单已是「已发货」状态，无需重复操作。'
+          })
+        );
+    }
+    if (status !== 'approved') {
+      return res
+        .type('html')
+        .send(
+          wecomOrderShipConfirmPageHtml({
+            orderNo,
+            orderDetailText,
+            canShip: false,
+            shipHref,
+            blockReason: '当前订单状态不允许从本页发货（可能已撤回或未在「已审核」状态）。请在电脑端查看订单。'
+          })
+        );
+    }
+    return res
+      .type('html')
+      .send(
+        wecomOrderShipConfirmPageHtml({
+          orderNo,
+          orderDetailText,
+          canShip: true,
+          shipHref,
+          blockReason: ''
+        })
+      );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-order-ship-confirm]', e?.message || e);
+    return res
+      .status(500)
+      .type('html')
+      .send(
+        wecomOrderShipResultHtml(false, '暂时无法打开', '服务器异常，请稍后在电脑端订单管理中发货。')
+      );
+  }
+});
+
+/** 企业微信确认页内「完成发货」：GET 即执行发货（JWT 链接，无需登录） */
+router.get('/api/public/wecom-order-ship', async (req, res) => {
+  try {
+    const token = String(req.query.t || '').trim();
+    if (!token) {
+      return res
+        .status(400)
+        .type('html')
+        .send(
+          wecomOrderShipResultHtml(
+            false,
+            '无法发货',
+            '链接无效，请先打开确认页后点击下方「完成发货」按钮。'
+          )
+        );
+    }
+    let orderId;
+    try {
+      ({ orderId } = verifyWecomShipToken(token));
+    } catch {
+      return res
+        .status(400)
+        .type('html')
+        .send(
+          wecomOrderShipResultHtml(
+            false,
+            '链接无效或已过期',
+            '请让财务重新审核通过，或联系管理员检查服务器时间与 JWT 配置。'
+          )
+        );
+    }
+    const pool = getPool();
+    const r = await performWecomQuickShip(pool, orderId);
+    if (!r.ok) {
+      const status = r.code === 'NOT_FOUND' ? 404 : 400;
+      return res.status(status).type('html').send(wecomOrderShipResultHtml(false, '无法发货', r.message));
+    }
+    return res
+      .type('html')
+      .send(wecomOrderShipResultHtml(true, '发货成功', '订单状态已更新为「已发货」。可关闭本页。'));
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-order-ship]', e?.message || e);
+    return res
+      .status(500)
+      .type('html')
+      .send(
+        wecomOrderShipResultHtml(
+          false,
+          '暂时无法处理',
+          '服务器异常，请稍后在电脑端订单管理中发货，或联系管理员查看日志。'
+        )
+      );
+  }
+});
 
 function sendReportCustomerHtml(req, res) {
   res.type('html').send(`<!doctype html>
@@ -785,7 +1051,7 @@ function sendReportCustomerHtml(req, res) {
           <div class="paper-top-right">
             <div id="voidStamp" class="void-stamp" aria-hidden="true">此报告已作废</div>
             <div class="doc-no-line">
-              <span class="lbl">编号</span><span class="val" id="m_reportNo"></span>
+              <span class="lbl">报告编号</span><span class="val" id="m_reportNo"></span>
             </div>
           </div>
         </div>
@@ -1494,8 +1760,8 @@ router.get('/api/public/summary', async (req, res) => {
   );
   const stamps = mapActiveStamps(stampRows);
 
-  const [reports] = await pool.query(
-    `SELECT r.id, r.report_no AS reportNo, r.product_name AS productName, r.batch_no AS batchNo, r.conclusion, r.status
+    const [reports] = await pool.query(
+    `SELECT r.id, r.report_uid AS reportUid, r.report_no AS reportNo, r.product_name AS productName, r.batch_no AS batchNo, r.conclusion, r.status
      FROM qrcode_reports qr
      JOIN reports r ON r.id = qr.report_id
      WHERE qr.qrcode_id = ?
@@ -1573,9 +1839,12 @@ router.get('/api/public/report/:id/pdf', async (req, res) => {
       preferCSSPageSize: true
     });
 
-    const reportNo = String(payload?.report?.reportNo || id).replace(/[\\/:*?"<>|\s]+/g, '_');
+    const fnameId = String(payload?.report?.reportUid || payload?.report?.reportNo || id).replace(
+      /[\\/:*?"<>|\s]+/g,
+      '_'
+    );
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="report-${reportNo}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="report-${fnameId}.pdf"`);
     res.status(200).send(Buffer.from(pdf));
   } finally {
     if (browser) await browser.close().catch(() => {});

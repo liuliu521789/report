@@ -11,17 +11,21 @@
       <el-table-column label="类型" width="120">
         <template #default="{ row }">
           <el-tag v-if="row.accountType === 'super_admin'" type="danger" size="small">超级管理员</el-tag>
+          <el-tag v-else-if="row.accountType === 'manager'" type="warning" size="small">管理</el-tag>
           <el-tag v-else type="info" size="small">员工</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="categoryNameZh" label="员工类别" width="120" />
+      <el-table-column prop="departmentNameZh" label="所属部门" min-width="140" show-overflow-tooltip />
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
           <el-tag v-if="row.isActive" type="success" size="small">启用</el-tag>
           <el-tag v-else type="info" size="small">停用</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="createdAt" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ $dt(row.createdAt) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
           <el-button link @click="openEdit(row)">编辑</el-button>
@@ -33,12 +37,14 @@
         <div class="mobile-head">
           <strong>{{ row.username }}</strong>
           <el-tag v-if="row.accountType === 'super_admin'" type="danger" size="small">超级管理员</el-tag>
+          <el-tag v-else-if="row.accountType === 'manager'" type="warning" size="small">管理</el-tag>
           <el-tag v-else type="info" size="small">员工</el-tag>
         </div>
         <div class="mobile-line"><span>ID</span><span>{{ row.id }}</span></div>
         <div class="mobile-line"><span>员工类别</span><span>{{ row.categoryNameZh || '-' }}</span></div>
+        <div class="mobile-line"><span>所属部门</span><span>{{ row.departmentNameZh || '-' }}</span></div>
         <div class="mobile-line"><span>状态</span><span>{{ row.isActive ? '启用' : '停用' }}</span></div>
-        <div class="mobile-line"><span>创建时间</span><span>{{ row.createdAt }}</span></div>
+        <div class="mobile-line"><span>创建时间</span><span>{{ $dt(row.createdAt) }}</span></div>
         <div class="mobile-actions">
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
         </div>
@@ -55,17 +61,31 @@
           <el-input v-model="form.password" type="password" show-password autocomplete="new-password" />
         </el-form-item>
         <el-form-item label="账号类型" prop="accountType">
-          <el-radio-group v-model="form.accountType" :disabled="dialogMode === 'edit'">
+          <el-radio-group v-model="form.accountType" :disabled="dialogMode === 'edit' && !isSuperAdminUser">
             <el-radio label="super_admin">超级管理员</el-radio>
+            <el-radio label="manager">管理</el-radio>
             <el-radio label="employee">员工</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="form.accountType === 'employee'" label="员工类别" prop="employeeCategoryId">
-          <el-select v-model="form.employeeCategoryId" placeholder="选择类别" style="width: 100%">
+        <el-form-item v-if="isStaffAccountType(form.accountType)" label="员工类别" prop="employeeCategoryId">
+          <el-select
+            v-model="form.employeeCategoryId"
+            placeholder="选择类别"
+            style="width: 100%"
+            @change="onEmployeeCategoryChange"
+          >
             <el-option v-for="c in categories" :key="c.id" :label="c.nameZh" :value="c.id" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="form.accountType === 'employee'" label="权限">
+        <el-form-item v-if="isStaffAccountType(form.accountType)" label="所属部门">
+          <el-select v-model="form.departmentId" clearable filterable placeholder="可选，先在「部门管理」中维护" style="width: 100%">
+            <el-option v-for="d in departmentSelectOptions" :key="d.id" :label="d.label" :value="d.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="isStaffAccountType(form.accountType)" label="企业微信 UserID">
+          <el-input v-model="form.wecomUserId" maxlength="64" clearable placeholder="与通讯录成员账号一致；财务快捷账号填此项后可收提交审核通知" />
+        </el-form-item>
+        <el-form-item v-if="isStaffAccountType(form.accountType)" label="权限">
           <div class="sub">与类别默认合并保存；可逐项调整。</div>
           <permission-toggles v-model="form.permissions" />
         </el-form-item>
@@ -85,9 +105,10 @@
 </template>
 
 <script>
-import { createUser, listEmployeeCategories, listUsers, updateUser } from '../api';
+import { createUser, listDepartmentsFlat, listEmployeeCategories, listUsers, updateUser } from '../api';
 import PermissionToggles from '../components/PermissionToggles.vue';
 import { emptyPermissionShape, mergeIntoShape } from '../utils/permissionDefaults';
+import { isSuperAdmin } from '../utils/permissions';
 
 export default {
   name: 'UsersManage',
@@ -97,6 +118,7 @@ export default {
       loading: false,
       items: [],
       categories: [],
+      departmentsFlat: [],
       dialog: false,
       dialogMode: 'create',
       saving: false,
@@ -106,6 +128,8 @@ export default {
         password: '',
         accountType: 'employee',
         employeeCategoryId: null,
+        departmentId: null,
+        wecomUserId: '',
         permissions: {},
         isActive: true,
         passwordEdit: ''
@@ -113,6 +137,30 @@ export default {
     };
   },
   computed: {
+    isSuperAdminUser() {
+      return isSuperAdmin();
+    },
+    departmentById() {
+      const m = {};
+      for (const r of this.departmentsFlat) m[r.id] = r;
+      return m;
+    },
+    departmentSelectOptions() {
+      const path = (id) => {
+        const parts = [];
+        let cur = this.departmentById[id];
+        const seen = new Set();
+        while (cur && !seen.has(cur.id)) {
+          seen.add(cur.id);
+          parts.unshift(cur.nameZh);
+          cur = cur.parentId != null ? this.departmentById[cur.parentId] : null;
+        }
+        return parts.join(' / ');
+      };
+      return (this.departmentsFlat || [])
+        .map((d) => ({ id: d.id, label: path(d.id) }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'));
+    },
     formRules() {
       const pwdRule = (rule, value, callback) => {
         if (!value || value.length < 6) callback(new Error('密码至少 6 位'));
@@ -124,7 +172,7 @@ export default {
         else callback();
       };
       const catRule = (rule, value, callback) => {
-        if (this.form.accountType === 'employee' && !value) callback(new Error('请选择员工类别'));
+        if (this.isStaffAccountType(this.form.accountType) && !value) callback(new Error('请选择员工类别'));
         else callback();
       };
       if (this.dialogMode === 'create') {
@@ -144,8 +192,20 @@ export default {
   mounted() {
     this.load();
     this.loadCategories();
+    this.loadDepartments();
   },
   methods: {
+    isStaffAccountType(at) {
+      return at === 'employee' || at === 'manager';
+    },
+    async loadDepartments() {
+      try {
+        const { items } = await listDepartmentsFlat();
+        this.departmentsFlat = items || [];
+      } catch (_) {
+        this.departmentsFlat = [];
+      }
+    },
     async loadCategories() {
       try {
         const { items } = await listEmployeeCategories();
@@ -163,7 +223,7 @@ export default {
           isActive: Number(r.isActive) === 1
         }));
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '加载失败');
+        this.$message.error(this.$apiUserMsg(e, '加载失败'));
       } finally {
         this.loading = false;
       }
@@ -182,6 +242,8 @@ export default {
         password: '',
         accountType: row.accountType,
         employeeCategoryId: row.employeeCategoryId || null,
+        departmentId: row.departmentId || null,
+        wecomUserId: row.wecomUserId || '',
         permissions: mergeIntoShape(emptyPermissionShape(), row.permissions || {}),
         isActive: !!row.isActive,
         passwordEdit: ''
@@ -189,16 +251,32 @@ export default {
       this.dialog = true;
     },
     resetForm() {
+      const firstCategoryId = this.categories[0]?.id || null;
       this.form = {
         username: '',
         password: '',
         accountType: 'employee',
-        employeeCategoryId: this.categories[0]?.id || null,
+        employeeCategoryId: firstCategoryId,
+        departmentId: null,
+        wecomUserId: '',
         permissions: {},
         isActive: true,
         passwordEdit: ''
       };
+      // 根据初始员工类别设置默认权限（若已加载类别）
+      if (firstCategoryId) {
+        this.applyCategoryDefaultPermissions(firstCategoryId);
+      }
       this.$nextTick(() => this.$refs.formRef && this.$refs.formRef.clearValidate());
+    },
+    onEmployeeCategoryChange(val) {
+      this.applyCategoryDefaultPermissions(val);
+    },
+    applyCategoryDefaultPermissions(categoryId) {
+      const category = this.categories.find((c) => c.id === categoryId);
+      if (!category) return;
+      const defaults = category.defaultPermissions || {};
+      this.form.permissions = mergeIntoShape(emptyPermissionShape(), defaults);
     },
     submit() {
       this.$refs.formRef.validate(async (ok) => {
@@ -211,8 +289,10 @@ export default {
               password: this.form.password,
               accountType: this.form.accountType
             };
-            if (this.form.accountType === 'employee') {
+            if (this.isStaffAccountType(this.form.accountType)) {
               payload.employeeCategoryId = this.form.employeeCategoryId;
+              payload.departmentId = this.form.departmentId ?? null;
+              payload.wecomUserId = (this.form.wecomUserId || '').trim() || null;
               payload.permissions = this.form.permissions;
             }
             await createUser(payload);
@@ -222,8 +302,10 @@ export default {
               accountType: this.form.accountType,
               isActive: this.form.isActive
             };
-            if (this.form.accountType === 'employee') {
+            if (this.isStaffAccountType(this.form.accountType)) {
               payload.employeeCategoryId = this.form.employeeCategoryId;
+              payload.departmentId = this.form.departmentId ?? null;
+              payload.wecomUserId = (this.form.wecomUserId || '').trim() || null;
               payload.permissions = this.form.permissions;
             }
             if (this.form.passwordEdit && this.form.passwordEdit.length >= 6) {
@@ -234,6 +316,7 @@ export default {
           }
           this.dialog = false;
           this.load();
+          this.loadDepartments();
         } catch (e) {
           const code = e?.response?.data?.error;
           if (code === 'USERNAME_EXISTS') this.$message.error('用户名已存在');

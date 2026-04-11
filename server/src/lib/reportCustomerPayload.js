@@ -35,6 +35,7 @@ export async function getCompanySettings(pool) {
 export async function getReportCustomerPayload(pool, id) {
   const [rRows] = await pool.query(
     `SELECT id,
+            report_uid AS reportUid,
             report_no AS reportNo,
             batch_no AS batchNo,
             batch_no_en AS batchNoEn,

@@ -52,7 +52,9 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="createdAt" label="创建时间" width="200" />
+      <el-table-column label="创建时间" width="200">
+        <template #default="{ row }">{{ $dt(row.createdAt) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="180">
         <template #default="{ row }">
           <el-button link @click="open(row)">查看</el-button>
@@ -65,7 +67,7 @@
       <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
         <div class="mobile-head">
           <strong>#{{ row.id }}</strong>
-          <span>{{ row.createdAt }}</span>
+          <span>{{ $dt(row.createdAt) }}</span>
         </div>
         <div class="mobile-line"><span>Token</span><span>{{ row.token }}</span></div>
         <div class="mobile-line"><span>绑定报告数</span><span>{{ row.reportCount }}</span></div>
@@ -113,7 +115,8 @@
       <div v-loading="qrLoading" v-if="detail">
         <div style="margin-bottom: 12px">
           <el-table :data="detail.qrcode.reports" border size="small">
-            <el-table-column prop="reportNo" label="报告编号" width="160" />
+            <el-table-column prop="reportUid" label="报告ID" width="130" />
+            <el-table-column prop="reportNo" label="报告编号" width="110" />
             <el-table-column prop="productName" label="产品名称" />
             <el-table-column prop="batchNo" label="批次" width="140" />
             <el-table-column label="判定" width="90">
@@ -211,7 +214,7 @@ export default {
         this.qrScanUrl = qr.scanUrl;
         this.qrDataUrl = qr.qrDataUrl;
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '获取二维码详情失败');
+        this.$message.error(this.$apiUserMsg(e, '获取二维码详情失败'));
       } finally {
         this.qrLoading = false;
       }

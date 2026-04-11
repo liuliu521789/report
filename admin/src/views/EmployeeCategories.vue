@@ -2,7 +2,7 @@
   <div class="categories-page">
     <div class="toolbar">
       <el-button type="primary" @click="openCreate">新增类别</el-button>
-      <span class="hint">内置「品管」「客服」不可删除；可新增其他类别并配置默认权限。</span>
+      <span class="hint">内置「品管」「客服」「董事长」不可删除；可新增其他类别并配置默认权限。</span>
     </div>
 
     <el-table v-loading="loading" :data="items" border class="desktop-table">
@@ -15,7 +15,7 @@
           <el-button link @click="openEdit(row)">编辑</el-button>
           <el-button
             link
-            :disabled="row.code === 'qc' || row.code === 'cs'"
+            :disabled="row.code === 'qc' || row.code === 'cs' || row.code === 'chairman'"
             @click="onDelete(row)"
           >
             删除
@@ -35,7 +35,7 @@
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
           <el-button
             size="small"
-            :disabled="row.code === 'qc' || row.code === 'cs'"
+            :disabled="row.code === 'qc' || row.code === 'cs' || row.code === 'chairman'"
             @click="onDelete(row)"
           >
             删除
@@ -55,6 +55,10 @@
         </el-form-item>
         <el-form-item label="排序" prop="sortOrder">
           <el-input-number v-model="form.sortOrder" :min="0" :max="9999" />
+        </el-form-item>
+        <el-form-item label="强制双因素认证">
+          <el-switch v-model="form.requireTwoFactor" active-text="开启" inactive-text="关闭" />
+          <div class="sub-hint">开启后，该类员工须绑定验证器 App，登录时除密码外需输入 6 位动态码（如董事长岗位）。</div>
         </el-form-item>
         <el-form-item label="默认权限">
           <permission-toggles v-model="form.defaultPermissions" />
@@ -92,6 +96,7 @@ export default {
         code: '',
         nameZh: '',
         sortOrder: 0,
+        requireTwoFactor: false,
         defaultPermissions: {}
       },
       rules: {
@@ -110,7 +115,7 @@ export default {
         const { items } = await listEmployeeCategories();
         this.items = items || [];
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '加载失败');
+        this.$message.error(this.$apiUserMsg(e, '加载失败'));
       } finally {
         this.loading = false;
       }
@@ -127,6 +132,7 @@ export default {
         code: row.code,
         nameZh: row.nameZh,
         sortOrder: row.sortOrder,
+        requireTwoFactor: !!row.requireTwoFactor,
         defaultPermissions: row.defaultPermissions ? { ...row.defaultPermissions } : {}
       };
       this.dialog = true;
@@ -137,6 +143,7 @@ export default {
         code: '',
         nameZh: '',
         sortOrder: 0,
+        requireTwoFactor: false,
         defaultPermissions: {}
       };
       this.$nextTick(() => this.$refs.formRef && this.$refs.formRef.clearValidate());
@@ -151,6 +158,7 @@ export default {
               code: this.form.code.trim().toLowerCase(),
               nameZh: this.form.nameZh.trim(),
               sortOrder: this.form.sortOrder,
+              requireTwoFactor: this.form.requireTwoFactor,
               defaultPermissions: this.form.defaultPermissions
             });
             this.$message.success('已创建');
@@ -158,6 +166,7 @@ export default {
             await updateEmployeeCategory(this.editingId, {
               nameZh: this.form.nameZh.trim(),
               sortOrder: this.form.sortOrder,
+              requireTwoFactor: this.form.requireTwoFactor,
               defaultPermissions: this.form.defaultPermissions
             });
             this.$message.success('已保存');
@@ -201,6 +210,12 @@ export default {
 .hint {
   font-size: 12px;
   color: #64748b;
+}
+.sub-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.45;
 }
 .mobile-list {
   display: none;

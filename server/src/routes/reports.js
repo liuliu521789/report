@@ -6,10 +6,20 @@ import { getReportCustomerPayload } from '../lib/reportCustomerPayload.js';
 import { sanitizeReportPutBody } from '../lib/reportWriteSanitize.js';
 import { logOperationFromReq } from '../lib/audit.js';
 import { requireAuth, requireAnyPermission, requirePermission } from '../middleware/auth.js';
+import { hasPermission } from '../lib/permissions.js';
+import { isPermissionedStaffType } from '../lib/accountTypes.js';
 
 export const router = Router();
 
 router.use(requireAuth);
+
+/** MySQL ER_DUP_ENTRY：按索引区分 */
+function duplicateKeyErrorCode(e) {
+  const msg = String(e?.sqlMessage || e?.message || '');
+  if (msg.includes('uk_report_fields_report_key')) return 'REPORT_FIELD_KEY_DUPLICATE';
+  if (msg.includes('uk_reports_report_uid')) return 'REPORT_UID_EXISTS';
+  return 'REPORT_NO_EXISTS';
+}
 
 const fieldSchema = z.object({
   fieldKey: z.string().min(1).max(64),
@@ -21,7 +31,7 @@ const fieldSchema = z.object({
 });
 
 const upsertReportSchema = z.object({
-  reportNo: z.string().min(1).max(64),
+  reportNo: z.string().max(64).optional(),
   batchNo: z.string().max(64).optional().nullable(),
   batchNoEn: z.string().max(128).optional().nullable(),
   productName: z.string().min(1).max(128),
@@ -41,6 +51,19 @@ const bulkGenerateTestSchema = z.object({
 
 function pad4(n) {
   return String(n).padStart(4, '0');
+}
+
+/** 页眉「报告编号」固定文案；唯一性由 report_uid 承担 */
+const FIXED_REPORT_NO = 'JL-8.8-05';
+
+function formatReportUid(reportId) {
+  return `ZJ-${String(reportId).padStart(10, '0')}`;
+}
+
+async function finalizeReportUid(conn, reportId) {
+  const uid = formatReportUid(reportId);
+  await conn.query('UPDATE reports SET report_uid = ? WHERE id = ?', [uid, reportId]);
+  return uid;
 }
 
 function yyyymmdd(d) {
@@ -132,7 +155,7 @@ function defaultPaperFields() {
   ];
 }
 
-function filledValueForField(field, { reportNo, batchNo, productName, index, dateStr }) {
+function filledValueForField(field, { reportUid, batchNo, productName, index, dateStr }) {
   if (field.fieldType === 'table') {
     const defaultTable = defaultPaperFields().find((f) => f.fieldType === 'table');
     const base = normalizeTemplateDefaultValue(field.fieldValue) || defaultTable.fieldValue;
@@ -174,7 +197,7 @@ function filledValueForField(field, { reportNo, batchNo, productName, index, dat
     case 'test_conclusion':
       return { zh: '合格', en: 'Pass' };
     case 'remarks':
-      return { zh: `自动生成测试报告：${reportNo}`, en: `Auto generated test report: ${reportNo}` };
+      return { zh: `自动生成测试报告：${reportUid}`, en: `Auto generated test report: ${reportUid}` };
     default:
       return { zh: `${field.fieldLabel || field.fieldKey}（测试${index + 1}）`, en: `${field.fieldLabelEn || field.fieldKey} (Test ${index + 1})` };
   }
@@ -191,8 +214,8 @@ router.get('/', requirePermission('reports', 'list'), async (req, res) => {
   const where = [];
   const params = [];
   if (q) {
-    where.push('(report_no LIKE ? OR product_name LIKE ?)');
-    params.push(`%${q}%`, `%${q}%`);
+    where.push('(report_no LIKE ? OR product_name LIKE ? OR report_uid LIKE ?)');
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
   if (batchNo) {
     where.push('batch_no = ?');
@@ -212,7 +235,7 @@ router.get('/', requirePermission('reports', 'list'), async (req, res) => {
     params
   );
   const [rows] = await pool.query(
-    `SELECT id, report_no AS reportNo, batch_no AS batchNo, product_name AS productName, conclusion, status, created_at AS createdAt, updated_at AS updatedAt
+    `SELECT id, report_uid AS reportUid, report_no AS reportNo, batch_no AS batchNo, product_name AS productName, conclusion, status, created_at AS createdAt, updated_at AS updatedAt
      FROM reports
      ${sqlWhere}
      ORDER BY id DESC
@@ -220,6 +243,10 @@ router.get('/', requirePermission('reports', 'list'), async (req, res) => {
     [...params, limit, offset]
   );
   res.json({ items: rows, total: Number(countRows?.[0]?.total || 0), limit, offset });
+});
+
+router.get('/suggest-report-no', requirePermission('reports', 'create'), async (req, res) => {
+  res.json({ reportNo: FIXED_REPORT_NO });
 });
 
 /** 与公开页同结构的报告 JSON，供管理端 iframe 加载 /miniprogram/report.html?adminPreview=1 等（需登录） */
@@ -245,7 +272,7 @@ router.get(
 
     const pool = getPool();
     const [rRows] = await pool.query(
-      `SELECT id, report_no AS reportNo, batch_no AS batchNo, batch_no_en AS batchNoEn, product_name AS productName, product_name_en AS productNameEn, conclusion, status, created_at AS createdAt, updated_at AS updatedAt
+      `SELECT id, report_uid AS reportUid, report_no AS reportNo, batch_no AS batchNo, batch_no_en AS batchNoEn, product_name AS productName, product_name_en AS productNameEn, conclusion, status, created_at AS createdAt, updated_at AS updatedAt
        FROM reports WHERE id = ? LIMIT 1`,
       [id]
     );
@@ -258,6 +285,19 @@ router.get(
       [id]
     );
 
+    if (
+      isPermissionedStaffType(req.user.accountType) &&
+      hasPermission(req.user.permissions, 'reports', 'view') &&
+      !hasPermission(req.user.permissions, 'reports', 'edit')
+    ) {
+      await logOperationFromReq(req, {
+        module: '报告管理',
+        action: '查看报告详情',
+        detail: { reportId: id },
+        success: true
+      });
+    }
+
     res.json({ report: { ...report, fields: fRows } });
   }
 );
@@ -267,7 +307,6 @@ router.post('/', requirePermission('reports', 'create'), async (req, res) => {
   const parsed = upsertReportSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
   const {
-    reportNo,
     batchNo,
     batchNoEn,
     productName,
@@ -285,7 +324,7 @@ router.post('/', requirePermission('reports', 'create'), async (req, res) => {
       `INSERT INTO reports (report_no, batch_no, batch_no_en, product_name, product_name_en, conclusion, status, created_by, updated_by)
        VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
       [
-        reportNo,
+        FIXED_REPORT_NO,
         batchNo ?? null,
         batchNoEn ?? null,
         productName,
@@ -296,6 +335,7 @@ router.post('/', requirePermission('reports', 'create'), async (req, res) => {
       ]
     );
     const reportId = result.insertId;
+    const reportUid = await finalizeReportUid(conn, reportId);
 
     // if templateId provided and fields empty, copy template defaults
     let finalFields = fields;
@@ -329,13 +369,13 @@ router.post('/', requirePermission('reports', 'create'), async (req, res) => {
     await logOperationFromReq(req, {
       module: '报告管理',
       action: '新增报告',
-      detail: { reportId, reportNo },
+      detail: { reportId, reportUid, reportNo: FIXED_REPORT_NO },
       success: true
     });
-    res.status(201).json({ id: reportId });
+    res.status(201).json({ id: reportId, reportUid });
   } catch (e) {
     await conn.rollback();
-    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'REPORT_NO_EXISTS' });
+    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json({ error: duplicateKeyErrorCode(e) });
     throw e;
   } finally {
     conn.release();
@@ -355,7 +395,7 @@ router.put('/:id', requirePermission('reports', 'edit'), async (req, res) => {
   try {
     await conn.beginTransaction();
     const [rRows] = await conn.query(
-      `SELECT id, report_no AS reportNo, batch_no AS batchNo, batch_no_en AS batchNoEn,
+      `SELECT id, report_no AS reportNo, report_uid AS reportUid, batch_no AS batchNo, batch_no_en AS batchNoEn,
               product_name AS productName, product_name_en AS productNameEn, conclusion, template_id AS templateId
        FROM reports WHERE id = ? LIMIT 1`,
       [id]
@@ -384,7 +424,6 @@ router.put('/:id', requirePermission('reports', 'edit'), async (req, res) => {
 
     const sanitized = sanitizeReportPutBody(req.user, existingReport, existingFields, parsed.data);
     const {
-      reportNo: sReportNo,
       batchNo: sBatchNo,
       batchNoEn: sBatchNoEn,
       productName: sProductName,
@@ -398,7 +437,7 @@ router.put('/:id', requirePermission('reports', 'edit'), async (req, res) => {
       `UPDATE reports
        SET report_no=?, batch_no=?, batch_no_en=?, product_name=?, product_name_en=?, template_id=?, conclusion=?, updated_by=?
        WHERE id=?`,
-      [sReportNo, sBatchNo ?? null, sBatchNoEn ?? null, sProductName, sProductNameEn ?? null, sTemplateId, sConclusion, req.user.userId, id]
+      [FIXED_REPORT_NO, sBatchNo ?? null, sBatchNoEn ?? null, sProductName, sProductNameEn ?? null, sTemplateId, sConclusion, req.user.userId, id]
     );
 
     await conn.query('DELETE FROM report_fields WHERE report_id = ?', [id]);
@@ -428,7 +467,7 @@ router.put('/:id', requirePermission('reports', 'edit'), async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     await conn.rollback();
-    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'REPORT_NO_EXISTS' });
+    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json({ error: duplicateKeyErrorCode(e) });
     throw e;
   } finally {
     conn.release();
@@ -528,22 +567,68 @@ router.post('/:id(\\d+)/activate', requirePermission('reports', 'activate'), asy
   res.json({ ok: true });
 });
 
-router.post('/bulk/conclusion-pass', requireAnyPermission('reports', ['bulkPass', 'edit']), async (req, res) => {
+router.post(
+  '/bulk/conclusion-pass',
+  requireAnyPermission('reports', ['bulkPass', 'edit', 'chairmanApprove']),
+  async (req, res) => {
+    const parsed = bulkIdsSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const { ids } = parsed.data;
+    const pool = getPool();
+    const [result] = await pool.query(
+      `UPDATE reports SET conclusion='pass', updated_by=? WHERE id IN (${ids.map(() => '?').join(',')})`,
+      [req.user.userId, ...ids]
+    );
+    const onlyChairman =
+      isPermissionedStaffType(req.user.accountType) &&
+      hasPermission(req.user.permissions, 'reports', 'chairmanApprove') &&
+      !hasPermission(req.user.permissions, 'reports', 'bulkPass') &&
+      !hasPermission(req.user.permissions, 'reports', 'edit');
+    await logOperationFromReq(req, {
+      module: '报告管理',
+      action: onlyChairman ? '最高级审批：批量判定合格（备案）' : '批量判定合格',
+      detail: { count: ids.length },
+      success: true
+    });
+    res.json({ ok: true, affectedCount: Number(result?.affectedRows || 0) });
+  }
+);
+
+router.post('/export/json', requirePermission('reports', 'export'), async (req, res) => {
   const parsed = bulkIdsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
   const { ids } = parsed.data;
   const pool = getPool();
-  const [result] = await pool.query(
-    `UPDATE reports SET conclusion='pass', updated_by=? WHERE id IN (${ids.map(() => '?').join(',')})`,
-    [req.user.userId, ...ids]
+  const [rRows] = await pool.query(
+    `SELECT id, report_uid AS reportUid, report_no AS reportNo, batch_no AS batchNo, batch_no_en AS batchNoEn, product_name AS productName, product_name_en AS productNameEn, conclusion, status, created_at AS createdAt, updated_at AS updatedAt
+     FROM reports WHERE id IN (${ids.map(() => '?').join(',')})
+     ORDER BY id DESC`,
+    ids
   );
+  const [fRows] = await pool.query(
+    `SELECT report_id AS reportId, field_key AS fieldKey, field_label AS fieldLabel, field_label_en AS fieldLabelEn, field_type AS fieldType, field_value_json AS fieldValue, sort_order AS sortOrder
+     FROM report_fields WHERE report_id IN (${ids.map(() => '?').join(',')})
+     ORDER BY report_id ASC, sort_order ASC, id ASC`,
+    ids
+  );
+  const fieldMap = new Map();
+  for (const f of fRows || []) {
+    const rid = Number(f.reportId);
+    if (!fieldMap.has(rid)) fieldMap.set(rid, []);
+    fieldMap.get(rid).push(f);
+  }
+  const items = (rRows || []).map((r) => ({
+    report: { ...r, fields: fieldMap.get(Number(r.id)) || [] }
+  }));
   await logOperationFromReq(req, {
     module: '报告管理',
-    action: '批量判定合格',
+    action: '导出报告数据（备案）',
     detail: { count: ids.length },
     success: true
   });
-  res.json({ ok: true, affectedCount: Number(result?.affectedRows || 0) });
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="reports-export.json"');
+  res.send(JSON.stringify({ exportedAt: new Date().toISOString(), items }, null, 2));
 });
 
 router.post('/bulk/void', requireAnyPermission('reports', ['bulkVoid', 'void']), async (req, res) => {
@@ -649,23 +734,12 @@ router.post('/bulk/generate-test', requirePermission('reports', 'create'), async
 
     const today = new Date();
     const dayStr = yyyymmdd(today);
-    const prefix = `TEST-${dayStr}-`;
-    const [lastRows] = await conn.query(
-      `SELECT report_no AS reportNo
-       FROM reports
-       WHERE report_no LIKE ?
-       ORDER BY report_no DESC
-       LIMIT 1`,
-      [`${prefix}%`]
-    );
-    const lastNo = lastRows?.[0]?.reportNo ? String(lastRows[0].reportNo) : '';
-    const lastSeq = lastNo.startsWith(prefix) ? Number(lastNo.slice(prefix.length)) : 0;
-    const startSeq = Number.isFinite(lastSeq) && lastSeq > 0 ? lastSeq + 1 : 1;
+    const [cntRows] = await conn.query('SELECT COUNT(*) AS c FROM reports');
+    const reportCount = Number(cntRows?.[0]?.c || 0);
 
     const createdIds = [];
     for (let i = 0; i < count; i += 1) {
-      const seq = startSeq + i;
-      const reportNo = `${prefix}${pad4(seq)}`;
+      const seq = reportCount + i + 1;
       const productName = `测试产品${seq}`;
       const batchNo = `B${dayStr}-${pad4(seq)}`;
       const conclusion = 'pass';
@@ -674,7 +748,7 @@ router.post('/bulk/generate-test', requirePermission('reports', 'create'), async
         `INSERT INTO reports (report_no, batch_no, batch_no_en, product_name, product_name_en, template_id, conclusion, status, created_by, updated_by)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
         [
-          reportNo,
+          FIXED_REPORT_NO,
           batchNo,
           batchNo,
           productName,
@@ -686,6 +760,7 @@ router.post('/bulk/generate-test', requirePermission('reports', 'create'), async
         ]
       );
       const reportId = rRes.insertId;
+      const reportUid = await finalizeReportUid(conn, reportId);
       createdIds.push(reportId);
 
       for (const f of baseFields) {
@@ -697,7 +772,7 @@ router.post('/bulk/generate-test', requirePermission('reports', 'create'), async
             fieldType: f.fieldType,
             fieldValue: f.fieldValue
           },
-          { reportNo, batchNo, productName, index: i, dateStr: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}` }
+          { reportUid, batchNo, productName, index: i, dateStr: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}` }
         );
 
         await conn.query(
@@ -732,7 +807,7 @@ router.post('/bulk/generate-test', requirePermission('reports', 'create'), async
     });
   } catch (e) {
     await conn.rollback();
-    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'REPORT_NO_EXISTS' });
+    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json({ error: duplicateKeyErrorCode(e) });
     throw e;
   } finally {
     conn.release();

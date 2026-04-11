@@ -5,7 +5,7 @@ import fs from 'fs/promises';
 import { z } from 'zod';
 
 import { getPool } from '../db/pool.js';
-import { requireAnyPermissionPairs, requireAuth, requirePermission } from '../middleware/auth.js';
+import { requireAnyPermissionPairs, requireAuth, requirePermission, requireSuperAdmin } from '../middleware/auth.js';
 import { nanoid } from 'nanoid';
 
 export const router = Router();
@@ -13,6 +13,7 @@ export const router = Router();
 /** 填写/预览报告需加载公司抬头；管理端「公司信息」仍用 company.manage 写接口 */
 const canReadCompanyForReports = requireAnyPermissionPairs([
   ['company', 'manage'],
+  ['company', 'view'],
   ['reports', 'list'],
   ['reports', 'view'],
   ['reports', 'edit'],
@@ -21,6 +22,72 @@ const canReadCompanyForReports = requireAnyPermissionPairs([
 ]);
 
 router.use(requireAuth);
+
+const quickRoleUsersSchema = z.object({
+  salesUserId: z.union([z.number().int().positive(), z.null()]).optional(),
+  financeUserId: z.union([z.number().int().positive(), z.null()]).optional(),
+  warehouseUserId: z.union([z.number().int().positive(), z.null()]).optional()
+});
+
+async function assertQuickRoleUsers(pool, salesUserId, financeUserId, warehouseUserId) {
+  const ids = [salesUserId, financeUserId, warehouseUserId].filter((x) => x != null);
+  if (!ids.length) return;
+  const uniq = [...new Set(ids)];
+  const [rows] = await pool.query(
+    `SELECT id, account_type AS accountType, is_active AS isActive FROM users WHERE id IN (${uniq.map(() => '?').join(',')})`,
+    uniq
+  );
+  const map = new Map((rows || []).map((r) => [Number(r.id), r]));
+  for (const id of uniq) {
+    const u = map.get(id);
+    if (!u || u.accountType !== 'employee' || !u.isActive) {
+      const e = new Error('INVALID_QUICK_ROLE_USER');
+      e.code = 'INVALID_QUICK_ROLE_USER';
+      throw e;
+    }
+  }
+}
+
+router.get('/quick-role-users', requireSuperAdmin, async (req, res) => {
+  const pool = getPool();
+  const [rows] = await pool.query(
+    'SELECT quick_role_sales_user_id, quick_role_finance_user_id, quick_role_warehouse_user_id FROM company_settings WHERE id=1 LIMIT 1'
+  );
+  const r = rows?.[0] || {};
+  res.json({
+    salesUserId: r.quick_role_sales_user_id != null ? Number(r.quick_role_sales_user_id) : null,
+    financeUserId: r.quick_role_finance_user_id != null ? Number(r.quick_role_finance_user_id) : null,
+    warehouseUserId: r.quick_role_warehouse_user_id != null ? Number(r.quick_role_warehouse_user_id) : null
+  });
+});
+
+router.put('/quick-role-users', requireSuperAdmin, async (req, res) => {
+  const parsed = quickRoleUsersSchema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+  const salesUserId = parsed.data.salesUserId ?? null;
+  const financeUserId = parsed.data.financeUserId ?? null;
+  const warehouseUserId = parsed.data.warehouseUserId ?? null;
+  const pool = getPool();
+  try {
+    await assertQuickRoleUsers(pool, salesUserId, financeUserId, warehouseUserId);
+  } catch (e) {
+    if (e.code === 'INVALID_QUICK_ROLE_USER') {
+      return res.status(400).json({ error: 'INVALID_QUICK_ROLE_USER' });
+    }
+    throw e;
+  }
+  await pool.query(
+    `INSERT INTO company_settings (id, quick_role_sales_user_id, quick_role_finance_user_id, quick_role_warehouse_user_id)
+     VALUES (1, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+      quick_role_sales_user_id = VALUES(quick_role_sales_user_id),
+      quick_role_finance_user_id = VALUES(quick_role_finance_user_id),
+      quick_role_warehouse_user_id = VALUES(quick_role_warehouse_user_id),
+      updated_at = CURRENT_TIMESTAMP(3)`,
+    [salesUserId, financeUserId, warehouseUserId]
+  );
+  res.json({ ok: true });
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -46,10 +113,12 @@ router.get('/settings', canReadCompanyForReports, async (req, res) => {
 });
 
 const settingsSchema = z.object({
-  companyNameZh: z.string().max(128).optional().nullable().transform((v) => v ?? ''),
-  companyNameEn: z.string().max(256).optional().nullable().transform((v) => v ?? ''),
-  reportTitleZh: z.string().max(128).optional().nullable().transform((v) => v ?? ''),
-  reportTitleEn: z.string().max(256).optional().nullable().transform((v) => v ?? ''),
+  companyNameZh: z.string().max(128).optional().nullable(),
+  companyNameEn: z.string().max(256).optional().nullable(),
+  email: z.string().max(128).optional().nullable(),
+  address: z.string().max(256).optional().nullable(),
+  reportTitleZh: z.string().max(128).optional().nullable(),
+  reportTitleEn: z.string().max(256).optional().nullable(),
   descriptionZh: z.string().max(256).optional().nullable(),
   descriptionEn: z.string().max(256).optional().nullable(),
   logoUrl: z.string().max(512).optional().nullable()
@@ -58,31 +127,56 @@ const settingsSchema = z.object({
 router.put('/settings', requirePermission('company', 'manage'), async (req, res) => {
   const parsed = settingsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const {
-    companyNameZh,
-    companyNameEn,
-    reportTitleZh,
-    reportTitleEn,
-    descriptionZh,
-    descriptionEn,
-    logoUrl
-  } = parsed.data;
-
   const pool = getPool();
+  const [rows] = await pool.query('SELECT * FROM company_settings WHERE id=1 LIMIT 1');
+  const current = rows?.[0] || {};
+  const body = req.body || {};
+  const data = parsed.data || {};
+  const has = (k) => Object.prototype.hasOwnProperty.call(body, k);
+  const companyNameZh = has('companyNameZh')
+    ? (data.companyNameZh ?? '')
+    : (current.company_name_zh ?? '');
+  const companyNameEn = has('companyNameEn')
+    ? (data.companyNameEn ?? '')
+    : (current.company_name_en ?? '');
+  const email = has('email')
+    ? (data.email ?? null)
+    : (current.company_email ?? null);
+  const address = has('address')
+    ? (data.address ?? null)
+    : (current.company_address ?? null);
+  const reportTitleZh = has('reportTitleZh')
+    ? (data.reportTitleZh ?? '')
+    : (current.report_title_zh ?? '');
+  const reportTitleEn = has('reportTitleEn')
+    ? (data.reportTitleEn ?? '')
+    : (current.report_title_en ?? '');
+  const descriptionZh = has('descriptionZh')
+    ? (data.descriptionZh ?? null)
+    : (current.description_zh ?? null);
+  const descriptionEn = has('descriptionEn')
+    ? (data.descriptionEn ?? null)
+    : (current.description_en ?? null);
+  const logoUrl = has('logoUrl')
+    ? (data.logoUrl ?? null)
+    : (current.logo_url ?? null);
+
   await pool.query(
     `INSERT INTO company_settings
-      (id, company_name_zh, company_name_en, report_title_zh, report_title_en, description_zh, description_en, logo_url, created_by)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, company_name_zh, company_name_en, company_email, company_address, report_title_zh, report_title_en, description_zh, description_en, logo_url, created_by)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
       company_name_zh=VALUES(company_name_zh),
       company_name_en=VALUES(company_name_en),
+      company_email=VALUES(company_email),
+      company_address=VALUES(company_address),
       report_title_zh=VALUES(report_title_zh),
       report_title_en=VALUES(report_title_en),
       description_zh=VALUES(description_zh),
       description_en=VALUES(description_en),
       logo_url=VALUES(logo_url),
       updated_at=CURRENT_TIMESTAMP(3)`,
-    [companyNameZh, companyNameEn, reportTitleZh, reportTitleEn, descriptionZh ?? null, descriptionEn ?? null, logoUrl ?? null, req.user.userId]
+    [companyNameZh, companyNameEn, email ?? null, address ?? null, reportTitleZh, reportTitleEn, descriptionZh ?? null, descriptionEn ?? null, logoUrl ?? null, req.user.userId]
   );
   res.json({ ok: true });
 });

@@ -13,7 +13,9 @@ export function getPool() {
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
-      timezone: 'Z'
+      timezone: 'Z',
+      /** 与库表 utf8mb4 一致，避免中文标题等入库/读出乱码 */
+      charset: 'utf8mb4'
     });
   }
   return pool;

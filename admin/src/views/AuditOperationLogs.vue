@@ -14,10 +14,16 @@
         class="w-range"
       />
       <el-button type="primary" @click="load">查询</el-button>
-      <el-button type="danger" plain :disabled="selected.length === 0" @click="onBulkDelete">
+      <el-button
+        v-if="isSuperAdminUser"
+        type="danger"
+        plain
+        :disabled="selected.length === 0"
+        @click="onBulkDelete"
+      >
         批量删除
       </el-button>
-      <el-dropdown :disabled="selected.length === 0" @command="onExportCommand">
+      <el-dropdown v-if="isSuperAdminUser || perm('audit', 'exportAudit')" :disabled="selected.length === 0" @command="onExportCommand">
         <el-button :disabled="selected.length === 0">批量导出</el-button>
         <template #dropdown>
           <el-dropdown-menu>
@@ -36,7 +42,7 @@
       row-key="id"
       @selection-change="onSelectionChange"
     >
-      <el-table-column type="selection" width="48" />
+      <el-table-column v-if="isSuperAdminUser || perm('audit', 'exportAudit')" type="selection" width="48" />
       <el-table-column prop="id" label="ID" width="72" />
       <el-table-column prop="username" label="操作人" width="120" />
       <el-table-column prop="module" label="模块" width="120" />
@@ -47,7 +53,9 @@
         </template>
       </el-table-column>
       <el-table-column prop="ip" label="IP" width="130" />
-      <el-table-column prop="createdAt" label="时间" width="168" />
+      <el-table-column label="时间" width="180">
+        <template #default="{ row }">{{ $dt(row.createdAt) }}</template>
+      </el-table-column>
     </el-table>
     <div class="mobile-list" v-loading="loading">
       <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
@@ -59,7 +67,7 @@
         <div class="mobile-line"><span>模块</span><span>{{ row.module || '-' }}</span></div>
         <div class="mobile-line"><span>操作</span><span>{{ row.action || '-' }}</span></div>
         <div class="mobile-line"><span>IP</span><span>{{ row.ip || '-' }}</span></div>
-        <div class="mobile-line"><span>时间</span><span>{{ row.createdAt }}</span></div>
+        <div class="mobile-line"><span>时间</span><span>{{ $dt(row.createdAt) }}</span></div>
       </div>
       <el-empty v-if="!items.length && !loading" description="暂无记录" />
     </div>
@@ -76,6 +84,8 @@
 
 <script>
 import { bulkDeleteAuditOperations, exportAuditOperations, listAuditOperations } from '../api';
+import { formatDateTime } from '../utils/formatDateTime';
+import { isSuperAdmin, perm } from '../utils/permissions';
 
 export default {
   name: 'AuditOperationLogs',
@@ -91,10 +101,16 @@ export default {
       selected: []
     };
   },
+  computed: {
+    isSuperAdminUser() {
+      return isSuperAdmin();
+    }
+  },
   mounted() {
     this.load();
   },
   methods: {
+    perm,
     async load() {
       this.loading = true;
       try {
@@ -111,7 +127,7 @@ export default {
         this.items = items || [];
         this.total = total || 0;
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '加载失败');
+        this.$message.error(this.$apiUserMsg(e, '加载失败'));
       } finally {
         this.loading = false;
       }
@@ -165,7 +181,7 @@ export default {
         await exportAuditOperations(ids);
         this.$message.success('已开始下载');
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '导出失败');
+        this.$message.error(this.$apiUserMsg(e, '导出失败'));
       }
     },
     onBulkExportTable() {
@@ -176,7 +192,7 @@ export default {
         action: x.action,
         success: x.success ? '成功' : '失败',
         ip: x.ip,
-        createdAt: x.createdAt
+        createdAt: formatDateTime(x.createdAt, { empty: '' })
       }));
       if (!rows.length) return;
       this.downloadCsv(

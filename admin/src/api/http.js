@@ -1,8 +1,12 @@
 import axios from 'axios';
 import { getActivePinia } from 'pinia';
 import { useAuthStore } from '../stores/auth';
+import { enrichApiErrorBody } from '../../../shared/apiErrorZh.js';
 
-const baseURL = import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001';
+/** 开发环境默认空串：请求发到当前页所在源，由 Vite 把 /api、/uploads 代理到后端（见 vite.config.js）。须同时启动 server。 */
+const baseURL =
+  import.meta.env.VITE_APP_API_BASE_URL ||
+  (import.meta.env.DEV ? '' : 'http://localhost:3001');
 
 export const http = axios.create({
   baseURL,
@@ -67,7 +71,8 @@ function doneProgress() {
 }
 
 http.interceptors.request.use((config) => {
-  startProgress();
+  config.silentProgress = config.silentProgress === true;
+  if (!config.silentProgress) startProgress();
   const p = getActivePinia();
   const token = p ? useAuthStore().token : localStorage.getItem('token');
   if (token) {
@@ -79,17 +84,30 @@ http.interceptors.request.use((config) => {
 
 http.interceptors.response.use(
   (res) => {
-    doneProgress();
+    if (!res.config.silentProgress) doneProgress();
     return res;
   },
   (err) => {
-    doneProgress();
+    if (!err.config?.silentProgress) doneProgress();
+    const data = err?.response?.data;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      err.response.data = enrichApiErrorBody(data);
+    }
     const status = err?.response?.status;
     if (status === 401) {
       const p = getActivePinia();
-      if (p) useAuthStore().clearTokenOnly();
-      else localStorage.removeItem('token');
-      // let router guard handle redirect; avoid circular import
+      if (p) useAuthStore().clearSession();
+      else {
+        localStorage.removeItem('token');
+        localStorage.removeItem('accountType');
+        localStorage.removeItem('permissions');
+        localStorage.removeItem('idleTimeoutMinutes');
+        localStorage.removeItem('confirmSensitiveOperations');
+      }
+      import('../router').then((m) => {
+        const r = m.default;
+        if (r.currentRoute.value?.path !== '/login') r.replace('/login');
+      });
     }
     return Promise.reject(err);
   }

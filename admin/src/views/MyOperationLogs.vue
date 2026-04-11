@@ -22,7 +22,9 @@
           <el-tag :type="row.success ? 'success' : 'danger'" size="small">{{ row.success ? '成功' : '失败' }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="createdAt" label="时间" width="168" />
+      <el-table-column label="时间" width="180">
+        <template #default="{ row }">{{ $dt(row.createdAt) }}</template>
+      </el-table-column>
     </el-table>
     <div class="mobile-list" v-loading="loading">
       <div v-for="(row, idx) in items" :key="'m-' + idx" class="mobile-card">
@@ -31,7 +33,7 @@
           <el-tag :type="row.success ? 'success' : 'danger'" size="small">{{ row.success ? '成功' : '失败' }}</el-tag>
         </div>
         <div class="mobile-line"><span>操作</span><span>{{ row.action || '-' }}</span></div>
-        <div class="mobile-line"><span>时间</span><span>{{ row.createdAt }}</span></div>
+        <div class="mobile-line"><span>时间</span><span>{{ $dt(row.createdAt) }}</span></div>
       </div>
       <el-empty v-if="!items.length && !loading" description="暂无记录" />
     </div>
@@ -80,7 +82,7 @@ export default {
         this.items = items || [];
         this.total = total || 0;
       } catch (e) {
-        this.$message.error(e?.response?.data?.error || '加载失败');
+        this.$message.error(this.$apiUserMsg(e, '加载失败'));
       } finally {
         this.loading = false;
       }
