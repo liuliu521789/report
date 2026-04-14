@@ -164,6 +164,17 @@
               <span>{{ weatherText }}</span>
             </span>
           </div>
+          <el-dropdown trigger="click" class="messages-dropdown">
+            <el-button type="primary" circle class="messages-btn">
+              <el-icon><Bell /></el-icon>
+              <el-badge v-if="unreadMessageCount > 0" :value="unreadMessageCount" class="message-badge" />
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="goToMessages">查看站内信</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-dropdown trigger="click">
             <span class="user">
               <span class="avatar-wrap">
@@ -375,7 +386,8 @@ export default {
       /** @type {Set<number>|null} 已知的未读站内信 id，首轮仅建基线不弹窗 */
       salesInternalMsgSeenUnreadIds: null,
       /** @type {(() => void) | null} */
-      salesInternalMsgVisibilityHandler: null
+      salesInternalMsgVisibilityHandler: null,
+      unreadMessageCount: 0
     };
   },
   computed: {
@@ -701,28 +713,32 @@ export default {
     },
     notifyNewSalesInternalMessages(items) {
       const opts = {
-        type: 'info',
+        type: 'warning',
         position: 'top-right',
         showClose: true,
-        customClass: 'sales-internal-msg-notify'
+        customClass: 'sales-internal-msg-notify',
+        offset: 80
       };
-      const hint = '请在「销售数据 → 订单管理」中打开站内信查看正文。';
+      const hint = '请点击顶部站内信图标查看详情。';
       if (items.length === 1) {
         const m = items[0];
         ElNotification({
           title: m.title || '新站内信',
           message: hint,
-          duration: 12000,
+          duration: 15000,
           ...opts
         });
       } else {
         ElNotification({
-          title: '新站内信',
+          title: `新站内信 (${items.length})`,
           message: hint,
-          duration: 11000,
+          duration: 15000,
           ...opts
         });
       }
+    },
+    goToMessages() {
+      this.$router.push('/sales/orders');
     },
     async pollSalesInternalMessages() {
       if (!useAuthStore().token) return;
@@ -736,6 +752,7 @@ export default {
           if (newcomers.length) this.notifyNewSalesInternalMessages(newcomers);
         }
         this.salesInternalMsgSeenUnreadIds = currIds;
+        this.unreadMessageCount = list.length;
       } catch {
         /* 未登录跳转、网络异常等忽略 */
       }
@@ -935,6 +952,44 @@ export default {
 .text {
   font-size: 12px;
   color: #334155;
+}
+
+.messages-btn {
+  background-color: #165DFF;
+  border-color: #165DFF;
+}
+
+.messages-btn:hover {
+  background-color: #4080FF;
+  border-color: #4080FF;
+}
+
+.message-badge {
+  --el-badge-background-color: #F56C6C;
+  --el-badge-text-color: #FFFFFF;
+  font-size: 10px;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
+  position: absolute;
+  top: -4px;
+  right: -4px;
+}
+
+.messages-btn {
+  position: relative;
+  background-color: #165DFF;
+  border-color: #165DFF;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.messages-dropdown {
+  position: relative;
 }
 /* 右侧主区域：占满侧栏以外的空间并正确参与 flex 高度计算，避免主内容出现“多余”滚动条 */
 .main-column {

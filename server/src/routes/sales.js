@@ -1386,12 +1386,8 @@ router.patch('/orders/:id', async (req, res, next) => {
         userId: req.user.userId
       });
       const leg = dataJsonToLegacyColumns(activeDefs, data);
-      const setRejectedReset =
-        row.status === 'rejected'
-          ? ", status = 'pending_review', submitted_for_review_at = NULL, finance_comment = NULL, finance_reviewed_at = NULL, finance_reviewed_by = NULL"
-          : '';
       await conn.query(
-        `UPDATE sales_orders SET customer_id = ?, product_code = ?, product_name = ?, product_model = ?, warehouse_model = ?, quantity = ?, unit_price = ?, amount = ?, remark = ?, data_json = CAST(? AS JSON), updated_by = ?${setRejectedReset} WHERE id = ?`,
+        `UPDATE sales_orders SET customer_id = ?, product_code = ?, product_name = ?, product_model = ?, warehouse_model = ?, quantity = ?, unit_price = ?, amount = ?, remark = ?, data_json = CAST(? AS JSON), updated_by = ? WHERE id = ?`,
         [
           customerId,
           leg.product_code,
@@ -1439,7 +1435,7 @@ router.post('/orders/:id/submit', async (req, res, next) => {
     const row = rows[0];
     if (!row) return res.status(404).json({ error: 'NOT_FOUND' });
     if (!isSuper(req) && !isOrderCreatedByCurrentUser(row, req)) return res.status(403).json({ error: 'FORBIDDEN' });
-    if (row.status !== 'pending_review') return res.status(400).json({ error: 'INVALID_STATUS' });
+    if (!['pending_review', 'rejected'].includes(row.status)) return res.status(400).json({ error: 'INVALID_STATUS' });
     if (row.submitted_for_review_at) return res.status(400).json({ error: 'ALREADY_SUBMITTED' });
 
     await pool.query(
@@ -1559,7 +1555,7 @@ router.post('/orders/batch-submit', async (req, res, next) => {
           failed.push({ id, error: 'FORBIDDEN' });
           continue;
         }
-        if (row.status !== 'pending_review') {
+        if (!['pending_review', 'rejected'].includes(row.status)) {
           failed.push({ id, error: 'INVALID_STATUS' });
           continue;
         }
@@ -2360,23 +2356,25 @@ function buildSalesImportSampleRows(fieldDefs) {
   for (let rowIdx = 0; rowIdx < 10; rowIdx++) {
     const i = rowIdx + 1;
     const day = Math.min(28, 4 + rowIdx);
+    const productModel = `KM-${2200 + rowIdx}`;
+    const warehouseModel = `${2200 + rowIdx}-WH`;
     rows.push(
       fieldDefs.map((d) => {
         if (d.field_type === 'date') {
           return `2026-01-${String(day).padStart(2, '0')}`;
         }
-        if (d.maps_to === 'customer_code') return `TC${String(100 + rowIdx).slice(-3)}`;
-        if (d.maps_to === 'customer_name') return `测试厂家${String.fromCharCode(64 + i)}`;
-        if (d.maps_to === 'product_code') return `PH-2026${String(i).padStart(2, '0')}`;
-        if (d.maps_to === 'product_name') return `PVC线槽 ${10 + rowIdx * 3}×${6 + rowIdx}mm`;
-        if (d.maps_to === 'product_model') return `KM-${2200 + rowIdx}`;
-        if (d.maps_to === 'warehouse_model') return `${2200 + rowIdx}-WH`;
-        if (d.maps_to === 'quantity') {
+        if (d.field_key === 'customer_code') return `TC${String(100 + rowIdx).slice(-3)}`;
+        if (d.field_key === 'customer_name') return `测试厂家${String.fromCharCode(64 + i)}`;
+        if (d.field_key === 'product_code') return `PH-2026${String(i).padStart(2, '0')}`;
+        if (d.field_key === 'product_name') return `PVC线槽 ${10 + rowIdx * 3}×${6 + rowIdx}mm`;
+        if (d.field_key === 'product_model') return `${productModel}/${warehouseModel}`;
+        if (d.field_key === 'warehouse_model') return '';
+        if (d.field_key === 'quantity') {
           const units = ['桶', '吨桶', '箱', '托', '件', '桶', '吨桶', '箱', '托', '件'];
           return `${18 + rowIdx * 4}${units[rowIdx]}`;
         }
-        if (d.maps_to === 'unit_price') return Number((11.8 + rowIdx * 0.35).toFixed(2));
-        if (d.maps_to === 'remark') return rowIdx % 4 === 0 ? '' : `测试备注-${i}`;
+        if (d.field_key === 'unit_price') return Number((11.8 + rowIdx * 0.35).toFixed(2));
+        if (d.field_key === 'remark') return rowIdx % 4 === 0 ? '' : `测试备注-${i}`;
         if (d.field_key === 'material_source') return materialPool[rowIdx % materialPool.length];
         if (d.field_key === 'kangming') return kangPool[rowIdx];
         if (d.field_key === 'remaining') return rowIdx % 3 === 0 ? '' : String(120 - rowIdx * 8);
@@ -2395,7 +2393,16 @@ router.get('/orders/template/xlsx', async (req, res, next) => {
   try {
     if (!perm(req, 'order_management', 'order_input')) return res.status(403).json({ error: 'FORBIDDEN' });
     const pool = getPool();
-    const fieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
+    let fieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
+    // 合并标签型号和仓库型号为一列
+    const productModelDef = fieldDefs.find(d => d.field_key === 'product_model');
+    const warehouseModelDef = fieldDefs.find(d => d.field_key === 'warehouse_model');
+    if (productModelDef && warehouseModelDef) {
+      // 保留标签型号列，移除仓库型号列
+      fieldDefs = fieldDefs.filter(d => d.field_key !== 'warehouse_model');
+      // 修改标签型号列的标题为"标签型号/仓库型号"
+      productModelDef.label_zh = '标签型号/仓库型号';
+    }
     const headers = fieldDefs.map((d) => d.label_zh);
     const sampleRows = buildSalesImportSampleRows(fieldDefs);
     const wb = XLSX.utils.book_new();
@@ -3242,6 +3249,7 @@ router.get('/process/order-logs', async (req, res, next) => {
     if (!perm(req, 'process_management', 'view_flow')) return res.status(403).json({ error: 'FORBIDDEN' });
     const pool = getPool();
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+    const orderNo = req.query.order_no;
     const seeAll = canViewAllSalesOrders(req);
     let sql = `SELECT l.*, o.order_no, u.username AS actor_username
                FROM sales_order_status_logs l
@@ -3252,6 +3260,10 @@ router.get('/process/order-logs', async (req, res, next) => {
     if (!seeAll) {
       sql += ' AND o.created_by = ?';
       args.push(req.user.userId);
+    }
+    if (orderNo && orderNo.trim() !== '') {
+      sql += ' AND o.order_no LIKE ?';
+      args.push(`%${orderNo}%`);
     }
     const finScopeP = financeOrderListScopeSql(req);
     sql += finScopeP.sql;

@@ -471,7 +471,7 @@
       <div class="log-block">状态变更</div>
       <el-timeline v-if="statusLogs.length">
         <el-timeline-item v-for="l in statusLogs" :key="l.id" :timestamp="$dt(l.created_at)">
-          {{ l.from_status || '—' }} → {{ l.to_status }} · {{ l.actor_username || '—' }} · {{ l.remark || '' }}
+          {{ orderFlowStatusZh(l.from_status) }} → {{ orderFlowStatusZh(l.to_status) }} · 操作人：{{ l.actor_username || '—' }}<template v-if="l.remark"> · 备注：{{ l.remark }}</template>
         </el-timeline-item>
       </el-timeline>
       <div class="log-block mt">修改记录</div>
@@ -851,6 +851,7 @@ import {
   buildContractPreviewPrintWindowHtml
 } from '../utils/contractPreviewHtml';
 import { zhMessageForApiError } from '../../../shared/apiErrorZh.js';
+import { orderFlowStatusZh } from '../utils/salesStatusDisplay';
 
 function defaultRange() {
   const end = new Date();
@@ -1116,6 +1117,7 @@ export default {
     }
   },
   methods: {
+    orderFlowStatusZh,
     perm,
     contractStatusLabel(status) {
       if (status === 'draft') return '草稿';

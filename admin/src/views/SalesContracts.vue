@@ -144,8 +144,16 @@
       <el-tab-pane v-if="perm('process_management', 'view_flow')" label="流程追溯" name="flow">
         <div class="toolbar flow-toolbar-wrap">
           <div class="left">
+            <el-input
+              v-model="flowOrderNo"
+              placeholder="订单号"
+              clearable
+              class="field-flow-order-no"
+              @keyup.enter="loadFlow"
+            />
+            <el-button size="small" type="primary" @click="loadFlow">查询</el-button>
             <el-button size="small" @click="loadFlow">刷新</el-button>
-            <span class="hint inline-hint">按订单汇总，与合同列表分开；展开查看状态时间线。</span>
+            <span class="hint inline-hint">按订单汇总，与合同列表分开；展开查看流程步骤。</span>
           </div>
         </div>
         <div v-loading="flowLoading" class="flow-body">
@@ -159,12 +167,27 @@
           <el-table-column type="expand" width="44">
             <template #default="{ row: g }">
               <div class="flow-expand-inner">
-                <el-timeline>
-                  <el-timeline-item v-for="l in g.logs" :key="l.id" :timestamp="$dt(l.created_at)">
-                    {{ l.from_status || '—' }} → {{ l.to_status }} · {{ l.actor_username || '—' }} ·
-                    {{ l.remark || '' }}
-                  </el-timeline-item>
-                </el-timeline>
+                <el-steps
+                  v-if="g.logs.length"
+                  direction="vertical"
+                  :active="g.logs.length"
+                  finish-status="success"
+                  class="flow-order-steps"
+                >
+                  <el-step
+                    v-for="l in g.logs"
+                    :key="l.id"
+                    :title="`${orderFlowStatusZh(l.from_status)} → ${orderFlowStatusZh(l.to_status)}`"
+                  >
+                    <template #description>
+                      <div class="flow-step-desc">
+                        <div class="flow-step-time">{{ $dt(l.created_at) }}</div>
+                        <div>操作人：{{ l.actor_username || '—' }}</div>
+                        <div v-if="l.remark">备注：{{ l.remark }}</div>
+                      </div>
+                    </template>
+                  </el-step>
+                </el-steps>
               </div>
             </template>
           </el-table-column>
@@ -195,11 +218,27 @@
               <div class="flow-mobile-status">
                 <SalesStatusPill kind="order" :order-row="flowOrderStatusRow(g)" />
               </div>
-              <el-timeline class="flow-mobile-timeline">
-                <el-timeline-item v-for="l in g.logs" :key="l.id" :timestamp="$dt(l.created_at)">
-                  {{ l.from_status || '—' }} → {{ l.to_status }} · {{ l.actor_username || '—' }} · {{ l.remark || '' }}
-                </el-timeline-item>
-              </el-timeline>
+              <el-steps
+                v-if="g.logs.length"
+                direction="vertical"
+                :active="g.logs.length"
+                finish-status="success"
+                class="flow-order-steps flow-order-steps--mobile"
+              >
+                <el-step
+                  v-for="l in g.logs"
+                  :key="l.id"
+                  :title="`${orderFlowStatusZh(l.from_status)} → ${orderFlowStatusZh(l.to_status)}`"
+                >
+                  <template #description>
+                    <div class="flow-step-desc">
+                      <div class="flow-step-time">{{ $dt(l.created_at) }}</div>
+                      <div>操作人：{{ l.actor_username || '—' }}</div>
+                      <div v-if="l.remark">备注：{{ l.remark }}</div>
+                    </div>
+                  </template>
+                </el-step>
+              </el-steps>
             </el-collapse-item>
           </el-collapse>
         </div>
@@ -392,6 +431,7 @@ import {
 import mammoth from 'mammoth';
 import SalesStatusPill from '../components/SalesStatusPill.vue';
 import { finalizeContractBodyForPreview, buildContractPreviewPrintWindowHtml } from '../utils/contractPreviewHtml';
+import { orderFlowStatusZh } from '../utils/salesStatusDisplay';
 
 export default {
   name: 'SalesContracts',
@@ -440,7 +480,8 @@ export default {
       uploadDocFile: null,
       uploadDocCustomers: [],
       uploadDocCustomersLoading: false,
-      uploadDocSubmitting: false
+      uploadDocSubmitting: false,
+      flowOrderNo: ''
     };
   },
   computed: {
@@ -511,6 +552,7 @@ export default {
     this.loadFlow();
   },
   methods: {
+    orderFlowStatusZh,
     perm,
     syncTabFromQuery() {
       const t = this.$route.query.tab;
@@ -846,7 +888,11 @@ export default {
       if (!perm('process_management', 'view_flow')) return;
       this.flowLoading = true;
       try {
-        const d = await listSalesProcessLogs({ limit: 500 });
+        const params = { limit: 500 };
+        if (this.flowOrderNo && this.flowOrderNo.trim() !== '') {
+          params.order_no = this.flowOrderNo;
+        }
+        const d = await listSalesProcessLogs(params);
         this.flowLogs = d.items || [];
       } catch {
         this.flowLogs = [];
@@ -1089,6 +1135,9 @@ export default {
 .field-status {
   width: 140px;
 }
+.field-flow-order-no {
+  width: 180px;
+}
 .table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -1228,6 +1277,30 @@ export default {
   padding: 8px 12px 8px 4px;
   max-width: 920px;
 }
+.flow-order-steps {
+  max-width: 720px;
+}
+.flow-order-steps :deep(.el-step__title) {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  padding-right: 8px;
+}
+.flow-order-steps :deep(.el-step__description) {
+  padding-right: 8px;
+}
+.flow-step-desc {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.55;
+}
+.flow-step-time {
+  color: #909399;
+  margin-bottom: 4px;
+}
+.flow-order-steps--mobile {
+  padding-left: 4px;
+}
 .flow-status-cell {
   display: flex;
   justify-content: center;
@@ -1254,9 +1327,6 @@ export default {
 }
 .flow-mobile-status {
   margin-bottom: 10px;
-}
-.flow-mobile-timeline {
-  padding-left: 4px;
 }
 @media (max-width: 768px) {
   .flow-orders-table {

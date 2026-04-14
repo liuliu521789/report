@@ -366,52 +366,19 @@ export function validateOrderDataInput(definitions, rawInput) {
       continue;
     }
 
-    if (d.maps_to === 'quantity') {
-      const s =
-        typeof v === 'number' && Number.isFinite(v)
-          ? String(v)
-          : String(v).trim().replace(/\s+/g, ' ');
-      const n = parseQuantityToLegacyNumber(s);
-      if (n <= 0) {
-        errors.push({
-          field_key: key,
-          label_zh: label,
-          message: `${label}须包含正数，可加单位（如 10桶、2.5吨桶）`
-        });
-      } else {
-        data[key] = s;
-      }
-      continue;
-    }
-
+    // 只校验必填项，非必填项直接存储
     if (d.field_type === 'text' || d.field_type === 'textarea') {
       data[key] = String(v);
-      continue;
-    }
-
-    if (d.field_type === 'date') {
-      const normalized = normalizeOrderDateInput(v);
-      if (!normalized.ok) {
-        errors.push({
-          field_key: key,
-          label_zh: label,
-          message: `${label}须为有效日期（${MIN_SHIP_DATE_YEAR}–${MAX_SHIP_DATE_YEAR} 年；支持与系统模板一致的文本或 Excel 日期列。若曾出现 1900-01-02，多为表头错行或「日期」列混入了序号、数量等小整数）`
-        });
-      } else {
-        data[key] = normalized.value;
-      }
-      continue;
-    }
-
-    if (d.field_type === 'number' || d.field_type === 'positive_number') {
+    } else if (d.field_type === 'number' || d.field_type === 'positive_number') {
       const n = Number(v);
-      if (!Number.isFinite(n)) {
-        errors.push({ field_key: key, label_zh: label, message: `${label}须为有效数字` });
-      } else if (d.field_type === 'positive_number' && n <= 0) {
-        errors.push({ field_key: key, label_zh: label, message: `${label}须大于 0` });
-      } else {
-        data[key] = n;
-      }
+      data[key] = Number.isFinite(n) ? n : v;
+    } else if (d.field_type === 'date') {
+      const normalized = normalizeOrderDateInput(v);
+      data[key] = normalized.ok ? normalized.value : String(v);
+    } else if (d.maps_to === 'quantity') {
+      data[key] = typeof v === 'number' && Number.isFinite(v) ? String(v) : String(v).trim().replace(/\s+/g, ' ');
+    } else {
+      data[key] = v;
     }
   }
 

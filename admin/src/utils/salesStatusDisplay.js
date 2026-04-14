@@ -12,6 +12,16 @@ const ORDER_BASE_LABEL = {
 };
 
 /**
+ * 订单状态日志 `from_status` / `to_status` 等枚举 → 简短中文（与状态角标一致）
+ * @param {string | null | undefined} status
+ */
+export function orderFlowStatusZh(status) {
+  if (status == null || String(status).trim() === '') return '—';
+  const s = String(status).trim();
+  return ORDER_BASE_LABEL[s] || s || '—';
+}
+
+/**
  * @param {{ status?: string, submitted_for_review_at?: string | null }} row
  */
 export function orderStatusDisplay(row) {
