@@ -35,6 +35,7 @@ import {
   ensureQuickRoleUserColumns,
   ensureSalesModuleTables,
   ensureSalesInternalMessagesTable,
+  ensureSalesInternalModelsTable,
   ensureDepartmentsTable,
   ensureReportsReportUidColumn,
   ensureWecomNotificationsTables,
@@ -45,6 +46,7 @@ import {
 } from './db/ensureSchema.js';
 import { apiErrorI18nMiddleware } from './middleware/apiErrorI18n.js';
 import { enrichApiErrorBody } from '../../shared/apiErrorZh.js';
+import { validateProductionConfigOrExit } from './lib/productionConfig.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -156,6 +158,9 @@ app.use((err, req, res, next) => {
 const port = Number(process.env.PORT || 3001);
 
 async function start() {
+  // 生产安全基线强制校验（置于最前，尽早失败）
+  validateProductionConfigOrExit();
+
   try {
     await pingDb();
     await ensureUsersAccountTypeManagerEnum();
@@ -165,6 +170,7 @@ async function start() {
     await ensureReportStylesTable();
     await ensureQuickRoleUserColumns();
     await ensureSalesModuleTables();
+    await ensureSalesInternalModelsTable();
     await ensureSalesContractDocumentColumns();
     await ensureDepartmentsTable();
     await ensureWecomNotificationsTables();

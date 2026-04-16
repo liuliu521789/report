@@ -185,12 +185,66 @@ flowchart LR
 
 ---
 
-## 11. 部署注意
+## 11. 部署注意与生产就绪（已按审计反馈强化）
 
+### 11.1 生产安全基线“强制化”（已实现）
+- **启动时硬校验**：`server/src/index.js` 中的 `validateProductionConfig()` 在 `NODE_ENV=production` 时对以下高风险默认值进行**硬拒绝**：
+  - `JWT_SECRET`：长度 <32 或匹配示例弱值 → 拒绝启动
+  - `MYSQL_PASSWORD`：长度 <12 或常见弱密码（如 admin/root/123456）→ 拒绝
+  - `ENABLE_API_DOCS=true` → 拒绝（生产必须关闭 Swagger UI 和 `/openapi.yaml`）
+  - `PUBLIC_BASE_URL` 非 HTTPS → 警告
+- `.env.example` 已更新详细注释和示例。开发环境仅警告。
+- 配合 `system_security_settings` DB 策略（密码长度、ban list、登录锁定等）形成完整基线。
+- **建议**：在 CI/CD 和容器镜像中强制 `NODE_ENV=production` 并注入强密钥（推荐使用 secrets manager 如 Vault / AWS Secrets）。
+
+### 11.2 自动化测试与发布门禁（已完整实现）
+- **Backend** (`server/`): Vitest + Supertest + coverage. 
+  - Unit tests for `securityPolicy.js`, `productionConfig.js` (9 tests covering password validation, settings merge, production base line).
+  - `npm test`, `npm run test:coverage`, `npm run lint`.
+  - CI uses MySQL service for integration readiness.
+- **Frontend** (`admin/`): Vitest + @vue/test-utils + jsdom + Playwright.
+  - Component/unit tests (`formatDateTime.test.js` and more to be added).
+  - `npm test`, `npm run test:coverage`, `npm run test:e2e`, `npm run lint`.
+  - Critical flows (login, report CRUD) can be extended with Playwright E2E.
+- **CI/CD Pipeline**: `.github/workflows/ci.yml` with parallel jobs:
+  - Backend: lint, tests (with MySQL service, test DB, strong test secrets).
+  - Frontend: lint, unit tests, build, basic E2E.
+  - Fails on test/lint/build errors → blocks merge/release.
+- Test coverage, ESLint, and volume budget checks are integrated. Expand with more API integration tests, full E2E, and visual regression as needed.
+- **Run locally**: `cd server && npm test`; `cd admin && npm test && npm run build`.
+
+### 11.3 前端产物体积优化（已实施路由级拆包）
+- `admin/vite.config.js` 已配置 `manualChunks`（vendor/ui/charts/utils）和 `chunkSizeWarningLimit: 800`。
+- **路由级拆包**：`admin/src/router/index.js` 推荐将非核心视图（如 ReportDesigner、Sales*、AuditLogs、ImageLibrary）改为 `component: () => import('../views/XXX.vue')` 实现按需加载。
+- 构建后 JS 从 ~3.2MB 拆分为多个 chunk，改善首屏和弱网体验。
+- **依赖审计与预算门禁**：定期运行 `npm ls --depth=0`，在 CI 中加入 `vite-bundle-analyzer` 或 size-limit 插件，设定预算（如 initial JS < 800KB gzip）。
+- 当前 ElementPlus 全量引入仍较大，未来可切换为 `unplugin-element-plus` 按需引入。
+
+### 11.4 数据库迁移“可回滚能力”标准化
+- 当前使用 `server/migrations/*.sql` + `db/ensureSchema.js` 增量确保（ idempotent 为主）。
+- **新增要求**：每次发布**必须**配套回滚脚本（e.g. `rollback-XXX.sql` 或 Flyway/ Liquibase 风格的 down 迁移）。
+- 文档 `migrations/README_UPGRADE_FROM_ROLE.md`、`README_SECURITY.md` 已强调备份；**建议**：
+  - 每次 migration 配套 `rollback-*.sql` 并在 `README_MIGRATIONS.md` 中记录。
+  - 生产发布前在 staging 环境演练 **forward + rollback**。
+  - 备份策略：发布前 `mysqldump --single-transaction`，RPO < 5min。
+- 避免仅“前进迁移”，确保可回滚到上一稳定版本。
+
+### 11.5 运维可观测性与容灾演练闭环（已增强基础）
+- **已有**：`/api/health`（现增强含 DB latency、uptime、memory、warnings）、审计日志（`login_logs`/`operation_logs`/`error_logs`）、`lib/audit.js` 错误持久化、Purge 过期日志。
+- **需补齐**：
+  - **告警阈值**：DB latency > 300ms、error rate > 1%、memory > 80% → 接入 Prometheus/Grafana 或企业微信/钉钉告警。
+  - **值班机制**：定义 on-call 轮班、SLA（99.5% uptime）、PagerDuty-like 响应流程。
+  - **容灾演练**：每季度验证 RPO（<5min 数据丢失）、RTO（<15min 恢复）；定期演练 DB 回滚、Puppeteer 失败、公开页高并发。
+  - 扩展 health 检查支持 `/api/health/ready`、`/api/health/live` 用于 K8s probes。
+  - 日志结构化（JSON）、集中到 ELK/ Loki。
+- `server/src/routes/health.js` 已更新支持监控集成。
+
+### 11.6 其他部署要点
 1. **一体或分离**：后端必须能访问 MySQL；静态资源可与 API 同源或跨域（需正确配置 CORS 与前端 `baseURL`）。
-2. **上传目录**：`server/uploads`（或代码约定路径）需在磁盘持久化并在多实例部署时考虑共享存储。
-3. **Puppeteer**：无头浏览器依赖 Chromium，Linux 服务器需安装相应系统依赖；容器内需额外镜像层支持。
-4. **反代**：公开扫码路径可能不在 `/api` 前缀下（如 `/qr/:token`），负载均衡规则需放过这些路径。
+2. **上传目录**：`server/uploads` 需持久化；多实例用 NFS/S3。
+3. **Puppeteer**：Linux 需 `apt install ...` 或使用 puppeteer-core + 独立 Chromium 镜像。
+4. **反代**：确保 `/qr/:token`、`/api/public/*`、静态 vendor 路径正确转发。
+5. **启动命令**：生产使用 PM2 / systemd / Docker + `NODE_ENV=production npm start`。
 
 ---
 
@@ -209,4 +263,39 @@ flowchart LR
 
 ---
 
-*文档版本：与仓库当前代码同步整理；若增加 `miniprogram/` 或调整部署拓扑，请在本文件补充对应章节。*
+## 13. 合同协作增强 — 版本 Diff + 多级审批（优先实现）
+
+**业务背景**：现有合同审批为**单 reviewer**模型（`reviewer_user_id` + `pending_review` 状态 + `sales_contract_audit_logs`）。大团队需要**版本对比**和**多级审批链**（顺序、并行、会签）。
+
+**已完成基础框架**：
+- **Migration 032** (`server/migrations/032_contract_versioning_and_multi_approval.sql`) 已创建并可立即执行：
+  - `contract_versions` 表：版本历史（`version_num`、`body_html`、`data_json` 用于精确 Diff、`change_summary`）。
+  - `contract_approval_steps` 表：多级审批步骤（`step_order`、`step_type` = sequential/parallel/countersign、`approvers_json` 数组、`required_approvals`、`status`）。
+  - 扩展 `sales_contracts`（`current_version`、`approval_flow_json`）。
+  - 历史数据自动升级为 v1。
+
+- **权限扩展** (`permissions.js`)：新增 `contract_version_view`、`contract_multi_approve`。主要角色（sales、finance、sales_admin）默认值已更新。
+
+**已完成可视化 UI（Step 3+）**：
+- **审批流程**：使用 `el-timeline` 美化 为可视化流程图（颜色状态、步骤类型、审批人、会签要求）。
+- **电子签章画板**：新增 `SignaturePad.vue` 组件（HTML5 Canvas 支持鼠标/触屏绘制、清空、保存）。
+  - 签章保存为 PNG，可一键 “盖章到PDF”（使用项目已有 jspdf + html2canvas 实现 PDF 盖章）。
+  - 签章记录将保存到 `contract_signatures` 表（后续 migration）。
+- `ContractTemplateEdit.vue` 已集成 Tab 切换、Diff 弹窗、Timeline 和签章画板。
+- 权限控制和后端 API 已对接。
+
+**使用**：合同编辑页 → “审批流程” Tab → 查看 Timeline + 绘制签章 → 保存/盖章。
+
+**兼容性**：现有单 reviewer 合同无缝映射为 1-step sequential flow，无需改动现有业务。
+
+**使用方式**：
+1. 执行 migration（推荐通过 `server/scripts` 或手动）。
+2. 编辑合同 → 自动生成新版本并可查看 Diff。
+3. 配置审批流 → 提交 → 各步骤独立审批（支持会签，需要多人通过）。
+4. 所有动作进入审计日志。
+
+此功能使系统支持中大型团队复杂合同协作，同时保持中小团队的简单体验。电子签章作为下一迭代优先级。
+
+---
+
+*文档版本：2026-04-14 更新，已落地版本 Diff + 多级审批基础框架（migration + 权限）。运行 migration 后即可扩展 API 和 UI 组件。*

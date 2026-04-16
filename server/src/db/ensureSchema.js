@@ -117,6 +117,24 @@ const DDL_SALES_INTERNAL_MESSAGES = `CREATE TABLE IF NOT EXISTS sales_internal_m
     CONSTRAINT fk_sales_messages_from FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE SET NULL
   ) ENGINE=InnoDB`;
 
+const DDL_SALES_INTERNAL_MODELS = `CREATE TABLE IF NOT EXISTS sales_internal_models (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    internal_code VARCHAR(64) NOT NULL,
+    name VARCHAR(128) NOT NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    remarks VARCHAR(512) NULL,
+    created_by BIGINT UNSIGNED NULL,
+    updated_by BIGINT UNSIGNED NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_sales_internal_models_code (internal_code),
+    KEY idx_sales_internal_models_name (name(64)),
+    KEY idx_sales_internal_models_active (is_active),
+    CONSTRAINT fk_sales_internal_models_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT fk_sales_internal_models_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+  ) ENGINE=InnoDB`;
+
 const DDL_SALES_PIECES = [
   `CREATE TABLE IF NOT EXISTS sales_settings (
     id TINYINT UNSIGNED NOT NULL DEFAULT 1,
@@ -133,13 +151,18 @@ const DDL_SALES_PIECES = [
     phone VARCHAR(64) NULL,
     address VARCHAR(512) NULL,
     created_by BIGINT UNSIGNED NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    updated_by BIGINT UNSIGNED NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (id),
     UNIQUE KEY uk_sales_customers_code (customer_code),
     KEY idx_sales_customers_name (customer_name(64)),
-    CONSTRAINT fk_sales_customers_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    KEY idx_sales_customers_active (is_active),
+    CONSTRAINT fk_sales_customers_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT fk_sales_customers_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
   ) ENGINE=InnoDB`,
+  DDL_SALES_INTERNAL_MODELS,
   `CREATE TABLE IF NOT EXISTS sales_order_field_definitions (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     field_key VARCHAR(64) NOT NULL,
@@ -282,28 +305,28 @@ const SALES_CATEGORY_SEEDS = [
     '销售人员',
     'sales',
     10,
-    '{"reports":{"list":false,"view":false,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":false,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":false,"create":false,"viewDetail":false,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false},"order_management":{"order_input":true,"order_query":true,"order_query_all":true,"order_edit":true,"order_submit":true,"order_withdraw":true,"order_status_finance":false,"order_status_warehouse":false,"order_ship":false,"order_view_status_logs":true,"order_cancel":true,"order_delete":true},"contract_management":{"template_manage":true,"contract_generate":true,"contract_submit":true,"contract_review":false,"contract_view":true},"process_management":{"view_flow":true},"data_management":{"data_export":false,"data_export_all":false}}',
+    '{"reports":{"list":false,"view":false,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":false,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":false,"create":false,"viewDetail":false,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false},"order_management":{"order_input":true,"order_query":true,"order_query_all":true,"order_edit":true,"order_submit":true,"order_withdraw":true,"order_status_finance":false,"order_status_warehouse":false,"order_ship":false,"order_view_status_logs":true,"order_cancel":true,"order_delete":true},"contract_management":{"template_manage":true,"contract_generate":true,"contract_submit":true,"contract_review":false,"contract_view":true},"process_management":{"view_flow":true},"data_management":{"data_export":false,"data_export_all":false},"customer_management":{"view":true,"create":true,"edit":true,"disable":true}}',
     0
   ],
   [
     '财务审核员',
     'finance',
     11,
-    '{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":false,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false},"order_management":{"order_input":false,"order_query":true,"order_query_all":true,"order_edit":false,"order_submit":false,"order_withdraw":false,"order_status_finance":true,"order_status_warehouse":false,"order_ship":false,"order_view_status_logs":true,"order_cancel":true,"order_delete":true},"contract_management":{"template_manage":false,"contract_generate":false,"contract_submit":false,"contract_review":true,"contract_view":true},"process_management":{"view_flow":true},"data_management":{"data_export":true,"data_export_all":false}}',
+    '{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":false,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false},"order_management":{"order_input":false,"order_query":true,"order_query_all":true,"order_edit":false,"order_submit":false,"order_withdraw":false,"order_status_finance":true,"order_status_warehouse":false,"order_ship":false,"order_view_status_logs":true,"order_cancel":true,"order_delete":true},"contract_management":{"template_manage":false,"contract_generate":false,"contract_submit":false,"contract_review":true,"contract_view":true},"process_management":{"view_flow":true},"data_management":{"data_export":true,"data_export_all":false},"customer_management":{"view":true,"create":false,"edit":false,"disable":false}}',
     0
   ],
   [
     '仓库人员',
     'warehouse',
     12,
-    '{"reports":{"list":false,"view":false,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":false,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":false,"create":false,"viewDetail":false,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false},"order_management":{"order_input":false,"order_query":true,"order_query_all":true,"order_edit":false,"order_submit":false,"order_withdraw":false,"order_status_finance":false,"order_status_warehouse":true,"order_ship":true,"order_view_status_logs":true,"order_cancel":false,"order_delete":false},"contract_management":{"template_manage":false,"contract_generate":false,"contract_submit":false,"contract_review":false,"contract_view":true},"process_management":{"view_flow":true},"data_management":{"data_export":false,"data_export_all":false}}',
+    '{"reports":{"list":false,"view":false,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":false,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":false,"create":false,"viewDetail":false,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false},"order_management":{"order_input":false,"order_query":true,"order_query_all":true,"order_edit":false,"order_submit":false,"order_withdraw":false,"order_status_finance":false,"order_status_warehouse":true,"order_ship":true,"order_view_status_logs":true,"order_cancel":false,"order_delete":false},"contract_management":{"template_manage":false,"contract_generate":false,"contract_submit":false,"contract_review":false,"contract_view":true},"process_management":{"view_flow":true},"data_management":{"data_export":false,"data_export_all":false},"customer_management":{"view":true,"create":false,"edit":false,"disable":false}}',
     0
   ],
   [
     '系统管理员',
     'sales_admin',
     13,
-    '{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":true},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":true},"audit":{"viewLogin":true,"viewOperations":true,"viewErrors":false,"exportAudit":false},"order_management":{"order_input":true,"order_query":true,"order_query_all":true,"order_edit":true,"order_submit":true,"order_withdraw":true,"order_status_finance":true,"order_status_warehouse":true,"order_ship":true,"order_view_status_logs":true,"order_cancel":true,"order_delete":true,"order_field_config":true},"contract_management":{"template_manage":true,"contract_generate":true,"contract_submit":true,"contract_review":true,"contract_view":true},"process_management":{"view_flow":true},"data_management":{"data_export":true,"data_export_all":true}}',
+    '{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":true},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":true},"audit":{"viewLogin":true,"viewOperations":true,"viewErrors":false,"exportAudit":false},"order_management":{"order_input":true,"order_query":true,"order_query_all":true,"order_edit":true,"order_submit":true,"order_withdraw":true,"order_status_finance":true,"order_status_warehouse":true,"order_ship":true,"order_view_status_logs":true,"order_cancel":true,"order_delete":true,"order_field_config":true},"contract_management":{"template_manage":true,"contract_generate":true,"contract_submit":true,"contract_review":true,"contract_view":true},"process_management":{"view_flow":true},"data_management":{"data_export":true,"data_export_all":true},"customer_management":{"view":true,"create":true,"edit":true,"disable":true}}',
     0
   ]
 ];
@@ -350,6 +373,12 @@ export async function ensureSalesInternalMessagesTable() {
   await pool.query(DDL_SALES_INTERNAL_MESSAGES);
 }
 
+/** 启动自检 sales_internal_models 表（与迁移脚本一致） */
+export async function ensureSalesInternalModelsTable() {
+  const pool = getPool();
+  await pool.query(DDL_SALES_INTERNAL_MODELS);
+}
+
 export async function ensureSalesModuleTables() {
   const pool = getPool();
   for (const ddl of DDL_SALES_PIECES) {
@@ -388,6 +417,25 @@ export async function ensureSalesModuleTables() {
       /* qrcodes 表或引擎限制时仅保留列 */
     }
   }
+
+  // Customer management: is_active, updated_by (updated_at already present)
+  if (!(await columnExists(pool, 'sales_customers', 'is_active'))) {
+    await pool.query('ALTER TABLE sales_customers ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1 AFTER created_by');
+    await pool.query('UPDATE sales_customers SET is_active = 1');
+  }
+  if (!(await columnExists(pool, 'sales_customers', 'updated_by'))) {
+    await pool.query('ALTER TABLE sales_customers ADD COLUMN updated_by BIGINT UNSIGNED NULL AFTER is_active');
+    try {
+      await pool.query(
+        `ALTER TABLE sales_customers 
+         ADD CONSTRAINT fk_sales_customers_updated_by 
+         FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL`
+      );
+    } catch {
+      /* constraint may already exist or other DB limitation */
+    }
+  }
+
   await pool.query(
     `INSERT IGNORE INTO sales_settings (id, order_no_prefix, last_order_seq) VALUES (1, 'SO', 0)`
   );

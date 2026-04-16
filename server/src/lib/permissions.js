@@ -11,7 +11,8 @@ export const PERMISSION_MODULES = [
   'order_management',
   'contract_management',
   'process_management',
-  'data_management'
+  'data_management',
+  'customer_management'
 ];
 
 export function emptyPermissions() {
@@ -82,7 +83,9 @@ export function emptyPermissions() {
       contract_review: false,
       contract_view: false,
       contract_edit: false,
-      contract_delete: false
+      contract_delete: false,
+      contract_version_view: true,
+      contract_multi_approve: true
     },
     process_management: {
       view_flow: false
@@ -90,6 +93,12 @@ export function emptyPermissions() {
     data_management: {
       data_export: false,
       data_export_all: false
+    },
+    customer_management: {
+      view: false,
+      create: false,
+      edit: false,
+      disable: false
     }
   };
 }
@@ -163,7 +172,9 @@ export function defaultPermissionsQc() {
       contract_review: false,
       contract_view: false,
       contract_edit: false,
-      contract_delete: false
+      contract_delete: false,
+      contract_version_view: true,
+      contract_multi_approve: true
     },
     process_management: {
       view_flow: false
@@ -171,6 +182,12 @@ export function defaultPermissionsQc() {
     data_management: {
       data_export: false,
       data_export_all: false
+    },
+    customer_management: {
+      view: false,
+      create: false,
+      edit: false,
+      disable: false
     }
   };
 }
@@ -244,7 +261,9 @@ export function defaultPermissionsCs() {
       contract_review: false,
       contract_view: false,
       contract_edit: false,
-      contract_delete: false
+      contract_delete: false,
+      contract_version_view: true,
+      contract_multi_approve: true
     },
     process_management: {
       view_flow: false
@@ -252,6 +271,12 @@ export function defaultPermissionsCs() {
     data_management: {
       data_export: false,
       data_export_all: false
+    },
+    customer_management: {
+      view: false,
+      create: false,
+      edit: false,
+      disable: false
     }
   };
 }

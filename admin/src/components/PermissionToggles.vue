@@ -94,6 +94,13 @@
       <el-checkbox v-model="inner.data_management.data_export" @change="emit">导出 Excel（权限范围内）</el-checkbox>
       <el-checkbox v-model="inner.data_management.data_export_all" @change="emit">全量导出 / 订单号前缀设置</el-checkbox>
     </div>
+    <div class="perm-block">
+      <div class="perm-title">销售 · 客户管理（module=customer_management）</div>
+      <el-checkbox v-model="inner.customer_management.view" @change="emit">查看客户列表</el-checkbox>
+      <el-checkbox v-model="inner.customer_management.create" @change="emit">新增客户</el-checkbox>
+      <el-checkbox v-model="inner.customer_management.edit" @change="emit">编辑客户信息</el-checkbox>
+      <el-checkbox v-model="inner.customer_management.disable" @change="emit">启用/停用客户</el-checkbox>
+    </div>
   </div>
 </template>
 

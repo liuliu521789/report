@@ -114,7 +114,7 @@
                 <el-button v-if="canEditContract(row)" link type="primary" @click="goContractEditor(row)">编辑</el-button>
                 <el-button v-if="canDeleteContract(row)" link type="danger" @click="removeContract(row)">删除</el-button>
                 <el-button
-                  v-if="perm('contract_management', 'contract_submit') && row.status === 'draft' && isMine(row)"
+                  v-if="perm('contract_management', 'contract_submit') && canEditContract(row)"
                   link
                   @click="openSubmit(row)"
                 >提交审核</el-button>

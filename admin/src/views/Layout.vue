@@ -65,6 +65,20 @@
             <span>订单管理</span>
           </el-menu-item>
           <el-menu-item
+            v-if="perm('customer_management', 'view')"
+            index="/sales/customers"
+          >
+            <el-icon><User /></el-icon>
+            <span>客户管理</span>
+          </el-menu-item>
+          <el-menu-item
+            v-if="perm('order_management', 'order_field_config')"
+            index="/sales/internal-models"
+          >
+            <el-icon><Document /></el-icon>
+            <span>内部型号管理</span>
+          </el-menu-item>
+          <el-menu-item
             v-if="
               perm('contract_management', 'contract_view') ||
               perm('contract_management', 'template_manage') ||
@@ -275,6 +289,20 @@
               <span>订单管理</span>
             </el-menu-item>
             <el-menu-item
+              v-if="perm('customer_management', 'view')"
+              index="/sales/customers"
+            >
+              <el-icon><User /></el-icon>
+              <span>客户管理</span>
+            </el-menu-item>
+            <el-menu-item
+              v-if="perm('order_management', 'order_field_config')"
+              index="/sales/internal-models"
+            >
+              <el-icon><Document /></el-icon>
+              <span>内部型号管理</span>
+            </el-menu-item>
+            <el-menu-item
               v-if="
                 perm('contract_management', 'contract_view') ||
                 perm('contract_management', 'template_manage') ||
@@ -408,9 +436,11 @@ export default {
       return (
         perm('order_management', 'order_query') ||
         perm('order_management', 'order_input') ||
+        perm('order_management', 'order_field_config') ||
         perm('contract_management', 'contract_view') ||
         perm('contract_management', 'template_manage') ||
-        perm('process_management', 'view_flow')
+        perm('process_management', 'view_flow') ||
+        perm('customer_management', 'view')
       );
     },
     menuDefaultOpeneds() {
@@ -426,6 +456,7 @@ export default {
       if (p.startsWith('/company')) return '公司信息';
       if (p.startsWith('/wecom-notifications')) return '企业微信通知';
       if (p.startsWith('/sales/orders')) return '销售数据 · 订单管理';
+      if (p.startsWith('/sales/internal-models')) return '销售数据 · 内部型号管理';
       if (p.startsWith('/sales/contracts/templates')) return '销售数据 · 合同模板';
       if (p.startsWith('/sales/contracts/editor')) return '销售数据 · 编辑合同';
       if (p.startsWith('/sales/contracts')) return '销售数据 · 合同管理';
@@ -453,6 +484,7 @@ export default {
       if (p.startsWith('/wecom-notifications'))
         return '绑定企业微信应用、维护成员 UserID 与模板，生成 HTTP 调用示例';
       if (p.startsWith('/sales/orders')) return '销售订单录入、审核、发货与质检二维码关联';
+      if (p.startsWith('/sales/internal-models')) return '维护销售内部型号编码、名称、状态与备注，支持订单字段配置权限下的CRUD操作';
       if (p.startsWith('/sales/contracts/templates'))
         return '参考新建报告：套用已有模板或推荐版式，编辑正文与预览后保存（与报告编辑页同类操作习惯）';
       if (p.startsWith('/sales/contracts/editor'))

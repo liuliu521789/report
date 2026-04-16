@@ -483,6 +483,61 @@ export async function createSalesCustomer(payload) {
   return data;
 }
 
+export async function updateSalesCustomer(id, payload) {
+  const { data } = await http.patch(`/api/sales/customers/${id}`, payload);
+  return data;
+}
+
+export async function toggleCustomerStatus(id, isActive) {
+  const { data } = await http.patch(`/api/sales/customers/${id}/status`, { is_active: isActive });
+  return data;
+}
+
+export async function getCustomerStats(id) {
+  const { data } = await http.get(`/api/sales/customers/${id}/stats`);
+  return data;
+}
+
+export async function batchDeleteCustomers(payload) {
+  const { data } = await http.post('/api/sales/customers/bulk-delete', payload);
+  return data;
+}
+
+export async function exportCustomers(params = {}) {
+  const res = await http.get('/api/sales/customers/export', {
+    params,
+    responseType: 'blob'
+  });
+  return res;
+}
+
+/** 内部型号管理 API */
+export async function listSalesInternalModels(params) {
+  const { data } = await http.get('/api/sales/internal-models', { params });
+  return data;
+}
+
+export async function createSalesInternalModel(payload) {
+  const { data } = await http.post('/api/sales/internal-models', payload);
+  return data;
+}
+
+export async function patchSalesInternalModel(id, payload) {
+  const { data } = await http.patch(`/api/sales/internal-models/${id}`, payload);
+  return data;
+}
+
+export async function batchDeleteInternalModels(payload) {
+  const { data } = await http.post('/api/sales/internal-models/batch-delete', payload);
+  return data;
+}
+
+/** 上传 Excel 批量导入内部型号（multipart，字段名 file；勿手动设 Content-Type，需带 boundary） */
+export async function importInternalModelsFromExcel(formData) {
+  const { data } = await http.post('/api/sales/internal-models/import', formData);
+  return data;
+}
+
 export async function listSalesMessages(params) {
   const { data } = await http.get('/api/sales/messages', { params, silentProgress: true });
   return data;

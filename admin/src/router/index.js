@@ -23,6 +23,8 @@ import ReportDesigner from '../views/ReportDesigner.vue';
 import ImageLibrary from '../views/ImageLibrary.vue';
 import SalesOrders from '../views/SalesOrders.vue';
 import SalesContracts from '../views/SalesContracts.vue';
+import CustomerManagement from '../views/CustomerManagement.vue';
+import InternalModels from '../views/InternalModels.vue';
 import ContractTemplateEdit from '../views/ContractTemplateEdit.vue';
 import WecomNotifications from '../views/WecomNotifications.vue';
 
@@ -82,6 +84,16 @@ const router = createRouter({
               ['order_management', 'order_input']
             ]
           }
+        },
+        {
+          path: '/sales/customers',
+          component: CustomerManagement,
+          meta: { needPerm: ['customer_management', 'view'] }
+        },
+        {
+          path: '/sales/internal-models',
+          component: InternalModels,
+          meta: { needPerm: ['order_management', 'order_field_config'] }
         },
         {
           path: '/sales/contracts/editor/:contractId',

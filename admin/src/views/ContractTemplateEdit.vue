@@ -63,44 +63,49 @@
 
     <el-card class="editor-card">
       <template #header>
-        <div class="field-header">
-          <div>{{ isContractMode ? (isUploadContract ? '文档合同' : '合同内容') : '模板内容' }}</div>
-        </div>
+        <el-tabs v-model="activeTab" type="card" @tab-click="handleTabClick">
+          <el-tab-pane label="合同内容" name="content" />
+          <el-tab-pane label="版本历史" name="versions" v-if="isContractMode && hasVersionPerm" />
+          <el-tab-pane label="审批流程" name="approval" v-if="isContractMode && hasMultiApprovePerm" />
+        </el-tabs>
       </template>
-      <div v-if="isContractMode && isUploadContract" class="upload-contract-panel">
-        <div class="toolbar in-editor-toolbar">
-          <div>
-            <el-button @click="goBack">返回</el-button>
-          </div>
-          <div class="toolbar-right">
-            <el-button
-              v-if="perm('company', 'manage') || perm('company', 'view')"
-              @click="$router.push('/company')"
-            >企业信息</el-button>
-            <el-button type="primary" :loading="saving" @click="save">保存</el-button>
-          </div>
-        </div>
-        <el-form label-width="100px" class="editor-form">
-          <el-form-item label="合同标题" required>
-            <el-input v-model="form.name" clearable placeholder="合同标题" style="max-width: 520px" />
-          </el-form-item>
-          <el-form-item label="正文文件">
-            <div class="upload-doc-row">
-              <span class="upload-doc-name">{{ uploadContractDocName || '—' }}</span>
-              <el-button @click="downloadUploadContractFile">下载</el-button>
-              <el-upload
-                :show-file-list="false"
-                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.gif"
-                :http-request="onReplaceUploadContractFile"
-              >
-                <el-button>更换文件</el-button>
-              </el-upload>
+
+      <!-- 内容 Tab -->
+      <div v-if="activeTab === 'content'">
+        <div v-if="isContractMode && isUploadContract" class="upload-contract-panel">
+          <div class="toolbar in-editor-toolbar">
+            <div>
+              <el-button @click="goBack">返回</el-button>
             </div>
-            <div class="tpl-insert-hint mt6">支持 PDF、Word、图片；单文件最大 20MB；仅草稿或已驳回时可更换。</div>
-          </el-form-item>
-        </el-form>
-      </div>
-      <div v-else class="editor-layout-modern">
+            <div class="toolbar-right">
+              <el-button
+                v-if="perm('company', 'manage') || perm('company', 'view')"
+                @click="$router.push('/company')"
+              >企业信息</el-button>
+              <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+            </div>
+          </div>
+          <el-form label-width="100px" class="editor-form">
+            <el-form-item label="合同标题" required>
+              <el-input v-model="form.name" clearable placeholder="合同标题" style="max-width: 520px" />
+            </el-form-item>
+            <el-form-item label="正文文件">
+              <div class="upload-doc-row">
+                <span class="upload-doc-name">{{ uploadContractDocName || '—' }}</span>
+                <el-button @click="downloadUploadContractFile">下载</el-button>
+                <el-upload
+                  :show-file-list="false"
+                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.gif"
+                  :http-request="onReplaceUploadContractFile"
+                >
+                  <el-button>更换文件</el-button>
+                </el-upload>
+              </div>
+              <div class="tpl-insert-hint mt6">支持 PDF、Word、图片；单文件最大 20MB；仅草稿或已驳回时可更换。</div>
+            </el-form-item>
+          </el-form>
+        </div>
+        <div v-else class="editor-layout-modern">
         <div class="edit-panel">
           <div class="toolbar in-editor-toolbar">
             <div>
@@ -141,7 +146,7 @@
             </div>
 
             <template v-if="isContractMode || editMode === 'visual'">
-            <fieldset
+              <fieldset
               class="visual-editor-fieldset"
               :disabled="contractBodyPreserveLocked"
               :class="{ 'is-locked': contractBodyPreserveLocked }"
@@ -373,12 +378,74 @@
           </div>
         </div>
       </div>
+      </div>
+
+      <!-- 版本历史 Tab -->
+      <div v-if="activeTab === 'versions' && isContractMode">
+        <div class="versions-panel">
+          <el-table :data="versions" style="width: 100%" v-if="versions.length">
+            <el-table-column label="版本" prop="version_num" width="80" />
+            <el-table-column label="变更摘要" prop="change_summary" />
+            <el-table-column label="创建时间" prop="created_at" width="160" />
+            <el-table-column label="操作" width="140">
+              <template #default="{ row }">
+                <el-button size="small" @click="showVersionDiff(row.version_num - 1, row.version_num)">对比上一版</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-else description="暂无版本记录" />
+        </div>
+
+        <!-- Diff 弹窗 -->
+        <el-dialog v-model="showDiffDialog" title="版本对比" width="70%" :destroy-on-close="true">
+          <ContractVersionDiff v-if="currentDiff" :diff="currentDiff" @close="showDiffDialog = false" />
+        </el-dialog>
+      </div>
+
+      <!-- 审批流程 Tab - 美化后的可视化 Timeline + 电子签章画板 -->
+      <div v-if="activeTab === 'approval' && isContractMode && hasMultiApprovePerm">
+        <div class="approval-panel">
+          <el-alert type="info" show-icon :closable="false" style="margin-bottom: 16px;">
+            多级审批可视化流程 + 电子签章。支持顺序、并行、会签。签章画板支持鼠标/触屏绘制，保存后可盖章到PDF。
+          </el-alert>
+
+          <!-- 可视化审批 Timeline -->
+          <div class="timeline-section">
+            <h4 class="section-title">审批流程 Timeline</h4>
+            <el-timeline>
+              <el-timeline-item v-for="(step, i) in approvalSteps" :key="i" 
+                               :timestamp="`步骤 ${step.step_order} - ${step.step_type === 'countersign' ? '会签' : step.step_type === 'parallel' ? '并行' : '顺序'}`"
+                               :color="step.status === 'approved' ? '#67C23A' : step.status === 'rejected' ? '#F56C6C' : '#409EFF'">
+                <div>
+                  <strong>审批人：</strong> {{ Array.isArray(step.approvers_json) ? step.approvers_json.join(', ') : step.approvers_json }}
+                  <br>
+                  <strong>要求：</strong> {{ step.required_approvals }} 人通过
+                  <br>
+                  <el-tag v-if="step.status" :type="step.status === 'approved' ? 'success' : 'danger'">{{ step.status === 'approved' ? '已通过' : '待审批' }}</el-tag>
+                </div>
+              </el-timeline-item>
+            </el-timeline>
+          </div>
+
+          <!-- 电子签章画板 -->
+          <div class="signature-section mt24">
+            <h4 class="section-title">电子签章画板</h4>
+            <SignaturePad @signature-saved="onSignatureSaved" />
+          </div>
+
+          <div class="actions-bar mt24">
+            <el-button type="primary" @click="setupDefaultApprovalFlow">初始化多级审批流</el-button>
+            <el-button @click="refreshApprovalSteps">刷新流程</el-button>
+          </div>
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
 
 <script>
 import { perm } from '../utils/permissions';
+import { http } from '../api/http';
 import {
   listContractTemplates,
   getContractTemplate,
@@ -389,6 +456,8 @@ import {
   replaceSalesContractDocument,
   downloadSalesContractDocument
 } from '../api';
+import ContractVersionDiff from '../components/ContractVersionDiff.vue';
+import SignaturePad from '../components/SignaturePad.vue';
 import {
   BLANK_TPL_BODY,
   previewFillContractTemplate
@@ -428,7 +497,14 @@ export default {
       contractParseFailed: false,
       /** 上传的 PDF/Word 正文合同（非模板 HTML） */
       isUploadContract: false,
-      uploadContractDocName: ''
+      uploadContractDocName: '',
+      // 新增：版本 Diff + 多级审批
+      activeTab: 'content',
+      versions: [],
+      currentDiff: null,
+      approvalSteps: [],
+      hasMultiApprovePerm: false,
+      showDiffDialog: false
     };
   },
   computed: {
@@ -442,6 +518,12 @@ export default {
     },
     isContractMode() {
       return this.numericContractId != null;
+    },
+    hasVersionPerm() {
+      return this.perm('contract_management', 'contract_version_view');
+    },
+    hasMultiApprovePerm() {
+      return this.perm('contract_management', 'contract_multi_approve');
     },
     isNew() {
       if (this.isContractMode) return false;
@@ -504,6 +586,68 @@ export default {
   },
   methods: {
     perm,
+    async loadVersions() {
+      if (!this.isContractMode) return;
+      try {
+        const res = await http.get(`/api/sales/contracts/${this.numericContractId}/versions`);
+        this.versions = res.data.items || [];
+      } catch (e) {
+        console.warn('加载版本历史失败', e);
+        this.versions = [];
+      }
+    },
+
+    showVersionDiff(v1, v2) {
+      const minV = Math.min(v1, v2);
+      const maxV = Math.max(v1, v2);
+      http.get(`/api/sales/contracts/${this.numericContractId}/versions/${minV}/${maxV}/diff`)
+        .then(res => {
+          this.currentDiff = res.data;
+          this.showDiffDialog = true;
+          this.$message.success(`已加载 v${minV} → v${maxV} 对比`);
+        })
+        .catch(err => {
+          this.$message.error('获取 Diff 失败');
+          console.error(err);
+        });
+    },
+
+    handleTabClick(tab) {
+      if (tab.paneName === 'versions') {
+        this.loadVersions();
+      } else if (tab.paneName === 'approval') {
+        this.loadApprovalSteps();
+      }
+    },
+
+    async loadApprovalSteps() {
+      if (!this.isContractMode) return;
+      try {
+        const res = await http.get(`/api/sales/contracts/${this.numericContractId}/approval-flow`);
+        this.approvalSteps = res.data?.steps || res.data || [];
+      } catch (e) {
+        console.warn('加载审批步骤失败', e);
+        this.approvalSteps = [];
+      }
+    },
+    async refreshApprovalSteps() {
+      await this.loadApprovalSteps();
+      this.$message.success('审批流程已刷新');
+    },
+
+    setupDefaultApprovalFlow() {
+      const defaultSteps = [
+        { type: 'sequential', approvers: [1, 2], required: 1 }, // 销售主管
+        { type: 'countersign', approvers: [3, 4], required: 2 }  // 财务会签
+      ];
+      http.post(`/api/sales/contracts/${this.numericContractId}/approval-flow`, { steps: defaultSteps })
+        .then(() => {
+          this.$message.success('默认审批流已设置');
+          this.loadApprovalSteps();
+        })
+        .catch(err => this.$message.error('设置失败'));
+    },
+
     unlockContractVisualReplaceBody() {
       this.$confirm(
         '将用「推荐版式」的空表单替换当前合同正文，当前排版与文字会丢失。确定继续吗？',

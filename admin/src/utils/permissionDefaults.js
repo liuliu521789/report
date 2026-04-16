@@ -86,6 +86,12 @@ export function emptyPermissionShape() {
     data_management: {
       data_export: false,
       data_export_all: false
+    },
+    customer_management: {
+      view: false,
+      create: false,
+      edit: false,
+      disable: false
     }
   };
 }
