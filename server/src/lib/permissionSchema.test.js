@@ -62,9 +62,9 @@ describe('effectiveEmployeePermissions', () => {
     expect(eff.order_management.order_input).toBe(true);
   });
 
-  it('用户 permissions_json 仍可关闭 order_query', () => {
+  it('用户 permissions_json 中的 false 不撤销销售模板中已为 true 的权限（模板保底 OR）', () => {
     const eff = effectiveEmployeePermissions({}, { order_management: { order_query: false } }, 'sales');
-    expect(eff.order_management.order_query).toBe(false);
+    expect(eff.order_management.order_query).toBe(true);
   });
 });
 

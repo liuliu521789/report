@@ -81,7 +81,8 @@ export function mergePermissions(base, override) {
  * 类别表 default_permissions_json 叠在「角色模板」之上时使用布尔 OR：
  * - 类别 JSON 只会「额外打开」某项，不能用显式 false 撤销内置角色（如 sales）在 schema 里已为 true 的权限；
  * - 避免后台勾选/保存出的历史脏数据（含大量 false）把 JWT 权限打没，导致「后台看起来有权限、前端路由与接口拒绝」。
- * 针对个人的收紧仍通过 users.permissions_json（最后一次 mergePermissions）完成。
+ * 用户级 permissions_json 的「显式 false」在下方仍会用 mergePermissions 覆盖，故在
+ * `effectiveEmployeePermissions` 末尾对内置角色再与 schemaBase 做一次 OR（模板保底）。
  */
 export function mergePermissionsUnionCategoryOverlay(schemaBase, categoryJson) {
   const out = JSON.parse(JSON.stringify(schemaBase || emptyPermissions()));
@@ -109,8 +110,8 @@ export function mergePermissionsUnionCategoryOverlay(schemaBase, categoryJson) {
 
 /**
  * 员工最终权限：内置类别 code（employee_categories.code）先套用 schema 中该角色的完整默认，
- * 再叠加库里「类别默认 JSON」（OR 叠加）、「用户覆盖 JSON」（覆盖合并）。
- * 避免历史库里 default_permissions_json 缺 entire 模块时全部为 false。
+ * 再叠加「类别默认 JSON」（OR）、「用户覆盖 JSON」（覆盖合并），最后对内置角色再与
+ * 角色模板 OR 一次，避免 users.permissions_json 里历史 false 撤销模板中已为 true 的权限。
  *
  * @param {unknown} categoryDefaultJson — employee_categories.default_permissions_json
  * @param {unknown} userOverrideJson — users.permissions_json
@@ -123,7 +124,11 @@ export function effectiveEmployeePermissions(categoryDefaultJson, userOverrideJs
   const schemaBase =
     code && KNOWN_ROLE_CODES.includes(code) ? defaultPermissionsForRole(code) : emptyPermissions();
   const base = mergePermissionsUnionCategoryOverlay(schemaBase, categoryDefaultJson);
-  return mergePermissions(base, userOverrideJson);
+  const merged = mergePermissions(base, userOverrideJson);
+  if (code && KNOWN_ROLE_CODES.includes(code)) {
+    return mergePermissionsUnionCategoryOverlay(merged, schemaBase);
+  }
+  return merged;
 }
 
 export function hasPermission(effective, module, key) {
