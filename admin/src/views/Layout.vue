@@ -21,12 +21,13 @@
           </el-button>
         </div>
         <div class="aside-menu-wrap">
+          <!-- default-active 会随路由更新（EP 内部 watch）；勿加 :key 整表重建，否则子菜单展开态易丢 -->
           <el-menu
-            :default-active="$route.path"
+            :default-active="sidebarActivePath"
             :default-openeds="menuDefaultOpeneds"
             :collapse="isMenuCollapsed"
-            router
             class="menu"
+            @select="onSidebarMenuSelect"
           >
         <el-menu-item v-if="perm('reports', 'list')" index="/reports">
           <el-icon><DocumentCopy /></el-icon>
@@ -35,6 +36,10 @@
         <el-menu-item v-if="isSuperAdminUser" index="/reports/image-library">
           <el-icon><Picture /></el-icon>
           <span>系统图片库</span>
+        </el-menu-item>
+        <el-menu-item v-if="perm('templates', 'use')" index="/report-templates">
+          <el-icon><Files /></el-icon>
+          <span>报告模板管理</span>
         </el-menu-item>
         <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
           <el-icon><Link /></el-icon>
@@ -80,8 +85,8 @@
           </el-menu-item>
           <el-menu-item
             v-if="
-              perm('contract_management', 'contract_view') ||
               perm('contract_management', 'template_manage') ||
+              canAccessSalesContractWorkspace() ||
               perm('process_management', 'view_flow')
             "
             index="/sales/contracts"
@@ -111,11 +116,15 @@
             <el-icon><Service /></el-icon>
             <span>技术支持联系</span>
           </el-menu-item>
+          <el-menu-item index="/backups">
+            <el-icon><Download /></el-icon>
+            <span>备份与恢复</span>
+          </el-menu-item>
         </el-sub-menu>
         <el-sub-menu v-if="showAuditMenu" index="audit-submenu" class="no-parent-active">
           <template #title>
             <el-icon><Notebook /></el-icon>
-            <span>安全日志</span>
+            <span>安全中心</span>
           </template>
           <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewLogin')" index="/audit/login-logs">
             <el-icon><Key /></el-icon>
@@ -178,25 +187,36 @@
               <span>{{ weatherText }}</span>
             </span>
           </div>
-          <el-dropdown trigger="click" class="messages-dropdown">
-            <el-button type="primary" circle class="messages-btn">
+          <el-tooltip content="站内信" placement="bottom">
+            <el-button
+              type="primary"
+              circle
+              class="messages-btn"
+              :class="{ 'messages-btn--alert': bellAlertAnimating }"
+              @click="goToMessages"
+            >
+              <span
+                v-if="unreadMessageCount > 0"
+                class="messages-live-dot"
+                aria-hidden="true"
+              />
               <el-icon><Bell /></el-icon>
-              <el-badge v-if="unreadMessageCount > 0" :value="unreadMessageCount" class="message-badge" />
             </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="goToMessages">查看站内信</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          </el-tooltip>
           <el-dropdown trigger="click">
-            <span class="user">
+            <span
+              class="user"
+              :class="{
+                'user--chairman': isChairmanUser,
+                'user--super-admin': !isChairmanUser && accountType === 'super_admin'
+              }"
+            >
               <span class="avatar-wrap">
                 <el-avatar :size="24">
                   <el-icon><UserFilled /></el-icon>
                 </el-avatar>
               </span>
-              <span class="text">{{ loginName || '已登录' }}</span>
+              <span class="text">{{ displayLoginName }}</span>
               <span class="online-dot" />
             </span>
             <template #dropdown>
@@ -212,7 +232,7 @@
         </div>
       </el-header>
       <el-main class="main">
-        <router-view />
+        <router-view :key="$route.fullPath" />
       </el-main>
     </el-container>
     <el-drawer
@@ -246,9 +266,8 @@
           <span>{{ weatherText }}</span>
         </div>
         <el-menu
-          :default-active="$route.path"
+          :default-active="sidebarActivePath"
           :default-openeds="menuDefaultOpeneds"
-          router
           class="menu mobile-menu"
           @select="onMobileMenuSelect"
         >
@@ -259,6 +278,10 @@
           <el-menu-item v-if="isSuperAdminUser" index="/reports/image-library">
             <el-icon><Picture /></el-icon>
             <span>系统图片库</span>
+          </el-menu-item>
+          <el-menu-item v-if="perm('templates', 'use')" index="/report-templates">
+            <el-icon><Files /></el-icon>
+            <span>报告模板管理</span>
           </el-menu-item>
           <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
             <el-icon><Link /></el-icon>
@@ -304,8 +327,8 @@
             </el-menu-item>
             <el-menu-item
               v-if="
-                perm('contract_management', 'contract_view') ||
                 perm('contract_management', 'template_manage') ||
+                canAccessSalesContractWorkspace() ||
                 perm('process_management', 'view_flow')
               "
               index="/sales/contracts"
@@ -335,11 +358,15 @@
               <el-icon><Service /></el-icon>
               <span>技术支持联系</span>
             </el-menu-item>
+            <el-menu-item index="/backups">
+              <el-icon><Download /></el-icon>
+              <span>备份与恢复</span>
+            </el-menu-item>
           </el-sub-menu>
           <el-sub-menu v-if="showAuditMenu" index="audit-submenu-mobile" class="no-parent-active">
             <template #title>
               <el-icon><Notebook /></el-icon>
-              <span>安全日志</span>
+              <span>安全中心</span>
             </template>
             <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewLogin')" index="/audit/login-logs">
               <el-icon><Key /></el-icon>
@@ -365,7 +392,23 @@
         </el-menu>
       </div>
     </el-drawer>
-    <el-dialog title="修改密码" v-model="pwDialog" width="420px" @close="resetPw">
+    <el-dialog
+      :title="forceChangePassword ? '请修改初始密码' : '修改密码'"
+      v-model="pwDialog"
+      width="420px"
+      :close-on-click-modal="!forceChangePassword"
+      :close-on-press-escape="!forceChangePassword"
+      :show-close="!forceChangePassword"
+      @close="resetPw"
+    >
+      <el-alert
+        v-if="forceChangePassword"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+        title="您的账号被要求修改初始/重置密码后才能继续操作。"
+      />
       <el-form :model="pwForm" label-width="100px">
         <el-form-item label="当前密码">
           <el-input v-model="pwForm.oldPassword" type="password" show-password autocomplete="off" />
@@ -378,18 +421,82 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="pwDialog = false">取消</el-button>
-        <el-button type="primary" :loading="pwSaving" @click="submitPassword">保存</el-button>
+        <el-button v-if="!forceChangePassword" @click="pwDialog = false" icon=Close>取消</el-button>
+        <el-button v-else @click="logout" icon=Close>退出登录</el-button>
+        <el-button type="primary" :loading="pwSaving" @click="submitPassword" icon=Check>保存</el-button>
       </template>
     </el-dialog>
+    <el-drawer
+      v-model="messagesOpen"
+      title="站内信"
+      size="420px"
+      class="layout-messages-drawer"
+      @open="onMessagesOpen"
+    >
+      <div class="messages-toolbar messages-toolbar--top">
+        <el-button size="small" @click="loadMessages" icon=Refresh>刷新</el-button>
+        <el-button size="small" type="primary" @click="goToMessagesManage">管理站内信</el-button>
+      </div>
+      <el-radio-group v-model="messageInboxFilter" size="small" class="msg-type-filter">
+        <el-radio-button value="all">全部</el-radio-button>
+        <el-radio-button value="notice">普通通知</el-radio-button>
+        <el-radio-button value="todo">待办通知</el-radio-button>
+        <el-radio-button value="system">系统消息</el-radio-button>
+      </el-radio-group>
+      <el-scrollbar class="messages-scroll" max-height="calc(100vh - 200px)">
+        <div
+          v-for="m in filteredMessages"
+          :key="m.id"
+          class="msg-card"
+          :class="{ 'msg-card--unread': !m.read_at }"
+          role="button"
+          tabindex="0"
+          @click="readMsg(m)"
+          @keydown.enter="readMsg(m)"
+        >
+          <div class="msg-card__row">
+            <div
+              class="msg-card__icon-wrap"
+              :class="{
+                'msg-card__icon-wrap--reject': isFinanceRejectInboxMessage(m),
+                'msg-card__icon-wrap--notice': messageKind(m) === 'notice' && !isFinanceRejectInboxMessage(m),
+                'msg-card__icon-wrap--todo': messageKind(m) === 'todo',
+                'msg-card__icon-wrap--system': messageKind(m) === 'system'
+              }"
+              aria-hidden="true"
+            >
+              <span v-if="isFinanceRejectInboxMessage(m)" class="msg-card__reject-x">×</span>
+              <el-icon v-else-if="messageKind(m) === 'notice'" :size="22"><Bell /></el-icon>
+              <el-icon v-else-if="messageKind(m) === 'todo'" :size="22"><Calendar /></el-icon>
+              <el-icon v-else :size="22"><Cpu /></el-icon>
+            </div>
+            <div class="msg-card__main">
+              <div class="msg-card__head">
+                <span v-if="!m.read_at" class="msg-card__dot" aria-hidden="true" />
+                <span class="msg-card__title">{{ m.title }}</span>
+                <el-tag size="small" effect="plain" class="msg-card__type-tag">{{ messageKindLabel(m) }}</el-tag>
+                <el-tag v-if="!m.read_at" type="danger" size="small" effect="plain" class="msg-card__badge">未读</el-tag>
+              </div>
+              <div class="msg-card__body">{{ m.body_text }}</div>
+              <div class="msg-card__time">{{ $dt(m.created_at) }}</div>
+            </div>
+          </div>
+        </div>
+        <el-empty
+          v-if="!filteredMessages.length"
+          :description="messages.length ? '该分类暂无消息' : '暂无消息'"
+          class="messages-empty"
+        />
+      </el-scrollbar>
+    </el-drawer>
   </el-container>
 </template>
 
 <script>
 import { mapState } from 'pinia';
 import { ElNotification } from 'element-plus';
-import { isSuperAdmin, perm } from '../utils/permissions';
-import { changePassword, getMe, listSalesMessages } from '../api';
+import { isSuperAdmin, perm, canAccessSalesContractWorkspace } from '../utils/permissions';
+import { changePassword, getMe, listSalesMessages, logout as apiLogout, markSalesMessageRead } from '../api';
 import { useAuthStore } from '../stores/auth';
 import SidebarGuide from '../components/SidebarGuide.vue';
 
@@ -415,11 +522,31 @@ export default {
       salesInternalMsgSeenUnreadIds: null,
       /** @type {(() => void) | null} */
       salesInternalMsgVisibilityHandler: null,
-      unreadMessageCount: 0
+      unreadMessageCount: 0,
+      messagesOpen: false,
+      messages: [],
+      /** all | notice | todo | system */
+      messageInboxFilter: 'all',
+      bellAlertAnimating: false,
+      bellAlertTimer: null
     };
   },
   computed: {
-    ...mapState(useAuthStore, ['impersonationBackupActive']),
+    ...mapState(useAuthStore, ['impersonationBackupActive', 'forceChangePassword', 'accountType', 'username', 'realName', 'employeeCategoryCode']),
+    displayLoginName() {
+      if (this.accountType === 'super_admin') return '超级管理员';
+      const realName = String(this.realName || '').trim();
+      if (realName) return realName;
+      const username = String(this.username || '').trim();
+      if (username) return username;
+      return this.loginName || '已登录';
+    },
+    isChairmanUser() {
+      const categoryCode = String(this.employeeCategoryCode || '').trim().toLowerCase();
+      if (categoryCode === 'chairman') return true;
+      const realName = String(this.realName || '').trim();
+      return realName === '董事长' || realName === '王总';
+    },
     isSuperAdminUser() {
       return isSuperAdmin();
     },
@@ -437,24 +564,44 @@ export default {
         perm('order_management', 'order_query') ||
         perm('order_management', 'order_input') ||
         perm('order_management', 'order_field_config') ||
-        perm('contract_management', 'contract_view') ||
+        perm('customer_management', 'view') ||
         perm('contract_management', 'template_manage') ||
-        perm('process_management', 'view_flow') ||
-        perm('customer_management', 'view')
+        canAccessSalesContractWorkspace() ||
+        perm('process_management', 'view_flow')
       );
     },
     menuDefaultOpeneds() {
       return [];
     },
+    /** 与侧栏 `index` 对齐，避免子路由（如 /reports/123）无法高亮一级菜单 */
+    sidebarActivePath() {
+      const p = this.$route.path;
+      if (p === '/reports/image-library') return '/reports/image-library';
+      if (p === '/reports/designer' || p === '/reports/new') return '/reports';
+      if (/^\/reports\/\d+$/.test(p)) return '/reports';
+      if (p.startsWith('/sales/contracts/')) return '/sales/contracts';
+      if (p.startsWith('/audit/login-logs')) return '/audit/login-logs';
+      if (p.startsWith('/audit/operations')) return '/audit/operations';
+      if (p.startsWith('/audit/errors')) return '/audit/errors';
+      return p;
+    },
+    filteredMessages() {
+      const list = this.messages || [];
+      const f = this.messageInboxFilter;
+      if (f === 'all') return list;
+      return list.filter((m) => this.messageKind(m) === f);
+    },
     pageTitle() {
       const p = this.$route.path;
       if (p === '/dashboard') return '控制台';
       if (p === '/reports/image-library') return '系统图片库';
+      if (p === '/report-templates') return '报告模板管理';
       if (p.startsWith('/reports')) return '报告管理';
       if (p.startsWith('/qrcodes')) return '二维码管理';
       if (p.startsWith('/stamps')) return '公司章管理';
       if (p.startsWith('/company')) return '公司信息';
       if (p.startsWith('/wecom-notifications')) return '企业微信通知';
+      if (p === '/sales/messages') return '站内信';
       if (p.startsWith('/sales/orders')) return '销售数据 · 订单管理';
       if (p.startsWith('/sales/internal-models')) return '销售数据 · 内部型号管理';
       if (p.startsWith('/sales/contracts/templates')) return '销售数据 · 合同模板';
@@ -464,10 +611,11 @@ export default {
       if (p.startsWith('/departments')) return '账号管理 · 部门管理';
       if (p.startsWith('/users')) return '账号管理 · 员工账号';
       if (p.startsWith('/support-contact')) return '账号管理 · 技术支持联系';
+      if (p.startsWith('/backups')) return '账号管理 · 备份与恢复';
       if (p === '/security') return '系统安全';
-      if (p.startsWith('/audit/login-logs')) return '安全日志 · 登录';
-      if (p.startsWith('/audit/operations')) return '安全日志 · 操作';
-      if (p.startsWith('/audit/errors')) return '安全日志 · 错误';
+      if (p.startsWith('/audit/login-logs')) return '安全中心 · 登录日志';
+      if (p.startsWith('/audit/operations')) return '安全中心 · 操作日志';
+      if (p.startsWith('/audit/errors')) return '安全中心 · 错误日志';
       if (p.startsWith('/my-operation-logs')) return '我的操作日志';
       if (p === '/operation-guide') return '操作指南';
       return '控制台';
@@ -476,6 +624,7 @@ export default {
       const p = this.$route.path;
       if (p === '/dashboard') return '系统概览：报表趋势与状态分布';
       if (p === '/reports') return '查询、编辑、作废报告，批量生成二维码';
+      if (p === '/report-templates') return '统一管理报告模板，支持新增、编辑、删除与克隆';
       if (p === '/reports/image-library') return '仅超级管理员维护，供报告样式设计器选用（服务器存储）';
       if (p.startsWith('/reports')) return '录入报告与自定义字段';
       if (p.startsWith('/qrcodes')) return '查看二维码与绑定报告';
@@ -483,6 +632,7 @@ export default {
       if (p.startsWith('/company')) return '管理logo、描述语、公司名与报告标题';
       if (p.startsWith('/wecom-notifications'))
         return '绑定企业微信应用、维护成员 UserID 与模板，生成 HTTP 调用示例';
+      if (p === '/sales/messages') return '查看通知与待办，管理收件箱';
       if (p.startsWith('/sales/orders')) return '销售订单录入、审核、发货与质检二维码关联';
       if (p.startsWith('/sales/internal-models')) return '维护销售内部型号编码、名称、状态与备注，支持订单字段配置权限下的CRUD操作';
       if (p.startsWith('/sales/contracts/templates'))
@@ -495,6 +645,7 @@ export default {
       if (p.startsWith('/departments')) return '多级部门架构，供员工归档与合同等环节选人';
       if (p.startsWith('/users')) return '创建员工账号、分配类别与个性化权限';
       if (p.startsWith('/support-contact')) return '配置技术工程师微信号，供全员在操作指南中复制';
+      if (p.startsWith('/backups')) return '数据库与文件备份包导出、完整性校验与注意事项';
       if (p === '/security') return '密码策略、登录锁定、会话超时、日志保留';
       if (p.startsWith('/audit/login-logs')) return '全部账号登录记录，不可删改';
       if (p.startsWith('/audit/operations')) return '全站操作审计';
@@ -516,6 +667,24 @@ export default {
       return '🌤️';
     }
   },
+  watch: {
+    forceChangePassword(v) {
+      if (v) {
+        // 触发强制改密时：停止站内信轮询，避免持续 403
+        this.unreadMessageCount = 0;
+        if (this.salesInternalMsgPollTimer) {
+          clearInterval(this.salesInternalMsgPollTimer);
+          this.salesInternalMsgPollTimer = null;
+        }
+        this.openChangePassword();
+      } else {
+        // 取消强制改密时：若当前有 token，则恢复站内信轮询
+        if (useAuthStore().token && !this.salesInternalMsgPollTimer) {
+          this.startSalesInternalMessagePolling();
+        }
+      }
+    }
+  },
   async mounted() {
     this.handleViewportChange();
     window.addEventListener('resize', this.handleViewportChange, { passive: true });
@@ -530,14 +699,21 @@ export default {
       try {
         const d = await getMe();
         if (d?.user?.accountType) {
-          this.loginName = d.user.username || '';
+          this.loginName = this.resolveLoginName(d.user);
         }
         auth.applyMeResponse(d);
         this.$forceUpdate();
-        this.startSalesInternalMessagePolling();
+        if (auth.forceChangePassword) {
+          this.openChangePassword();
+        } else {
+          this.startSalesInternalMessagePolling();
+        }
       } catch (e) {
         const status = e?.response?.status;
-        if (status === 401 || !useAuthStore().token) {
+        const code = e?.response?.data?.error;
+        if (code === 'PASSWORD_MUST_CHANGE') {
+          this.openChangePassword();
+        } else if (status === 401 || !useAuthStore().token) {
           useAuthStore().clearSession();
           this.$router.replace('/login');
         }
@@ -561,13 +737,35 @@ export default {
       document.removeEventListener('visibilitychange', this.salesInternalMsgVisibilityHandler);
       this.salesInternalMsgVisibilityHandler = null;
     }
+    if (this.bellAlertTimer) {
+      clearTimeout(this.bellAlertTimer);
+      this.bellAlertTimer = null;
+    }
+    if (this._internalMsgAudio) {
+      try {
+        this._internalMsgAudio.pause();
+      } catch {
+        /* ignore */
+      }
+      this._internalMsgAudio = null;
+    }
+    this._internalMsgAudioPrimed = false;
     ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'].forEach((ev) => {
       window.removeEventListener(ev, this.onUserActivity, true);
     });
   },
   methods: {
     perm,
+    canAccessSalesContractWorkspace,
+    resolveLoginName(user) {
+      if (!user || typeof user !== 'object') return '';
+      if (user.accountType === 'super_admin') return '超级管理员';
+      const realName = String(user.realName || '').trim();
+      if (realName) return realName;
+      return String(user.username || '');
+    },
     onUserActivity() {
+      this.primeInternalMessageAudioFromUserGesture();
       this.resetIdleTimer();
     },
     resetIdleTimer() {
@@ -592,8 +790,18 @@ export default {
     openMobileMenu() {
       this.mobileMenuVisible = true;
     },
-    onMobileMenuSelect() {
+    /** `el-menu` 的 `router` 模式在部分环境下与 hash 路由不同步，改为显式 push */
+    navigateByMenuIndex(index) {
+      if (typeof index !== 'string' || !index.startsWith('/')) return;
+      /** 侧栏一级菜单均不应携带上一页的 query；否则合同页残留 customer_code 等会导致列表被筛空，且 el-menu 在同 path 下可能不再触发有效跳转 */
+      this.$router.push({ path: index, query: {} }).catch(() => {});
+    },
+    onSidebarMenuSelect(index) {
+      this.navigateByMenuIndex(index);
+    },
+    onMobileMenuSelect(index) {
       this.mobileMenuVisible = false;
+      this.navigateByMenuIndex(index);
     },
     toggleMenu() {
       this.isMenuCollapsed = !this.isMenuCollapsed;
@@ -699,9 +907,13 @@ export default {
         await changePassword(this.pwForm.oldPassword, this.pwForm.newPassword);
         this.$message.success('密码已修改，请重新登录');
         this.pwDialog = false;
-        this.logout();
+        useAuthStore().clearSession();
+        this.$router.push('/login');
       } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '修改失败'));
+        const code = e?.response?.data?.error;
+        if (code === 'OLD_PASSWORD_WRONG') this.$message.error('当前密码不正确');
+        else if (code === 'PASSWORD_SAME_AS_OLD') this.$message.error('新密码不能与原密码相同');
+        else this.$message.error(this.$apiUserMsg(e, '修改失败'));
       } finally {
         this.pwSaving = false;
       }
@@ -718,7 +930,7 @@ export default {
       try {
         const d = await getMe();
         auth.applyMeResponse(d);
-        if (d?.user?.username) this.loginName = d.user.username;
+        if (d?.user) this.loginName = this.resolveLoginName(d.user);
       } catch {
         /* token 已恢复 */
       }
@@ -729,11 +941,17 @@ export default {
         await this.$router.replace('/dashboard');
       }
     },
-    logout() {
+    async logout() {
       if (this.idleTimer) clearTimeout(this.idleTimer);
       if (this.salesInternalMsgPollTimer) clearInterval(this.salesInternalMsgPollTimer);
       this.salesInternalMsgPollTimer = null;
       this.salesInternalMsgSeenUnreadIds = null;
+      try {
+        /** 通知服务端 bump token_version，让此 token 在所有设备立即失效 */
+        await apiLogout();
+      } catch {
+        /** 网络异常时仍清本地会话 */
+      }
       useAuthStore().clearSession();
       this.$router.push('/login');
     },
@@ -743,7 +961,60 @@ export default {
       this.salesInternalMsgPollTimer = setInterval(() => this.pollSalesInternalMessages(), 2000);
       this.$nextTick(() => this.pollSalesInternalMessages());
     },
+    /**
+     * 浏览器默认禁止无用户手势播放有声媒体；首次单击 / 按键 / 滑动等之后用静音 play 解锁，
+     * 后续轮询触发的站内信提示音才能播。
+     */
+    primeInternalMessageAudioFromUserGesture() {
+      if (this._internalMsgAudioPrimed) return;
+      try {
+        if (!this._internalMsgAudio) {
+          this._internalMsgAudio = new Audio('/newMessage.mp3');
+          this._internalMsgAudio.preload = 'auto';
+        }
+        const a = this._internalMsgAudio;
+        a.muted = true;
+        const p = a.play();
+        const finish = () => {
+          try {
+            a.pause();
+            a.currentTime = 0;
+            a.muted = false;
+            this._internalMsgAudioPrimed = true;
+          } catch {
+            /* ignore */
+          }
+        };
+        if (p && typeof p.then === 'function') {
+          p.then(finish).catch(() => {
+            try {
+              a.muted = false;
+            } catch {
+              /* ignore */
+            }
+          });
+        } else {
+          finish();
+        }
+      } catch {
+        /* ignore */
+      }
+    },
+    playInternalMessageSound() {
+      try {
+        if (!this._internalMsgAudio) {
+          this._internalMsgAudio = new Audio('/newMessage.mp3');
+          this._internalMsgAudio.preload = 'auto';
+        }
+        this._internalMsgAudio.currentTime = 0;
+        const p = this._internalMsgAudio.play();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch {
+        /* 浏览器未交互前可能拒绝播放 */
+      }
+    },
     notifyNewSalesInternalMessages(items) {
+      this.playInternalMessageSound();
       const opts = {
         type: 'warning',
         position: 'top-right',
@@ -769,11 +1040,103 @@ export default {
         });
       }
     },
+    triggerMessageBellAlert() {
+      this.bellAlertAnimating = false;
+      if (this.bellAlertTimer) {
+        clearTimeout(this.bellAlertTimer);
+        this.bellAlertTimer = null;
+      }
+      this.$nextTick(() => {
+        this.bellAlertAnimating = true;
+        this.bellAlertTimer = setTimeout(() => {
+          this.bellAlertAnimating = false;
+          this.bellAlertTimer = null;
+        }, 1200);
+      });
+    },
     goToMessages() {
-      this.$router.push('/sales/orders');
+      this.primeInternalMessageAudioFromUserGesture();
+      if (this.forceChangePassword) {
+        this.openChangePassword();
+        return;
+      }
+      this.messagesOpen = true;
+    },
+    goToMessagesManage() {
+      this.messagesOpen = false;
+      this.$router.push('/sales/messages');
+    },
+    isFinanceRejectInboxMessage(m) {
+      if (!m) return false;
+      if (m.title === '订单审核驳回') return true;
+      if (m.ref_type === 'order_batch_rejected') return true;
+      return false;
+    },
+    messageKind(m) {
+      const c = m && m.category;
+      if (c === 'todo' || c === 'system') return c;
+      return 'notice';
+    },
+    messageKindLabel(m) {
+      const k = this.messageKind(m);
+      if (k === 'todo') return '待办';
+      if (k === 'system') return '系统';
+      return '普通';
+    },
+    async refreshMessages() {
+      if (this.forceChangePassword) {
+        this.messages = [];
+        this.unreadMessageCount = 0;
+        return;
+      }
+      try {
+        const d = await listSalesMessages({});
+        this.messages = d.items || [];
+      } catch {
+        this.messages = [];
+      }
+    },
+    async loadMessages() {
+      await this.refreshMessages();
+    },
+    async onMessagesOpen() {
+      await this.loadMessages();
+      await this.markAllMessagesRead();
+    },
+    async markAllMessagesRead() {
+      const unread = this.messages.filter((m) => !m.read_at);
+      if (!unread.length) {
+        this.unreadMessageCount = 0;
+        return;
+      }
+      try {
+        await Promise.all(unread.map((m) => this.readMsg(m, true)));
+        this.unreadMessageCount = 0;
+      } catch {
+        this.pollSalesInternalMessages();
+      }
+    },
+    async readMsg(m, silent = false) {
+      if (!m.read_at) {
+        try {
+          await markSalesMessageRead(m.id);
+          m.read_at = new Date().toISOString();
+          this.unreadMessageCount = Math.max(0, this.unreadMessageCount - 1);
+        } catch {
+          if (!silent) this.$message.error('标记已读失败');
+        }
+      }
     },
     async pollSalesInternalMessages() {
       if (!useAuthStore().token) return;
+      if (this.forceChangePassword) {
+        this.unreadMessageCount = 0;
+        if (this.salesInternalMsgPollTimer) {
+          clearInterval(this.salesInternalMsgPollTimer);
+          this.salesInternalMsgPollTimer = null;
+        }
+        return;
+      }
       try {
         const { items } = await listSalesMessages({ unread: 1 });
         const list = items || [];
@@ -781,11 +1144,23 @@ export default {
         const prev = this.salesInternalMsgSeenUnreadIds;
         if (prev !== null) {
           const newcomers = list.filter((m) => !prev.has(Number(m.id)));
-          if (newcomers.length) this.notifyNewSalesInternalMessages(newcomers);
+          if (newcomers.length) {
+            this.notifyNewSalesInternalMessages(newcomers);
+            this.triggerMessageBellAlert();
+          }
         }
         this.salesInternalMsgSeenUnreadIds = currIds;
         this.unreadMessageCount = list.length;
-      } catch {
+      } catch (e) {
+        const code = e?.response?.data?.error;
+        if (code === 'PASSWORD_MUST_CHANGE') {
+          this.unreadMessageCount = 0;
+          if (this.salesInternalMsgPollTimer) {
+            clearInterval(this.salesInternalMsgPollTimer);
+            this.salesInternalMsgPollTimer = null;
+          }
+          this.openChangePassword();
+        }
         /* 未登录跳转、网络异常等忽略 */
       }
     }
@@ -811,7 +1186,7 @@ export default {
 .aside-menu-wrap {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
   padding: 0 12px;
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -966,6 +1341,40 @@ export default {
   background: rgba(255, 255, 255, 0.9);
   cursor: pointer;
 }
+.user--super-admin {
+  border-color: rgba(192, 192, 192, 0.75);
+  background: linear-gradient(145deg, #f8fafc, #e2e8f0);
+  box-shadow: 0 2px 10px rgba(148, 163, 184, 0.35);
+}
+.user--super-admin .text {
+  color: #475569;
+  font-weight: 600;
+}
+.user--super-admin :deep(.el-avatar) {
+  background: #cbd5e1;
+  color: #334155;
+}
+.user--super-admin .online-dot {
+  background: linear-gradient(145deg, #86efac, #22c55e);
+  border-color: #f8fafc;
+}
+.user--chairman {
+  border-color: rgba(212, 175, 55, 0.65);
+  background: linear-gradient(145deg, #141414, #1f1f1f);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+.user--chairman .text {
+  color: #f5d67a;
+  font-weight: 600;
+}
+.user--chairman :deep(.el-avatar) {
+  background: #2a2a2a;
+  color: #f5d67a;
+}
+.user--chairman .online-dot {
+  background: #d4af37;
+  border-color: #1a1a1a;
+}
 .avatar-wrap {
   position: relative;
   width: 24px;
@@ -986,6 +1395,147 @@ export default {
   color: #334155;
 }
 
+.messages-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.msg-type-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-bottom: 12px;
+  width: 100%;
+}
+.msg-type-filter :deep(.el-radio-button__inner) {
+  padding: 7px 10px;
+}
+.messages-scroll {
+  padding-right: 4px;
+}
+.messages-empty {
+  padding: 24px 0;
+}
+.msg-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 12px 10px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.msg-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+  background: #fff;
+}
+.msg-card:focus-visible {
+  outline: 2px solid rgba(34, 197, 94, 0.45);
+  outline-offset: 2px;
+}
+.msg-card--unread {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.06), #f8fafc);
+  border-color: rgba(34, 197, 94, 0.35);
+  border-left-width: 3px;
+  border-left-color: #22c55e;
+}
+.msg-card__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.msg-card__icon-wrap {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.msg-card__icon-wrap--reject {
+  background: #ef4444;
+  border-color: #dc2626;
+  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.35);
+}
+.msg-card__reject-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  user-select: none;
+}
+.msg-card__icon-wrap--notice :deep(.el-icon) {
+  color: #2563eb;
+}
+.msg-card__icon-wrap--todo :deep(.el-icon) {
+  color: #d97706;
+}
+.msg-card__icon-wrap--system :deep(.el-icon) {
+  color: #64748b;
+}
+.msg-card__main {
+  flex: 1;
+  min-width: 0;
+}
+.msg-card__head {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-bottom: 8px;
+}
+.msg-card__dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+.msg-card__title {
+  flex: 1;
+  min-width: 120px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #0f172a;
+  line-height: 1.4;
+}
+.msg-card__type-tag {
+  flex-shrink: 0;
+  color: #64748b !important;
+  border-color: #e2e8f0 !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+}
+.msg-card__badge {
+  flex-shrink: 0;
+}
+.msg-card__body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #475569;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.msg-card__time {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 10px;
+}
+
 .messages-btn {
   background-color: #165DFF;
   border-color: #165DFF;
@@ -996,17 +1546,64 @@ export default {
   border-color: #4080FF;
 }
 
-.message-badge {
-  --el-badge-background-color: #F56C6C;
-  --el-badge-text-color: #FFFFFF;
-  font-size: 10px;
-  min-width: 16px;
-  height: 16px;
-  line-height: 16px;
-  padding: 0 4px;
+/* 未读时右上角呼吸脉冲红点 */
+.messages-live-dot {
   position: absolute;
-  top: -4px;
-  right: -4px;
+  right: 2px;
+  top: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #fb7185, #ef4444);
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.42);
+  pointer-events: none;
+  z-index: 2;
+  animation: messages-dot-breathe 2.75s ease-in-out infinite;
+}
+
+.messages-btn--alert .el-icon {
+  transform-origin: 50% 18%;
+  animation: bell-alert-shake-bounce 1.15s ease-in-out 1;
+}
+
+@keyframes messages-dot-breathe {
+  0%,
+  100% {
+    opacity: 0.82;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.38);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.14);
+    box-shadow: 0 0 0 5px rgba(239, 68, 68, 0);
+  }
+}
+
+@keyframes bell-alert-shake-bounce {
+  0% { transform: rotate(0deg) translateY(0); }
+  8% { transform: rotate(18deg) translateY(0); }
+  16% { transform: rotate(-18deg) translateY(0); }
+  24% { transform: rotate(12deg) translateY(0); }
+  32% { transform: rotate(-12deg) translateY(0); }
+  40% { transform: rotate(8deg) translateY(0); }
+  48% { transform: rotate(-8deg) translateY(0); }
+  56% { transform: rotate(0deg) translateY(0); }
+  72% { transform: rotate(0deg) translateY(-2px); }
+  86% { transform: rotate(0deg) translateY(0); }
+  100% { transform: rotate(0deg) translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .messages-live-dot {
+    animation: none;
+    opacity: 1;
+    box-shadow: none;
+  }
+  .messages-btn--alert .el-icon {
+    animation: none;
+  }
 }
 
 .messages-btn {

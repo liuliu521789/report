@@ -84,6 +84,8 @@
       <el-checkbox v-model="inner.contract_management.contract_view" @change="emit">查看合同</el-checkbox>
       <el-checkbox v-model="inner.contract_management.contract_edit" @change="emit">编辑合同（草稿/驳回；非超管仅限本人创建）</el-checkbox>
       <el-checkbox v-model="inner.contract_management.contract_delete" @change="emit">删除合同（含批量；非超管仅限本人创建的草稿/驳回）</el-checkbox>
+      <el-checkbox v-model="inner.contract_management.contract_version_view" @change="emit">合同版本查看</el-checkbox>
+      <el-checkbox v-model="inner.contract_management.contract_multi_approve" @change="emit">多人审批流程</el-checkbox>
     </div>
     <div class="perm-block">
       <div class="perm-title">销售 · 流程（module=process_management）</div>

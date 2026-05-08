@@ -3,7 +3,7 @@
 const CELL_STYLE = 'border:1px solid #000;padding:4px 6px;text-align:center';
 const CELL_NOWRAP = `${CELL_STYLE};white-space:nowrap`;
 const TABLE_STYLE =
-  'width:100%;border-collapse:collapse;border:1px solid #000;font-family:SimSun,宋体;font-size:12px;line-height:1.35';
+  'width:100%;border-collapse:collapse;border:1px solid #000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35';
 
 function esc(v) {
   return String(v ?? '');

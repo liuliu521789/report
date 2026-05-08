@@ -66,6 +66,22 @@ describe('Security Policy', () => {
       expect(result.ok).toBe(true);
     });
   });
+
+  describe('mergeSettings - enforceTwoFactorForSuperAdmin', () => {
+    it('keeps default false when not provided', () => {
+      const result = mergeSettings({});
+      expect(result.enforceTwoFactorForSuperAdmin).toBe(false);
+    });
+
+    it('accepts explicit true/false', () => {
+      expect(mergeSettings({ enforceTwoFactorForSuperAdmin: true }).enforceTwoFactorForSuperAdmin).toBe(true);
+      expect(mergeSettings({ enforceTwoFactorForSuperAdmin: false }).enforceTwoFactorForSuperAdmin).toBe(false);
+    });
+
+    it('ignores non-boolean', () => {
+      expect(mergeSettings({ enforceTwoFactorForSuperAdmin: 'yes' }).enforceTwoFactorForSuperAdmin).toBe(false);
+    });
+  });
 });
 
 describe('Production Config Validation', () => {

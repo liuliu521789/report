@@ -15,18 +15,18 @@
         end-placeholder="结束"
         class="w-range"
       />
-      <el-button type="primary" @click="load">查询</el-button>
+      <el-button type="primary" @click="load" icon=Search>查询</el-button>
       <el-button
         v-if="isSuperAdminUser"
         type="danger"
         plain
         :disabled="selected.length === 0"
         @click="onBulkDelete"
-      >
+       icon=Delete>
         批量删除
       </el-button>
       <el-dropdown v-if="isSuperAdminUser || perm('audit', 'exportAudit')" :disabled="selected.length === 0" @command="onExportCommand">
-        <el-button :disabled="selected.length === 0">批量导出</el-button>
+        <el-button :disabled="selected.length === 0" icon=Download>批量导出</el-button>
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item command="table">导出表格（CSV）</el-dropdown-item>
@@ -274,5 +274,11 @@ export default {
   .mobile-list {
     display: block;
   }
+}
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+:deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
 }
 </style>

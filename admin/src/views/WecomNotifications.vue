@@ -83,13 +83,13 @@
             <el-input v-model="cfgForm.remark" type="textarea" :rows="2" placeholder="可选" />
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="cfgSaving" @click="saveConfig">保存绑定信息</el-button>
+            <el-button type="primary" :loading="cfgSaving" @click="saveConfig" icon=Check>保存绑定信息</el-button>
           </el-form-item>
         </el-form>
       </el-tab-pane>
       <el-tab-pane label="通知对象（成员 UserID）" name="recv">
         <div class="toolbar">
-          <el-button type="primary" @click="openRecipientDialog()">新增对象</el-button>
+          <el-button type="primary" @click="openRecipientDialog()" icon=Plus>新增对象</el-button>
         </div>
         <el-table :data="recipients" border stripe>
           <el-table-column prop="nameZh" label="名称" min-width="120" />
@@ -101,8 +101,8 @@
           <el-table-column prop="sortOrder" label="排序" width="80" />
           <el-table-column label="操作" width="160" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openRecipientDialog(row)">编辑</el-button>
-              <el-button link type="danger" @click="removeRecipient(row)">删除</el-button>
+              <el-button link type="primary" @click="openRecipientDialog(row)" icon=Edit>编辑</el-button>
+              <el-button link type="danger" @click="removeRecipient(row)" icon=Delete>删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -113,7 +113,7 @@
           <code v-pre>{{变量名}}</code>，真正发送时由系统或接口传入具体文字（见下方「可插入变量」）。
         </p>
         <div class="toolbar">
-          <el-button type="primary" @click="openTemplateDialog()">新建模板</el-button>
+          <el-button type="primary" @click="openTemplateDialog()" icon=Plus>新建模板</el-button>
         </div>
         <div class="tpl-two-cols">
           <el-card shadow="never" class="catalog-card">
@@ -145,9 +145,9 @@
               <el-table-column label="操作" width="280" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="openSnippet(row)">调用代码</el-button>
-                  <el-button link type="primary" @click="openTestSend(row)">测试发送</el-button>
-                  <el-button link type="primary" @click="openTemplateDialog(row)">编辑</el-button>
-                  <el-button link type="danger" @click="removeTemplate(row)">删除</el-button>
+                  <el-button link type="primary" @click="openTestSend(row)" icon=Promotion>测试发送</el-button>
+                  <el-button link type="primary" @click="openTemplateDialog(row)" icon=Edit>编辑</el-button>
+                  <el-button link type="danger" @click="removeTemplate(row)" icon=Delete>删除</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -174,8 +174,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="recipientDlg = false">取消</el-button>
-        <el-button type="primary" :loading="recipientSaving" @click="saveRecipient">保存</el-button>
+        <el-button @click="recipientDlg = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="recipientSaving" @click="saveRecipient" icon=Check>保存</el-button>
       </template>
     </el-dialog>
 
@@ -250,7 +250,7 @@
             </el-button>
           </div>
           <div class="field-tip">
-            销售系统自动推送已约定：<code>detail</code>（长摘要）、<code>orderNo</code>、<code>customerName</code>、<code>contractReviewStatus</code>（合同审核状态）、<code>reviewComment</code>（审核备注）、<code>count</code>、<code>fromUser</code>；财务通过→仓库的文本卡片另传
+            销售系统自动推送已约定：<code>detail</code>（长摘要）、<code>orderNo</code>、<code>contractNo</code>、<code>customerName</code>、<code>reviewUrl</code>（合同待审：移动端审批页 HTTPS 链接，可插入正文或文本卡片 url）、<code>contractReviewStatus</code>（合同审核状态）、<code>reviewComment</code>（审核备注）、<code>count</code>、<code>fromUser</code>；财务通过→仓库的文本卡片另传
             <span v-pre><code>{{shipConfirmUrl}}</code></span>（卡片应指向的确认页链接）与 <code>shipUrl</code>（确认页内执行发货的链接）。自写接口可自行传其它变量名。
           </div>
         </el-form-item>
@@ -331,8 +331,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="templateDlg = false">取消</el-button>
-        <el-button type="primary" :loading="templateSaving" @click="saveTemplate">保存模板</el-button>
+        <el-button @click="templateDlg = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="templateSaving" @click="saveTemplate" icon=Check>保存模板</el-button>
       </template>
     </el-dialog>
 
@@ -374,8 +374,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="testDlg = false">取消</el-button>
-        <el-button type="primary" :loading="testSending" @click="submitTestSend">发送</el-button>
+        <el-button @click="testDlg = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="testSending" @click="submitTestSend" icon=Promotion>发送</el-button>
       </template>
     </el-dialog>
   </div>
@@ -504,6 +504,8 @@ export default {
         { key: 'reviewComment', label: '审核备注' },
         { key: 'count', label: '数量' },
         { key: 'fromUser', label: '操作人' },
+        { key: 'contractNo', label: '合同编号' },
+        { key: 'reviewUrl', label: '合同审批页链接(企微)' },
         { key: 'shipConfirmUrl', label: '发货确认页链接' },
         { key: 'shipUrl', label: '执行发货链接' },
         { key: 'title', label: '短标题' }

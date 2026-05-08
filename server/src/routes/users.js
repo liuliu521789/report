@@ -1,284 +1,258 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { getPool } from '../db/pool.js';
 import { requireAuth, requireSuperAdmin } from '../middleware/auth.js';
-import { hashPassword } from '../services/password.js';
-import { emptyPermissions, mergePermissions, parsePermissionsJson } from '../lib/permissions.js';
-import { getSecuritySettings, validatePasswordPlain } from '../lib/securityPolicy.js';
-import { logOperationFromReq } from '../lib/audit.js';
 import { isPermissionedStaffType } from '../lib/accountTypes.js';
+import {
+  BizError,
+  createUserUseCase,
+  forceLogoutUserUseCase,
+  resetUserPasswordUseCase,
+  softDeleteUserUseCase,
+  updateUserUseCase
+} from '../services/userService.js';
+import {
+  findUserDetail,
+  findUsersLite,
+  findUsersPaged
+} from '../repositories/userRepo.js';
+import { parsePermissionsJson } from '../lib/permissions.js';
 
 export const router = Router();
 
 router.use(requireAuth);
 router.use(requireSuperAdmin);
 
+const ACCOUNT_TYPES = ['super_admin', 'employee', 'manager'];
+
 const createSchema = z.object({
-  username: z.string().min(1).max(64),
+  username: z.string().min(1).max(64).optional(),
+  loginId: z.string().min(1).max(64).optional(),
+  realName: z.string().min(1).max(64).optional(),
   password: z.string().min(6).max(128),
-  accountType: z.enum(['super_admin', 'employee', 'manager']),
+  accountType: z.enum(ACCOUNT_TYPES),
   employeeCategoryId: z.number().int().positive().nullable().optional(),
   departmentId: z.union([z.number().int().positive(), z.null()]).optional(),
+  phone: z.union([z.string().max(32), z.null()]).optional(),
   wecomUserId: z.string().max(64).optional().nullable(),
-  permissions: z.any().optional().nullable()
+  permissions: z.any().optional().nullable(),
+  forceChangePassword: z.boolean().optional(),
+  requireTwoFactor: z.boolean().optional()
 });
 
 const updateSchema = z
   .object({
-    accountType: z.enum(['super_admin', 'employee', 'manager']).optional(),
+    username: z.string().min(1).max(64).optional(),
+    loginId: z.string().min(1).max(64).optional(),
+    realName: z.string().min(1).max(64).optional(),
+    accountType: z.enum(ACCOUNT_TYPES).optional(),
     employeeCategoryId: z.number().int().positive().nullable().optional(),
     departmentId: z.union([z.number().int().positive(), z.null()]).optional(),
+    phone: z.union([z.string().max(32), z.null()]).optional(),
     wecomUserId: z.union([z.string().max(64), z.null()]).optional(),
     permissions: z.any().optional().nullable(),
     isActive: z.boolean().optional(),
-    password: z.string().min(6).max(128).optional()
+    password: z.string().min(6).max(128).optional(),
+    requireTwoFactor: z.boolean().optional()
   })
   .refine(
-    (d) =>
-      d.accountType !== undefined ||
-      d.employeeCategoryId !== undefined ||
-      d.departmentId !== undefined ||
-      d.wecomUserId !== undefined ||
-      d.permissions !== undefined ||
-      d.isActive !== undefined ||
-      (typeof d.password === 'string' && d.password.length >= 6),
+    (d) => Object.values(d).some((v) => v !== undefined),
     { message: 'BAD_REQUEST' }
   );
 
-async function countActiveSuperAdminsExcluding(pool, excludeId) {
-  const [rows] = await pool.query(
-    'SELECT COUNT(*) AS c FROM users WHERE account_type = ? AND is_active = 1 AND id != ?',
-    ['super_admin', excludeId]
-  );
-  return Number(rows?.[0]?.c || 0);
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(20),
+  keyword: z.string().max(64).optional().default(''),
+  accountType: z.enum(['', ...ACCOUNT_TYPES]).optional().default(''),
+  isActive: z.enum(['', '0', '1']).optional().default(''),
+  categoryId: z.coerce.number().int().positive().optional(),
+  departmentId: z.coerce.number().int().positive().optional()
+});
+
+const liteQuerySchema = z.object({
+  accountType: z.enum(['', ...ACCOUNT_TYPES]).optional().default(''),
+  activeOnly: z.enum(['', '0', '1']).optional().default('1')
+});
+
+function isActiveFromQuery(v) {
+  if (v === '1') return true;
+  if (v === '0') return false;
+  return null;
 }
 
-router.get('/', async (req, res) => {
-  const pool = getPool();
-  const [rows] = await pool.query(
-    `SELECT u.id, u.username, u.account_type AS accountType, u.employee_category_id AS employeeCategoryId,
-            u.department_id AS departmentId, u.wecom_userid AS wecomUserId, u.permissions_json AS permissionsJson, u.is_active AS isActive,
-            u.created_at AS createdAt, u.updated_at AS updatedAt,
-            c.name_zh AS categoryNameZh, c.code AS categoryCode,
-            d.name_zh AS departmentNameZh
-     FROM users u
-     LEFT JOIN employee_categories c ON c.id = u.employee_category_id
-     LEFT JOIN departments d ON d.id = u.department_id
-     ORDER BY u.id ASC`
-  );
-  const items = (rows || []).map((r) => ({
-    ...r,
-    permissions: parsePermissionsJson(r.permissionsJson)
-  }));
-  res.json({ items });
-});
+function asyncRoute(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
 
-router.post('/', async (req, res) => {
-  const parsed = createSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const { username, password, accountType, employeeCategoryId, departmentId: deptIn, wecomUserId, permissions } =
-    parsed.data;
-
-  if (isPermissionedStaffType(accountType) && !employeeCategoryId) {
-    return res.status(400).json({ error: 'BAD_REQUEST' });
+function handleBizError(e, res) {
+  if (e instanceof BizError) {
+    return res.status(e.statusCode || 400).json({ error: e.code, message: e.message });
   }
-  if (accountType === 'super_admin' && employeeCategoryId) {
-    return res.status(400).json({ error: 'BAD_REQUEST' });
-  }
+  return null;
+}
 
-  const pool = getPool();
-  let departmentId = isPermissionedStaffType(accountType) ? (deptIn === undefined ? null : deptIn) : null;
-  if (departmentId != null) {
-    const [dRows] = await pool.query('SELECT id FROM departments WHERE id = ? LIMIT 1', [departmentId]);
-    if (!dRows?.[0]) return res.status(400).json({ error: 'BAD_DEPARTMENT' });
-  }
-  const settings = await getSecuritySettings(pool);
-  const pv = validatePasswordPlain(password, settings);
-  if (!pv.ok) return res.status(400).json({ error: pv.code, message: pv.message });
-
-  const passwordHash = hashPassword(password);
-  let permissionsJson = null;
-  if (isPermissionedStaffType(accountType)) {
-    const [cRows] = await pool.query('SELECT default_permissions_json FROM employee_categories WHERE id=?', [
-      employeeCategoryId
-    ]);
-    const base = parsePermissionsJson(cRows?.[0]?.default_permissions_json);
-    const merged = mergePermissions(base || emptyPermissions(), permissions || {});
-    permissionsJson = JSON.stringify(merged);
-  }
-
-  try {
-    const wecom =
-      isPermissionedStaffType(accountType) && wecomUserId != null && String(wecomUserId).trim() !== ''
-        ? String(wecomUserId).trim()
-        : null;
-    const [result] = await pool.query(
-      `INSERT INTO users (username, password_hash, account_type, employee_category_id, department_id, wecom_userid, permissions_json, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-      [
-        username,
-        passwordHash,
-        accountType,
-        isPermissionedStaffType(accountType) ? employeeCategoryId : null,
-        isPermissionedStaffType(accountType) ? departmentId : null,
-        isPermissionedStaffType(accountType) ? wecom : null,
-        permissionsJson
-      ]
-    );
-    await logOperationFromReq(req, {
-      module: '员工账号',
-      action: '创建账号',
-      detail: { username, accountType },
-      success: true
+router.get(
+  '/',
+  asyncRoute(async (req, res) => {
+    const parsed = listQuerySchema.safeParse(req.query || {});
+    if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const q = parsed.data;
+    const result = await findUsersPaged({
+      page: q.page,
+      pageSize: q.pageSize,
+      keyword: q.keyword,
+      accountType: q.accountType || '',
+      isActive: isActiveFromQuery(q.isActive),
+      categoryId: q.categoryId ?? null,
+      departmentId: q.departmentId ?? null
     });
-    res.status(201).json({ id: result.insertId });
-  } catch (e) {
-    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'USERNAME_EXISTS' });
-    const errno = Number(e?.errno);
-    const msg = String(e?.sqlMessage || e?.message || '');
-    if (errno === 1265 || errno === 1366 || msg.toLowerCase().includes('account_type')) {
-      return res.status(400).json({
-        error: 'ACCOUNT_TYPE_SCHEMA',
-        message:
-          '数据库 users.account_type 可能仍为旧 ENUM（缺少 manager）。请重启后端以执行自动迁移，或手动运行 migrations/027_users_account_type_manager.sql'
-      });
-    }
-    throw e;
-  }
-});
+    res.json({
+      items: result.items,
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize
+    });
+  })
+);
 
-router.put('/:id', async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const parsed = updateSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const { accountType, employeeCategoryId, departmentId: deptBody, wecomUserId, permissions, isActive, password } =
-    parsed.data;
+/** 下拉用：只返回最小字段，不含 permissions / wecom_userid */
+router.get(
+  '/lite',
+  asyncRoute(async (req, res) => {
+    const parsed = liteQuerySchema.safeParse(req.query || {});
+    if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const items = await findUsersLite({
+      activeOnly: parsed.data.activeOnly !== '0',
+      accountType: parsed.data.accountType || ''
+    });
+    res.json({ items });
+  })
+);
 
-  const pool = getPool();
-  const [uRows] = await pool.query(
-    'SELECT id, account_type, is_active, employee_category_id, department_id, permissions_json FROM users WHERE id = ? LIMIT 1',
-    [id]
-  );
-  const existing = uRows?.[0];
-  if (!existing) return res.status(404).json({ error: 'NOT_FOUND' });
+router.get(
+  '/:id',
+  asyncRoute(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const row = await findUserDetail(id);
+    if (!row) return res.status(404).json({ error: 'NOT_FOUND' });
+    res.json({
+      item: {
+        ...row,
+        permissions: parsePermissionsJson(row.permissionsJson),
+        permissionsJson: undefined
+      }
+    });
+  })
+);
 
-  const self = Number(req.user.userId) === id;
-
-  if (self && isActive === false) return res.status(400).json({ error: 'CANNOT_DISABLE_SELF' });
-
-  const nextType = accountType !== undefined ? accountType : existing.account_type;
-  const nextActive = isActive !== undefined ? isActive : !!existing.is_active;
-  const nextCat =
-    nextType === 'super_admin'
-      ? null
-      : employeeCategoryId !== undefined
-        ? employeeCategoryId
-        : existing.employee_category_id;
-
-  if (isPermissionedStaffType(nextType) && !nextCat) return res.status(400).json({ error: 'BAD_REQUEST' });
-
-  const wasActiveSuper = existing.account_type === 'super_admin' && !!existing.is_active;
-  const willBeActiveSuper = nextType === 'super_admin' && nextActive;
-
-  if (wasActiveSuper && !willBeActiveSuper) {
-    const others = await countActiveSuperAdminsExcluding(pool, id);
-    if (others < 1) return res.status(400).json({ error: 'LAST_SUPER_ADMIN' });
-  }
-
-  if (self && isPermissionedStaffType(accountType) && existing.account_type === 'super_admin') {
-    const others = await countActiveSuperAdminsExcluding(pool, id);
-    if (others < 1) return res.status(400).json({ error: 'LAST_SUPER_ADMIN' });
-  }
-
-  const sets = [];
-  const params = [];
-
-  if (accountType !== undefined) {
-    sets.push('account_type = ?');
-    params.push(accountType);
-    if (accountType === 'super_admin') {
-      sets.push('employee_category_id = NULL');
-      sets.push('department_id = NULL');
-      sets.push('wecom_userid = NULL');
-      sets.push('permissions_json = NULL');
-    }
-  }
-  if (employeeCategoryId !== undefined && isPermissionedStaffType(nextType)) {
-    sets.push('employee_category_id = ?');
-    params.push(employeeCategoryId);
-  }
-  if (deptBody !== undefined && isPermissionedStaffType(nextType)) {
-    if (deptBody != null) {
-      const [dRows] = await pool.query('SELECT id FROM departments WHERE id = ? LIMIT 1', [deptBody]);
-      if (!dRows?.[0]) return res.status(400).json({ error: 'BAD_DEPARTMENT' });
-    }
-    sets.push('department_id = ?');
-    params.push(deptBody);
-  }
-  if (wecomUserId !== undefined && isPermissionedStaffType(nextType)) {
-    const w =
-      wecomUserId === null || String(wecomUserId).trim() === '' ? null : String(wecomUserId).trim().slice(0, 64);
-    sets.push('wecom_userid = ?');
-    params.push(w);
-  }
-  if (isActive !== undefined) {
-    sets.push('is_active = ?');
-    params.push(isActive ? 1 : 0);
-  }
-  if (password !== undefined) {
-    const settings = await getSecuritySettings(pool);
-    const pv = validatePasswordPlain(password, settings);
-    if (!pv.ok) return res.status(400).json({ error: pv.code, message: pv.message });
-    sets.push('password_hash = ?');
-    params.push(hashPassword(password));
-  }
-
-  if (permissions !== undefined) {
-    const catId = isPermissionedStaffType(nextType) ? nextCat : null;
-    if (isPermissionedStaffType(nextType) && catId) {
-      const [cRows] = await pool.query('SELECT default_permissions_json FROM employee_categories WHERE id=?', [catId]);
-      const base = parsePermissionsJson(cRows?.[0]?.default_permissions_json);
-      const merged = mergePermissions(base || emptyPermissions(), permissions || {});
-      sets.push('permissions_json = ?');
-      params.push(JSON.stringify(merged));
-    } else if (nextType === 'super_admin') {
-      sets.push('permissions_json = NULL');
-    }
-  }
-
-  if (sets.length === 0) return res.status(400).json({ error: 'BAD_REQUEST' });
-
-  params.push(id);
-  try {
-    await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, params);
-  } catch (e) {
-    const errno = Number(e?.errno);
-    const msg = String(e?.sqlMessage || e?.message || '');
+router.post(
+  '/',
+  asyncRoute(async (req, res) => {
+    const parsed = createSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const loginId = String(parsed.data.loginId || parsed.data.username || '').trim();
+    const payload = {
+      ...parsed.data,
+      username: loginId || undefined,
+      realName: String(parsed.data.realName || '').trim()
+    };
     if (
-      errno === 1265 ||
-      errno === 1366 ||
-      msg.toLowerCase().includes('account_type') ||
-      (msg.includes('Data truncated') && /account_type/i.test(sets.join(' ')))
+      isPermissionedStaffType(payload.accountType) &&
+      !payload.employeeCategoryId
     ) {
-      return res.status(400).json({
-        error: 'ACCOUNT_TYPE_SCHEMA',
-        message:
-          '数据库 users.account_type 可能仍为旧 ENUM（缺少 manager）。请重启后端以执行自动迁移，或手动运行 migrations/027_users_account_type_manager.sql'
-      });
+      return res.status(400).json({ error: 'BAD_REQUEST' });
     }
-    throw e;
-  }
-  const detail = { userId: id };
-  if (password !== undefined) detail.resetPassword = true;
-  if (permissions !== undefined) detail.permissionsUpdated = true;
-  if (isActive !== undefined) detail.isActive = nextActive;
-  await logOperationFromReq(req, {
-    module: '员工账号',
-    action: '更新账号',
-    detail,
-    success: true
-  });
-  res.json({ ok: true });
+    try {
+      const { id, username } = await createUserUseCase(req, payload);
+      res.status(201).json({ id, loginId: username });
+    } catch (e) {
+      const handled = handleBizError(e, res);
+      if (handled) return;
+      throw e;
+    }
+  })
+);
+
+router.put(
+  '/:id',
+  asyncRoute(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const parsed = updateSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const payload = {
+      ...parsed.data,
+      username:
+        parsed.data.loginId !== undefined
+          ? String(parsed.data.loginId || '').trim()
+          : parsed.data.username,
+      realName: parsed.data.realName !== undefined ? String(parsed.data.realName || '').trim() : undefined
+    };
+    if (payload.username === '') return res.status(400).json({ error: 'BAD_REQUEST' });
+    if (payload.realName === '') return res.status(400).json({ error: 'BAD_REQUEST' });
+    try {
+      await updateUserUseCase(req, id, payload);
+      res.json({ ok: true });
+    } catch (e) {
+      const handled = handleBizError(e, res);
+      if (handled) return;
+      throw e;
+    }
+  })
+);
+
+router.delete(
+  '/:id',
+  asyncRoute(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+    try {
+      await softDeleteUserUseCase(req, id);
+      res.json({ ok: true });
+    } catch (e) {
+      const handled = handleBizError(e, res);
+      if (handled) return;
+      throw e;
+    }
+  })
+);
+
+const resetPwSchema = z.object({
+  password: z.string().min(6).max(128).optional()
 });
+
+router.post(
+  '/:id/reset-password',
+  asyncRoute(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const parsed = resetPwSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+    try {
+      const { temporaryPassword } = await resetUserPasswordUseCase(req, id, parsed.data.password);
+      res.json({ ok: true, temporaryPassword });
+    } catch (e) {
+      const handled = handleBizError(e, res);
+      if (handled) return;
+      throw e;
+    }
+  })
+);
+
+router.post(
+  '/:id/force-logout',
+  asyncRoute(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+    try {
+      await forceLogoutUserUseCase(req, id);
+      res.json({ ok: true });
+    } catch (e) {
+      const handled = handleBizError(e, res);
+      if (handled) return;
+      throw e;
+    }
+  })
+);

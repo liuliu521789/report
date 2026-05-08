@@ -1,15 +1,21 @@
 import { defineStore, getActivePinia } from 'pinia';
 
 const IMPERSONATION_BACKUP_KEY = 'qc_report_admin_impersonation_backup';
+const FORCE_CHANGE_PASSWORD_KEY = 'forceChangePassword';
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: '',
     accountType: '',
+    username: '',
+    realName: '',
+    employeeCategoryCode: '',
     /** 与后端 permissions 结构一致；超级管理员可为空对象 */
     permissions: {},
     idleTimeoutMinutes: 60,
     confirmSensitiveOperations: false,
+    /** 重置密码或新建账号后，需要先在登录后强制修改密码 */
+    forceChangePassword: false,
     /** 存在超管会话备份（模拟登录中），用于顶栏「恢复超级管理员」 */
     impersonationBackupActive: false
   }),
@@ -18,9 +24,30 @@ export const useAuthStore = defineStore('auth', {
     isLoggedIn: (s) => !!s.token
   },
   actions: {
+    /**
+     * 与 token 同步持久化；避免刷新后子页面先于 Layout.getMe 挂载时不知需强制改密而狂刷 403。
+     */
+    setForceChangePassword(value) {
+      const v = !!value;
+      this.forceChangePassword = v;
+      try {
+        if (v) localStorage.setItem(FORCE_CHANGE_PASSWORD_KEY, '1');
+        else localStorage.removeItem(FORCE_CHANGE_PASSWORD_KEY);
+      } catch {
+        /* ignore */
+      }
+    },
+
     hydrateFromStorage() {
       this.token = localStorage.getItem('token') || '';
       this.accountType = localStorage.getItem('accountType') || '';
+      this.realName = localStorage.getItem('realName') || '';
+      this.employeeCategoryCode = localStorage.getItem('employeeCategoryCode') || '';
+      try {
+        this.forceChangePassword = localStorage.getItem(FORCE_CHANGE_PASSWORD_KEY) === '1';
+      } catch {
+        this.forceChangePassword = false;
+      }
       const raw = localStorage.getItem('permissions');
       if (raw) {
         try {
@@ -57,6 +84,23 @@ export const useAuthStore = defineStore('auth', {
         this.accountType = data.user.accountType;
         localStorage.setItem('accountType', data.user.accountType);
       }
+      if (data.user?.username != null) {
+        this.username = data.user.username;
+      }
+      if (data.user?.realName != null) {
+        this.realName = data.user.realName;
+        localStorage.setItem('realName', data.user.realName);
+      } else {
+        this.realName = '';
+        localStorage.removeItem('realName');
+      }
+      if (data.user?.employeeCategoryCode != null) {
+        this.employeeCategoryCode = String(data.user.employeeCategoryCode || '');
+        localStorage.setItem('employeeCategoryCode', this.employeeCategoryCode);
+      } else {
+        this.employeeCategoryCode = '';
+        localStorage.removeItem('employeeCategoryCode');
+      }
 
       if (data.user?.permissions != null) {
         this.permissions = data.user.permissions;
@@ -65,6 +109,8 @@ export const useAuthStore = defineStore('auth', {
         this.permissions = {};
         localStorage.removeItem('permissions');
       }
+
+      this.setForceChangePassword(!!data.user?.forceChangePassword);
 
       if (data.idleTimeoutMinutes != null) {
         this.idleTimeoutMinutes = data.idleTimeoutMinutes;
@@ -148,6 +194,25 @@ export const useAuthStore = defineStore('auth', {
           localStorage.removeItem('permissions');
         }
       }
+      if (d?.user?.username != null) this.username = d.user.username;
+      if (d?.user?.realName != null) {
+        this.realName = d.user.realName;
+        localStorage.setItem('realName', d.user.realName);
+      } else if (d?.user && typeof d.user === 'object') {
+        this.realName = '';
+        localStorage.removeItem('realName');
+      }
+      if (d?.user?.employeeCategoryCode != null) {
+        this.employeeCategoryCode = String(d.user.employeeCategoryCode || '');
+        localStorage.setItem('employeeCategoryCode', this.employeeCategoryCode);
+      } else if (d?.user && typeof d.user === 'object') {
+        this.employeeCategoryCode = '';
+        localStorage.removeItem('employeeCategoryCode');
+      }
+      /** 与数据库一致：只要 /me 带了 user，就刷新标记（避免历史「仅 != null 才写」在字段缺失时沿用旧 localStorage） */
+      if (d?.user && typeof d.user === 'object') {
+        this.setForceChangePassword(!!d.user.forceChangePassword);
+      }
       if (d.idleTimeoutMinutes != null) {
         this.idleTimeoutMinutes = d.idleTimeoutMinutes;
         localStorage.setItem('idleTimeoutMinutes', String(d.idleTimeoutMinutes));
@@ -168,12 +233,18 @@ export const useAuthStore = defineStore('auth', {
     clearSession() {
       this.token = '';
       this.accountType = '';
+      this.username = '';
+      this.realName = '';
+      this.employeeCategoryCode = '';
       this.permissions = {};
       this.idleTimeoutMinutes = 60;
       this.confirmSensitiveOperations = false;
+      this.setForceChangePassword(false);
       this.impersonationBackupActive = false;
       localStorage.removeItem('token');
       localStorage.removeItem('accountType');
+      localStorage.removeItem('realName');
+      localStorage.removeItem('employeeCategoryCode');
       localStorage.removeItem('permissions');
       localStorage.removeItem('idleTimeoutMinutes');
       localStorage.removeItem('confirmSensitiveOperations');

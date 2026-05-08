@@ -12,7 +12,8 @@ export const router = Router();
 router.use(requireAuth);
 
 const createSchema = z.object({
-  reportIds: z.array(z.number().int().positive()).min(1).max(200)
+  reportIds: z.array(z.number().int().positive()).min(1).max(200),
+  force: z.boolean().optional()
 });
 const deleteSchema = z.object({
   ids: z.array(z.number().int().positive()).min(1).max(200)
@@ -21,10 +22,33 @@ const deleteSchema = z.object({
 router.post('/', requirePermission('qrcodes', 'create'), async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const { reportIds } = parsed.data;
+  const { reportIds, force } = parsed.data;
+
+  const pool = getPool();
+
+  if (!force) {
+    const [alreadyBound] = await pool.query(
+      `SELECT DISTINCT qr.report_id, r.report_no, r.product_name, r.batch_no
+       FROM qrcode_reports qr
+       JOIN reports r ON r.id = qr.report_id
+       WHERE qr.report_id IN (${reportIds.map(() => '?').join(',')})`,
+      reportIds
+    );
+    if (alreadyBound.length > 0) {
+      return res.status(409).json({
+        error: 'REPORT_ALREADY_BOUND',
+        message: `${alreadyBound.length} 个报告已关联二维码`,
+        already_bound: alreadyBound.map((r) => ({
+          report_id: r.report_id,
+          report_no: r.report_no,
+          product_name: r.product_name,
+          batch_no: r.batch_no
+        }))
+      });
+    }
+  }
 
   const token = nanoid(24);
-  const pool = getPool();
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -35,7 +59,6 @@ router.post('/', requirePermission('qrcodes', 'create'), async (req, res) => {
     );
     const qrcodeId = qrRes.insertId;
 
-    // ensure reports exist (and not deleted); allow void reports to still be bound? We'll allow but client can see status.
     const [existing] = await conn.query(
       `SELECT id FROM reports WHERE id IN (${reportIds.map(() => '?').join(',')})`,
       reportIds
@@ -60,7 +83,7 @@ router.post('/', requirePermission('qrcodes', 'create'), async (req, res) => {
     const base = resolvePublicBaseUrl(req);
     const scanUrl = `${base}/api/public/qr/${token}`;
     const dataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 280 });
-    res.status(201).json({ id: qrcodeId, token, scanUrl, qrDataUrl: dataUrl });
+    res.status(201).json({ id: qrcodeId, qrcodeId, token, scanUrl, qrDataUrl: dataUrl });
   } catch (e) {
     await conn.rollback();
     throw e;
@@ -125,6 +148,7 @@ router.get('/', requirePermission('qrcodes', 'list'), async (req, res) => {
     if (!byId.has(row.id)) {
       byId.set(row.id, {
         id: row.id,
+        qrcodeId: row.id,
         token: row.token,
         createdAt: row.createdAt,
         reportCount: 0,
@@ -143,6 +167,7 @@ router.get('/', requirePermission('qrcodes', 'list'), async (req, res) => {
 
   const items = baseRows.map((r) => byId.get(r.id) || {
     id: r.id,
+    qrcodeId: r.id,
     token: r.token,
     createdAt: r.createdAt,
     reportCount: 0,
@@ -176,7 +201,7 @@ router.get('/:id', requirePermission('qrcodes', 'viewDetail'), async (req, res) 
     [id]
   );
 
-  res.json({ qrcode: { ...qrcode, reports: rRows } });
+  res.json({ qrcode: { ...qrcode, qrcodeId: qrcode.id, reports: rRows } });
 });
 
 // Get QR image for existing qrcode id (regenerate dataURL)
@@ -192,7 +217,7 @@ router.get('/:id/qr', requirePermission('qrcodes', 'viewDetail'), async (req, re
   const base = resolvePublicBaseUrl(req);
   const scanUrl = `${base}/api/public/qr/${qrcode.token}`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 280 });
-  res.json({ id: qrcode.id, token: qrcode.token, scanUrl, qrDataUrl: dataUrl });
+  res.json({ id: qrcode.id, qrcodeId: qrcode.id, token: qrcode.token, scanUrl, qrDataUrl: dataUrl });
 });
 
 router.delete('/', requireAnyPermission('qrcodes', ['delete', 'create']), async (req, res) => {

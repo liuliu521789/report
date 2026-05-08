@@ -15,14 +15,15 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
-        <el-button v-if="hasCreatePerm" type="primary" @click="openCreateDialog">
+        <el-button v-if="hasCreatePerm" type="primary" @click="openCreateDialog" icon=Plus>
           新增客户
         </el-button>
-        <el-button @click="loadData">刷新</el-button>
+        <el-button @click="loadData" icon=Refresh>刷新</el-button>
 
         <!-- 批量操作按钮 - 选中后显示 -->
         <el-button
           v-if="multipleSelection.length > 0"
+          icon="Delete"
           type="danger"
           @click="batchDelete"
         >
@@ -30,6 +31,7 @@
         </el-button>
         <el-button
           v-if="multipleSelection.length > 0"
+          icon="Download"
           type="success"
           @click="exportSelected"
         >
@@ -38,7 +40,7 @@
         <el-button
           v-if="multipleSelection.length === 0"
           @click="exportAll"
-        >
+         icon=Download>
           导出全部
         </el-button>
       </div>
@@ -48,9 +50,11 @@
       v-loading="loading"
       :data="customerList"
       border
+      stripe
       style="width: 100%"
       :default-sort="{ prop: 'customer_name', order: 'ascending' }"
       @selection-change="handleSelectionChange"
+      @row-dblclick="handleRowDblClick"
       row-key="id"
     >
       <el-table-column type="selection" width="55" />
@@ -72,18 +76,32 @@
       </el-table-column>
       <el-table-column label="关联" width="140" align="center">
         <template #default="{ row }">
-          <el-button
-            v-if="row.order_count != null || row.contract_count != null"
-            link
-            size="small"
-            @click="viewStats(row)"
-          >
-            订单{{ row.order_count || 0 }} / 合同{{ row.contract_count || 0 }}
-          </el-button>
-          <span v-else>-</span>
+          <template v-if="row.order_count || row.contract_count_approved">
+            <div class="link-cell">
+              <el-button
+                v-if="row.order_count"
+                type="primary"
+                link
+                size="small"
+                @click="goToCustomerOrders(row)"
+              >
+                订单{{ row.order_count }}
+              </el-button>
+              <el-button
+                v-if="row.contract_count_approved"
+                type="success"
+                link
+                size="small"
+                @click="goToCustomerContracts(row)"
+              >
+                合同{{ row.contract_count_approved }}
+              </el-button>
+            </div>
+          </template>
+          <span v-else class="muted">-</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="160" fixed="right">
+      <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
           <el-button
             v-if="hasEditPerm"
@@ -91,7 +109,7 @@
             type="primary"
             size="small"
             @click="openEditDialog(row)"
-          >
+           icon=Edit>
             编辑
           </el-button>
           <el-button
@@ -100,11 +118,13 @@
             size="small"
             @click="viewStats(row)"
           >
-            统计
+            详情
           </el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <el-empty v-if="!loading && !customerList.length" description="暂无客户数据" />
 
     <div class="pagination-bar">
       <el-pagination
@@ -131,8 +151,11 @@
         :rules="formRules"
         label-width="100px"
       >
-        <el-form-item label="客户编码" prop="customer_code">
-          <el-input v-model="formData.customer_code" placeholder="唯一编码，如 KH001" maxlength="64" />
+        <el-form-item v-if="dialogMode === 'edit'" label="客户编码">
+          <el-input :model-value="formData.customer_code" disabled placeholder="-" />
+        </el-form-item>
+        <el-form-item v-else label="客户编码">
+          <span class="code-hint">保存后由系统自动生成（WY + 8位随机大写字母数字）</span>
         </el-form-item>
         <el-form-item label="客户名称" prop="customer_name">
           <el-input v-model="formData.customer_name" placeholder="完整客户名称" maxlength="256" />
@@ -148,39 +171,58 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitForm">保存</el-button>
+        <el-button @click="dialogVisible = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitForm" icon=Check>保存</el-button>
       </template>
     </el-dialog>
 
     <!-- Stats Dialog -->
     <el-dialog
-      title="客户统计信息"
+      title="客户详情"
       v-model="statsDialogVisible"
-      width="420px"
+      width="480px"
     >
       <div v-if="currentStats" class="stats-content">
-        <div class="stats-item">
-          <span class="label">客户名称：</span>
-          <span class="value">{{ currentStats.customer_name }}</span>
-        </div>
-        <div class="stats-item">
-          <span class="label">状态：</span>
-          <el-tag :type="currentStats.is_active ? 'success' : 'info'">
-            {{ currentStats.is_active ? '启用' : '停用' }}
-          </el-tag>
-        </div>
-        <div class="stats-item">
-          <span class="label">关联订单数：</span>
-          <span class="value">{{ currentStats.order_count }}</span>
-        </div>
-        <div class="stats-item">
-          <span class="label">关联合同数：</span>
-          <span class="value">{{ currentStats.contract_count }}</span>
-        </div>
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="客户编码">{{ currentStats.customer_code }}</el-descriptions-item>
+          <el-descriptions-item label="客户名称">{{ currentStats.customer_name }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentStats.contact_name" label="联系人">{{ currentStats.contact_name }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentStats.phone" label="电话">{{ currentStats.phone }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentStats.address" label="地址">{{ currentStats.address }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="currentStats.is_active ? 'success' : 'info'" size="small">
+              {{ currentStats.is_active ? '启用' : '停用' }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="关联订单">
+            <el-button
+              v-if="currentStats.order_count"
+              type="primary"
+              link
+              size="small"
+              @click="goToCustomerOrders(currentStats)"
+            >
+              {{ currentStats.order_count }} 个订单
+            </el-button>
+            <span v-else class="muted">暂无</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="关联合同">
+            <el-button
+              v-if="currentStats.contract_count_approved"
+              type="primary"
+              link
+              size="small"
+              @click="goToCustomerContracts(currentStats)"
+            >
+              {{ currentStats.contract_count_approved }} 个有效合同
+            </el-button>
+            <span v-else class="muted">暂无</span>
+          </el-descriptions-item>
+        </el-descriptions>
       </div>
       <template #footer>
-        <el-button @click="statsDialogVisible = false">关闭</el-button>
+        <el-button @click="statsDialogVisible = false" icon=Close>关闭</el-button>
+        <el-button v-if="hasEditPerm" type="primary" @click="editFromStats" icon=Edit>编辑</el-button>
       </template>
     </el-dialog>
   </div>
@@ -206,6 +248,7 @@ export default {
   data() {
     return {
       loading: false,
+      exporting: false,
       customerList: [],
       searchQuery: '',
       currentPage: 1,
@@ -226,10 +269,6 @@ export default {
         address: ''
       },
       formRules: {
-        customer_code: [
-          { required: true, message: '请输入客户编码', trigger: 'blur' },
-          { min: 1, max: 64, message: '编码长度1-64字符', trigger: 'blur' }
-        ],
         customer_name: [
           { required: true, message: '请输入客户名称', trigger: 'blur' },
           { min: 1, max: 256, message: '名称长度1-256字符', trigger: 'blur' }
@@ -259,7 +298,10 @@ export default {
   },
   watch: {
     searchQuery(val) {
-      if (!val) this.loadData();
+      if (!val) {
+        this.currentPage = 1;
+        this.loadData();
+      }
     }
   },
   mounted() {
@@ -278,7 +320,6 @@ export default {
         const res = await listSalesCustomers(params);
         this.customerList = res.items || [];
         this.total = res.pagination?.total || 0;
-        // enrich with stats? for simplicity, stats fetched on demand
       } catch (e) {
         this.$message.error(this.apiUserMsg(e, '加载客户列表失败'));
         this.customerList = [];
@@ -294,6 +335,13 @@ export default {
     handlePageChange(page) {
       this.currentPage = page;
       this.loadData();
+    },
+    handleRowDblClick(row) {
+      if (this.hasViewPerm) {
+        this.viewStats(row);
+      } else if (this.hasEditPerm) {
+        this.openEditDialog(row);
+      }
     },
     openCreateDialog() {
       this.dialogMode = 'create';
@@ -338,19 +386,17 @@ export default {
       try {
         let res;
         if (this.dialogMode === 'create') {
-          res = await createSalesCustomer(this.formData);
+          const { customer_name, contact_name, phone, address } = this.formData;
+          res = await createSalesCustomer({ customer_name, contact_name, phone, address });
         } else {
-          res = await updateSalesCustomer(this.editingId, this.formData);
+          const { customer_name, contact_name, phone, address } = this.formData;
+          res = await updateSalesCustomer(this.editingId, { customer_name, contact_name, phone, address });
         }
         this.$message.success('操作成功');
         this.dialogVisible = false;
         this.loadData(); // auto refresh
       } catch (e) {
-        if (e.response?.data?.error === 'DUPLICATE_CUSTOMER_CODE') {
-          this.$message.error('客户编码已存在，请使用其他编码');
-        } else {
-          this.$message.error(this.apiUserMsg(e, '保存失败'));
-        }
+        this.$message.error(this.apiUserMsg(e, '保存失败'));
       } finally {
         this.saving = false;
       }
@@ -419,6 +465,33 @@ export default {
         this.$message.error(this.apiUserMsg(e, '获取统计失败'));
       }
     },
+    editFromStats() {
+      if (!this.currentStats) return;
+      this.statsDialogVisible = false;
+      this.openEditDialog(this.currentStats);
+    },
+    goToCustomerOrders(row) {
+      const orderCount = row.order_count || 0;
+      if (!orderCount) {
+        this.$message.info('该客户暂无订单');
+        return;
+      }
+      this.$router.push({
+        path: '/sales/orders',
+        query: { customer_code: row.customer_code }
+      });
+    },
+    goToCustomerContracts(row) {
+      const contractCount = row.contract_count_approved || 0;
+      if (!contractCount) {
+        this.$message.info('该客户暂无有效合同');
+        return;
+      }
+      this.$router.push({
+        path: '/sales/contracts',
+        query: { customer_code: row.customer_code }
+      });
+    },
     apiUserMsg(e, defaultMsg) {
       return e?.response?.data?.error || e?.message || defaultMsg || '操作失败';
     }
@@ -435,6 +508,8 @@ export default {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 .page-header h2 {
   margin: 0;
@@ -444,27 +519,39 @@ export default {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex-wrap: wrap;
+}
+.toolbar .el-input {
+  max-width: 280px;
 }
 .pagination-bar {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
 }
-.stats-content {
-  padding: 10px 0;
+.code-hint {
+  color: #909399;
+  font-size: 13px;
+  line-height: 32px;
 }
-.stats-item {
+.muted {
+  color: #c0c4cc;
+}
+.link-cell {
   display: flex;
-  margin-bottom: 16px;
-  font-size: 15px;
+  gap: 8px;
+  justify-content: center;
 }
-.stats-item .label {
-  width: 110px;
-  color: #666;
-  flex-shrink: 0;
+:deep(.el-table__row) {
+  cursor: pointer;
 }
-.stats-item .value {
-  color: #333;
-  font-weight: 500;
+:deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
+}
+:deep(.el-button + .el-button) {
+  margin-left: 8px;
+}
+:deep(.el-descriptions__label) {
+  width: 100px;
 }
 </style>

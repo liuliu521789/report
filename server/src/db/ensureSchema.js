@@ -1,4 +1,6 @@
+import { nanoid } from 'nanoid';
 import { getPool } from './pool.js';
+import { defaultPermissionsForRole } from '../lib/permissionSchema.js';
 
 /** 与 migrations/010_report_image_library.sql 一致；启动时若表不存在则创建，免手工执行迁移 */
 const DDL_REPORT_IMAGE_LIBRARY = `
@@ -31,6 +33,44 @@ CREATE TABLE IF NOT EXISTS report_styles (
 ) ENGINE=InnoDB;
 `;
 
+const DDL_BACKUP_JOBS = `
+CREATE TABLE IF NOT EXISTS backup_jobs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  job_type ENUM('backup', 'restore') NOT NULL DEFAULT 'backup',
+  trigger_type ENUM('manual', 'cron', 'system') NOT NULL DEFAULT 'manual',
+  backup_id VARCHAR(32) NULL,
+  target_backup_id VARCHAR(32) NULL,
+  status ENUM('running', 'success', 'failed') NOT NULL DEFAULT 'running',
+  started_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  finished_at DATETIME(3) NULL,
+  duration_ms INT UNSIGNED NULL,
+  size_bytes BIGINT UNSIGNED NULL,
+  actor_user_id BIGINT UNSIGNED NULL,
+  error_message VARCHAR(1024) NULL,
+  meta_json JSON NULL,
+  PRIMARY KEY (id),
+  KEY idx_backup_jobs_started (started_at),
+  KEY idx_backup_jobs_status (status),
+  KEY idx_backup_jobs_type_trigger (job_type, trigger_type),
+  KEY idx_backup_jobs_backup_id (backup_id),
+  CONSTRAINT fk_backup_jobs_actor_user FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+`;
+
+/** 与 migrations/007_support_contact_settings.sql、schema.sql 一致 */
+const DDL_SUPPORT_CONTACT_SETTINGS = `
+CREATE TABLE IF NOT EXISTS support_contact_settings (
+  id TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  engineer_wechat_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by BIGINT UNSIGNED NULL,
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  CONSTRAINT fk_support_contact_updated_by
+    FOREIGN KEY (updated_by) REFERENCES users(id)
+    ON DELETE SET NULL
+) ENGINE=InnoDB;
+`;
+
 export async function ensureReportImageLibraryTable() {
   const pool = getPool();
   await pool.query(DDL_REPORT_IMAGE_LIBRARY);
@@ -41,6 +81,19 @@ export async function ensureReportStylesTable() {
   await pool.query(DDL_REPORT_STYLES);
 }
 
+export async function ensureBackupJobsTable() {
+  const pool = getPool();
+  await pool.query(DDL_BACKUP_JOBS);
+}
+
+export async function ensureSupportContactSettingsTable() {
+  const pool = getPool();
+  await pool.query(DDL_SUPPORT_CONTACT_SETTINGS);
+  await pool.query(
+    "INSERT IGNORE INTO support_contact_settings (id, engineer_wechat_id) VALUES (1, '')"
+  );
+}
+
 async function columnExists(pool, table, column) {
   const [rows] = await pool.query(
     `SELECT COUNT(*) AS c FROM information_schema.COLUMNS
@@ -48,6 +101,49 @@ async function columnExists(pool, table, column) {
     [table, column]
   );
   return Number(rows?.[0]?.c || 0) > 0;
+}
+
+function parseJsonObject(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  try {
+    return JSON.parse(typeof raw === 'string' ? raw : String(raw));
+  } catch {
+    return null;
+  }
+}
+
+function backfillBuiltinCategoryPermissionDefaults(currentRaw, roleCode) {
+  const current = parseJsonObject(currentRaw) || {};
+  const defaults = defaultPermissionsForRole(roleCode);
+  const next = JSON.parse(JSON.stringify(current));
+  let changed = false;
+  for (const key of ['contract_version_view', 'contract_multi_approve']) {
+    if (!Object.prototype.hasOwnProperty.call(next.contract_management || {}, key)) {
+      if (!next.contract_management || typeof next.contract_management !== 'object') {
+        next.contract_management = {};
+      }
+      next.contract_management[key] = !!defaults?.contract_management?.[key];
+      changed = true;
+    }
+  }
+  return changed ? next : null;
+}
+
+async function ensureBuiltinCategoryPermissionDefaults(pool) {
+  const [rows] = await pool.query(
+    `SELECT id, code, default_permissions_json
+     FROM employee_categories
+     WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'finance', 'warehouse', 'sales_admin')`
+  );
+  for (const row of rows || []) {
+    const next = backfillBuiltinCategoryPermissionDefaults(row.default_permissions_json, row.code);
+    if (!next) continue;
+    await pool.query(
+      'UPDATE employee_categories SET default_permissions_json = CAST(? AS JSON) WHERE id = ?',
+      [JSON.stringify(next), row.id]
+    );
+  }
 }
 
 /** 董事长角色 / 2FA：employee_categories.require_two_factor、users.totp_*、内置类别 chairman */
@@ -206,6 +302,7 @@ const DDL_SALES_PIECES = [
     updated_by BIGINT UNSIGNED NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    row_version INT UNSIGNED NOT NULL DEFAULT 1,
     PRIMARY KEY (id),
     UNIQUE KEY uk_sales_orders_no (order_no),
     KEY idx_sales_orders_customer (customer_id),
@@ -352,6 +449,21 @@ export async function ensureQuickRoleUserColumns() {
   }
 }
 
+/** 兼容旧库：补齐公司信息邮箱/地址字段（migrations/026） */
+export async function ensureCompanySettingsColumns() {
+  const pool = getPool();
+  if (!(await columnExists(pool, 'company_settings', 'company_email'))) {
+    await pool.query(
+      'ALTER TABLE company_settings ADD COLUMN company_email VARCHAR(128) NULL DEFAULT NULL AFTER company_name_en'
+    );
+  }
+  if (!(await columnExists(pool, 'company_settings', 'company_address'))) {
+    await pool.query(
+      'ALTER TABLE company_settings ADD COLUMN company_address VARCHAR(256) NULL DEFAULT NULL AFTER company_email'
+    );
+  }
+}
+
 /** 与 migrations/027_users_account_type_manager.sql 一致：未跑迁移时写入 manager 会触发 MySQL 截断错误 → 500 */
 export async function ensureUsersAccountTypeManagerEnum() {
   const pool = getPool();
@@ -367,7 +479,89 @@ export async function ensureUsersAccountTypeManagerEnum() {
   );
 }
 
-/** 幂等：保证站内信表存在（避免 ensureSalesModuleTables 中途失败后缺表导致 GET /sales/messages 500） */
+/**
+ * 账号模块加固：
+ * - users.token_version：JWT 即时失效版本号
+ * - users.force_change_password：强制下次登录改密
+ * - users.password_changed_at：密码修改时间
+ * - users.deleted_at：软删除标记
+ * - users.require_two_factor：超管个人级 2FA 开关（员工类别另有 require_two_factor）
+ * - users.idx_users_wecom_userid：企业微信 UserID 普通索引（开发阶段允许重复）
+ * - users.idx_users_account_type_active：常用筛选索引
+ * - employee_categories.is_builtin：替代硬编码 code 判断
+ */
+export async function ensureAccountModuleHardeningColumns() {
+  const pool = getPool();
+  if (!(await columnExists(pool, 'users', 'real_name'))) {
+    await pool.query(
+      "ALTER TABLE users ADD COLUMN real_name VARCHAR(64) NOT NULL DEFAULT '' AFTER username"
+    );
+    await pool.query("UPDATE users SET real_name = username WHERE real_name = ''");
+  }
+  if (!(await columnExists(pool, 'users', 'phone'))) {
+    await pool.query(
+      "ALTER TABLE users ADD COLUMN phone VARCHAR(32) NULL DEFAULT NULL AFTER department_id"
+    );
+  }
+  if (!(await columnExists(pool, 'users', 'token_version'))) {
+    await pool.query('ALTER TABLE users ADD COLUMN token_version INT NOT NULL DEFAULT 0 AFTER is_active');
+  }
+  if (!(await columnExists(pool, 'users', 'force_change_password'))) {
+    await pool.query(
+      'ALTER TABLE users ADD COLUMN force_change_password TINYINT(1) NOT NULL DEFAULT 0 AFTER token_version'
+    );
+  }
+  if (!(await columnExists(pool, 'users', 'password_changed_at'))) {
+    await pool.query(
+      'ALTER TABLE users ADD COLUMN password_changed_at DATETIME(3) NULL DEFAULT NULL AFTER force_change_password'
+    );
+  }
+  if (!(await columnExists(pool, 'users', 'deleted_at'))) {
+    await pool.query(
+      'ALTER TABLE users ADD COLUMN deleted_at DATETIME(3) NULL DEFAULT NULL AFTER updated_at'
+    );
+    await pool.query('CREATE INDEX idx_users_deleted_at ON users (deleted_at)');
+  }
+  if (!(await columnExists(pool, 'users', 'require_two_factor'))) {
+    await pool.query(
+      'ALTER TABLE users ADD COLUMN require_two_factor TINYINT(1) NOT NULL DEFAULT 0 AFTER force_change_password'
+    );
+  }
+  /**
+   * 企业微信 UserID：开发阶段允许重复绑定
+   * - 若历史上存在唯一索引，先移除
+   * - 保留普通索引用于检索性能
+   */
+  if (await indexExists(pool, 'users', 'uk_users_wecom_userid')) {
+    await pool.query('DROP INDEX uk_users_wecom_userid ON users');
+  }
+  if (!(await indexExists(pool, 'users', 'idx_users_wecom_userid'))) {
+    await pool.query('CREATE INDEX idx_users_wecom_userid ON users (wecom_userid)');
+  }
+  if (!(await indexExists(pool, 'users', 'uk_users_phone'))) {
+    try {
+      await pool.query('CREATE UNIQUE INDEX uk_users_phone ON users (phone)');
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[schema] users.uk_users_phone skipped (可能存在重复):', e?.message || e);
+    }
+  }
+  if (!(await indexExists(pool, 'users', 'idx_users_account_type_active'))) {
+    await pool.query('CREATE INDEX idx_users_account_type_active ON users (account_type, is_active)');
+  }
+  /** employee_categories 内置标记 */
+  if (!(await columnExists(pool, 'employee_categories', 'is_builtin'))) {
+    await pool.query(
+      'ALTER TABLE employee_categories ADD COLUMN is_builtin TINYINT(1) NOT NULL DEFAULT 0 AFTER require_two_factor'
+    );
+    await pool.query(
+      `UPDATE employee_categories SET is_builtin = 1
+       WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'finance', 'warehouse', 'sales_admin')`
+    );
+  }
+}
+
+/** 幂等：保证站内信表存在（仅依赖 users 外键） */
 export async function ensureSalesInternalMessagesTable() {
   const pool = getPool();
   await pool.query(DDL_SALES_INTERNAL_MESSAGES);
@@ -381,6 +575,8 @@ export async function ensureSalesInternalModelsTable() {
 
 export async function ensureSalesModuleTables() {
   const pool = getPool();
+  /** 先于 DDL_SALES_PIECES 执行：若后续片段某条失败中断，仍保证站内信表已建，避免轮询 GET /messages 500 */
+  await ensureSalesInternalMessagesTable();
   for (const ddl of DDL_SALES_PIECES) {
     await pool.query(ddl);
   }
@@ -461,6 +657,115 @@ export async function ensureSalesModuleTables() {
      WHERE code = 'sales'`,
     ['true']
   );
+  await ensureBuiltinCategoryPermissionDefaults(pool);
+  await ensureSalesOrdersRowVersionColumn(pool);
+  await ensureSalesCustomersNgramFulltextIndex(pool);
+}
+
+/** 订单乐观锁版本号；并发编辑时 PATCH 需携带期望的 row_version */
+let salesCustomersNgramFtReady = false;
+
+export function isSalesCustomerNgramFulltextReady() {
+  return salesCustomersNgramFtReady;
+}
+
+async function refreshSalesCustomersNgramFlag(pool) {
+  const [r] = await pool.query(
+    `SELECT 1 AS ok FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sales_customers' AND INDEX_NAME = 'ft_sales_customers_ngram'
+     LIMIT 1`
+  );
+  salesCustomersNgramFtReady = r.length > 0;
+}
+
+async function ensureSalesOrdersRowVersionColumn(pool) {
+  if (!(await columnExists(pool, 'sales_orders', 'row_version'))) {
+    await pool.query(
+      'ALTER TABLE sales_orders ADD COLUMN row_version INT UNSIGNED NOT NULL DEFAULT 1 AFTER updated_at'
+    );
+  }
+}
+
+/** 客户名称/编号检索：大数据量下 LIKE 前后模糊难走索引，增加 ngram 全文索引（失败时仅记录警告） */
+async function ensureSalesCustomersNgramFulltextIndex(pool) {
+  await refreshSalesCustomersNgramFlag(pool);
+  if (salesCustomersNgramFtReady) return;
+  try {
+    await pool.query(
+      `ALTER TABLE sales_customers
+       ADD FULLTEXT INDEX ft_sales_customers_ngram (customer_name, customer_code, contact_name) WITH PARSER ngram`
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[schema] sales_customers ngram FULLTEXT skipped:', e?.message || e);
+  }
+  await refreshSalesCustomersNgramFlag(pool);
+}
+
+/** 合同版本表 + 审批步骤 + sales_contracts 扩展列；与 migrations/032_contract_versioning_and_multi_approval.sql 一致 */
+const DDL_CONTRACT_VERSIONS = `
+CREATE TABLE IF NOT EXISTS contract_versions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  contract_id BIGINT UNSIGNED NOT NULL,
+  version_num INT NOT NULL DEFAULT 1,
+  body_html MEDIUMTEXT NOT NULL,
+  data_json JSON NULL,
+  change_summary VARCHAR(512) NULL,
+  created_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_contract_version (contract_id, version_num),
+  KEY idx_contract_versions_contract (contract_id),
+  CONSTRAINT fk_contract_versions_contract FOREIGN KEY (contract_id) REFERENCES sales_contracts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_contract_versions_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+`;
+
+const DDL_CONTRACT_APPROVAL_STEPS = `
+CREATE TABLE IF NOT EXISTS contract_approval_steps (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  contract_id BIGINT UNSIGNED NOT NULL,
+  step_order INT NOT NULL,
+  step_type ENUM('sequential', 'parallel', 'countersign') NOT NULL DEFAULT 'sequential',
+  approvers_json JSON NOT NULL,
+  required_approvals INT NOT NULL DEFAULT 1,
+  status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  completed_by JSON NULL,
+  comment_text VARCHAR(1024) NULL,
+  completed_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_approval_steps_contract (contract_id, step_order),
+  CONSTRAINT fk_approval_steps_contract FOREIGN KEY (contract_id) REFERENCES sales_contracts(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+`;
+
+/**
+ * createContractVersion() 会 UPDATE sales_contracts.data_json；若缺列或缺 contract_versions 表会导致保存合同 500。
+ * 启动时幂等补齐，避免仅跑了部分迁移的环境报错。
+ */
+export async function ensureSalesContractVersioning() {
+  const pool = getPool();
+  await pool.query(DDL_CONTRACT_VERSIONS);
+  await pool.query(DDL_CONTRACT_APPROVAL_STEPS);
+  if (!(await columnExists(pool, 'sales_contracts', 'current_version'))) {
+    await pool.query(
+      'ALTER TABLE sales_contracts ADD COLUMN current_version INT NOT NULL DEFAULT 1 AFTER status'
+    );
+  }
+  if (!(await columnExists(pool, 'sales_contracts', 'approval_flow_json'))) {
+    await pool.query(
+      "ALTER TABLE sales_contracts ADD COLUMN approval_flow_json JSON NULL COMMENT '多级审批流配置' AFTER current_version"
+    );
+  }
+  if (!(await columnExists(pool, 'sales_contracts', 'last_version_created_at'))) {
+    await pool.query(
+      'ALTER TABLE sales_contracts ADD COLUMN last_version_created_at DATETIME(3) NULL AFTER approval_flow_json'
+    );
+  }
+  if (!(await columnExists(pool, 'sales_contracts', 'data_json'))) {
+    await pool.query('ALTER TABLE sales_contracts ADD COLUMN data_json JSON NULL');
+  }
 }
 
 /** 文档上传合同 + 弃用旧附件表；与 migrations/031_sales_contract_upload_document.sql 一致 */
@@ -588,7 +893,9 @@ VALUES
 ('sales_order_submit_finance', '销售提交财务审核（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
 ('sales_order_withdraw_finance', '销售撤回财务审核（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
 ('sales_order_approved_warehouse', '财务通过→仓库备货（系统）', 'textcard', '订单已审核通过', '{{detail}}', '{{shipConfirmUrl}}', '完成发货'),
-('sales_order_rejected_sales', '财务驳回→销售（系统）', 'text', NULL, '{{detail}}', NULL, '详情')
+('sales_order_rejected_sales', '财务驳回→销售（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
+('sales_contract_submit_reviewer', '提交合同发送信息给审核人', 'textcard', '合同待审核', '{{customerName}} 销售合同待您审核', '{{reviewUrl}}', '去审核'),
+('sales_contract_review_result', '合同审核结果通知提交审核人', 'text', NULL, '📢{{customerName}}销售合同审核状态更新\n🔒状态：{{contractReviewStatus}}\n💾备注：{{reviewComment}}', NULL, '详情')
 `;
 
 /** 与 migrations/021_users_wecom_userid.sql 一致 */
@@ -638,4 +945,84 @@ export async function ensureReportsReportUidColumn() {
   await pool.query(
     "UPDATE reports SET report_uid = CONCAT('ZJ-', LPAD(id, 10, '0')) WHERE report_uid IS NULL OR report_uid = ''"
   );
+}
+
+const WY_CUSTOMER_CODE_RE = /^WY[A-Z0-9]{8}$/;
+
+function randomWyCustomerCodeForMigration() {
+  return `WY${nanoid(8).replace(/[^A-Za-z0-9]/g, '0').toUpperCase()}`;
+}
+
+/** 启动时将不符合 WY+8 的客户编码统一为随机唯一编码（幂等） */
+export async function ensureSalesCustomerCodesWyFormat() {
+  const pool = getPool();
+  let rows;
+  try {
+    const [r] = await pool.query('SELECT id, customer_code FROM sales_customers ORDER BY id ASC');
+    rows = r;
+  } catch (e) {
+    if (e?.code === 'ER_NO_SUCH_TABLE') return;
+    throw e;
+  }
+  if (!rows.length) return;
+
+  const used = new Set(
+    rows.map((row) => String(row.customer_code || '').trim().toUpperCase()).filter(Boolean)
+  );
+  const needUpdate = rows.filter((row) => !WY_CUSTOMER_CODE_RE.test(String(row.customer_code || '').trim()));
+  if (!needUpdate.length) return;
+
+  const assigned = new Map();
+  for (const row of needUpdate) {
+    let code = '';
+    let guard = 0;
+    while (!code || used.has(code)) {
+      code = randomWyCustomerCodeForMigration();
+      guard += 1;
+      if (guard > 200) {
+        throw new Error('ensureSalesCustomerCodesWyFormat: code generation exhausted');
+      }
+    }
+    used.add(code);
+    assigned.set(Number(row.id), code);
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    for (const [id, code] of assigned.entries()) {
+      await conn.query('UPDATE sales_customers SET customer_code = ? WHERE id = ?', [code, id]);
+    }
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}
+
+/** 与 migrations/038_stamps_svg_image.sql 一致：company_stamps 增加 SVG 电子章字段 */
+export async function ensureStampsSvgFields() {
+  const pool = getPool();
+  
+  // 检查表是否存在
+  const [tables] = await pool.query(
+    "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'company_stamps'"
+  );
+  if (tables.length === 0) return;
+  
+  // 添加 svg_image_url 字段
+  if (!(await columnExists(pool, 'company_stamps', 'svg_image_url'))) {
+    await pool.query(
+      "ALTER TABLE company_stamps ADD COLUMN svg_image_url VARCHAR(512) NULL DEFAULT NULL COMMENT 'SVG电子章URL' AFTER image_url"
+    );
+  }
+  
+  // 添加 active_image_type 字段
+  if (!(await columnExists(pool, 'company_stamps', 'active_image_type'))) {
+    await pool.query(
+      "ALTER TABLE company_stamps ADD COLUMN active_image_type ENUM('original', 'svg') NOT NULL DEFAULT 'original' COMMENT '当前激活的图片类型' AFTER svg_image_url"
+    );
+  }
 }

@@ -4,9 +4,17 @@ import { useAuthStore } from '../stores/auth';
 import { enrichApiErrorBody } from '../../../shared/apiErrorZh.js';
 
 /** 开发环境默认空串：请求发到当前页所在源，由 Vite 把 /api、/uploads 代理到后端（见 vite.config.js）。须同时启动 server。 */
-const baseURL =
+function normalizeApiBaseUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return raw;
+  // 历史配置兼容：旧端口 3003 统一迁移到后端默认端口 3001
+  return raw.replace('localhost:3003', 'localhost:3001');
+}
+
+const baseURL = normalizeApiBaseUrl(
   import.meta.env.VITE_APP_API_BASE_URL ||
-  (import.meta.env.DEV ? '' : 'http://localhost:3001');
+  (import.meta.env.DEV ? '' : 'http://localhost:3001')
+);
 
 export const http = axios.create({
   baseURL,
@@ -74,8 +82,10 @@ http.interceptors.request.use((config) => {
   config.silentProgress = config.silentProgress === true;
   if (!config.silentProgress) startProgress();
   const p = getActivePinia();
+  const url = String(config.url || '');
+  const isAuthLogin = url.includes('/api/auth/login');
   const token = p ? useAuthStore().token : localStorage.getItem('token');
-  if (token) {
+  if (token && !isAuthLogin) {
     config.headers = config.headers || {};
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -94,6 +104,14 @@ http.interceptors.response.use(
       err.response.data = enrichApiErrorBody(data);
     }
     const status = err?.response?.status;
+    const code = data?.error;
+    /** 强制改密走 403，不应清会话；交由 Layout 弹窗处理 */
+    if (status === 403 && code === 'PASSWORD_MUST_CHANGE') {
+      // 同步前端状态，避免页面/定时器在 pinia 状态滞后时反复请求
+      const p = getActivePinia();
+      if (p) useAuthStore().setForceChangePassword(true);
+      return Promise.reject(err);
+    }
     if (status === 401) {
       const p = getActivePinia();
       if (p) useAuthStore().clearSession();

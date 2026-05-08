@@ -9,17 +9,17 @@
           class="search-input"
           @keyup.enter="onSearch"
         />
-        <el-button type="primary" @click="onSearch">查询</el-button>
+        <el-button type="primary" @click="onSearch" icon=Search>查询</el-button>
         <el-button
           type="danger"
           plain
           v-if="canDeleteQrcode"
           :disabled="selected.length === 0"
           @click="removeSelected"
-        >批量删除</el-button>
+         icon=Delete>批量删除</el-button>
       </div>
       <div class="toolbar-right">
-        <el-button @click="load">刷新</el-button>
+        <el-button @click="load" icon=Refresh>刷新</el-button>
       </div>
     </div>
 
@@ -57,8 +57,8 @@
       </el-table-column>
       <el-table-column label="操作" width="180">
         <template #default="{ row }">
-          <el-button link @click="open(row)">查看</el-button>
-          <el-button v-if="canDeleteQrcode" link type="danger" @click="removeOne(row)">删除</el-button>
+          <el-button link @click="open(row)" icon=View>查看</el-button>
+          <el-button v-if="canDeleteQrcode" link type="danger" @click="removeOne(row)" icon=Delete>删除</el-button>
         </template>
       </el-table-column>
       </el-table>
@@ -84,14 +84,14 @@
           <span v-if="!(row.reportTags && row.reportTags.length)" class="muted">无关联报告</span>
         </div>
         <div class="mobile-actions">
-          <el-button size="small" @click="open(row)">查看</el-button>
+          <el-button size="small" @click="open(row)" icon=View>查看</el-button>
           <el-button
             v-if="canDeleteQrcode"
             size="small"
             type="danger"
             plain
             @click="removeOne(row)"
-          >
+           icon=Delete>
             删除
           </el-button>
         </div>
@@ -134,8 +134,8 @@
         <div v-if="qrDataUrl" class="qr-preview-wrap">
           <img :src="qrDataUrl" alt="qr" class="qr-preview-image" />
           <div class="qr-actions">
-            <el-button size="small" type="primary" plain :disabled="!qrScanUrl" @click="openScanUrl">预览二维码</el-button>
-            <el-button size="small" @click="downloadQr">下载二维码</el-button>
+            <el-button size="small" type="primary" plain :disabled="!qrScanUrl" @click="openScanUrl" icon=View>预览二维码</el-button>
+            <el-button size="small" @click="downloadQr" icon=Download>下载二维码</el-button>
           </div>
         </div>
       </div>
@@ -400,6 +400,12 @@ export default {
   .qrcode-drawer :deep(.el-drawer) {
     width: calc(100vw - 20px) !important;
   }
+}
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+:deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
 }
 </style>
 

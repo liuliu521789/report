@@ -8,6 +8,7 @@ import { nanoid } from 'nanoid';
 import { getPool } from '../db/pool.js';
 import { logOperationFromReq } from '../lib/audit.js';
 import { requireAuth, requireAnyPermission, requirePermission } from '../middleware/auth.js';
+import { normalizePublicAssetUrl } from '../lib/publicBaseUrl.js';
 
 export const router = Router();
 
@@ -38,6 +39,7 @@ function extFromMime(mime) {
   if (mime === 'image/png') return '.png';
   if (mime === 'image/jpeg') return '.jpg';
   if (mime === 'image/webp') return '.webp';
+  if (mime === 'image/svg+xml') return '.svg';
   return null;
 }
 
@@ -61,16 +63,48 @@ router.post('/upload', requirePermission('stamps', 'manage'), upload.single('fil
 
 router.get('/', canViewStamps, async (req, res) => {
   const pool = getPool();
+  
+  // 检查字段是否存在
+  let hasSvgFields = false;
+  try {
+    const [columns] = await pool.query(
+      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'company_stamps' AND COLUMN_NAME = 'svg_image_url'"
+    );
+    hasSvgFields = columns.length > 0;
+  } catch (e) {
+    // ignore
+  }
+  
+  const selectFields = hasSvgFields 
+    ? 'id, name, seal_type AS sealType, image_url AS imageUrl, svg_image_url AS svgImageUrl, active_image_type AS activeImageType, is_active AS isActive, created_at AS createdAt'
+    : 'id, name, seal_type AS sealType, image_url AS imageUrl, NULL AS svgImageUrl, \'original\' AS activeImageType, is_active AS isActive, created_at AS createdAt';
+  
   const [rows] = await pool.query(
-    'SELECT id, name, seal_type AS sealType, image_url AS imageUrl, is_active AS isActive, created_at AS createdAt FROM company_stamps ORDER BY created_at DESC, id DESC'
+    `SELECT ${selectFields} FROM company_stamps ORDER BY created_at DESC, id DESC`
   );
-  res.json({ items: rows });
+  const items = (rows || []).map(row => ({
+    ...row,
+    imageUrl: normalizePublicAssetUrl(row.imageUrl),
+    svgImageUrl: row.svgImageUrl ? normalizePublicAssetUrl(row.svgImageUrl) : null
+  }));
+  res.json({ items });
 });
 
-const upsertSchema = z.object({
+const createSchema = z.object({
   name: z.string().min(1).max(128),
   sealType: z.enum(sealTypeValues),
   imageUrl: z.string().min(1).max(512),
+  svgImageUrl: z.string().max(512).nullable().optional(),
+  activeImageType: z.enum(['original', 'svg']).optional(),
+  isActive: z.boolean().optional()
+});
+
+const updateSchema = z.object({
+  name: z.string().min(1).max(128),
+  sealType: z.enum(sealTypeValues),
+  imageUrl: z.string().max(512).nullable().optional(),
+  svgImageUrl: z.string().max(512).nullable().optional(),
+  activeImageType: z.enum(['original', 'svg']).optional(),
   isActive: z.boolean().optional()
 });
 
@@ -79,9 +113,9 @@ const bulkIdsSchema = z.object({
 });
 
 router.post('/', requirePermission('stamps', 'manage'), async (req, res) => {
-  const parsed = upsertSchema.safeParse(req.body);
+  const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const { name, sealType, imageUrl, isActive = true } = parsed.data;
+  const { name, sealType, imageUrl, svgImageUrl = null, activeImageType = 'original', isActive = true } = parsed.data;
 
   const pool = getPool();
   const conn = await pool.getConnection();
@@ -91,8 +125,8 @@ router.post('/', requirePermission('stamps', 'manage'), async (req, res) => {
       await conn.query('UPDATE company_stamps SET is_active=0 WHERE seal_type=?', [sealType]);
     }
     const [result] = await conn.query(
-      'INSERT INTO company_stamps (name, seal_type, image_url, is_active, created_by) VALUES (?, ?, ?, ?, ?)',
-      [name, sealType, imageUrl, isActive ? 1 : 0, req.user.userId]
+      'INSERT INTO company_stamps (name, seal_type, image_url, svg_image_url, active_image_type, is_active, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [name, sealType, imageUrl, svgImageUrl, activeImageType, isActive ? 1 : 0, req.user.userId]
     );
     await conn.commit();
     await logOperationFromReq(req, {
@@ -142,29 +176,57 @@ router.put('/:id', requirePermission('stamps', 'manage'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
 
-  const parsed = upsertSchema.safeParse(req.body);
+  const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
 
-  const { name, sealType, imageUrl, isActive = false } = parsed.data;
+  const { name, sealType, imageUrl = null, svgImageUrl = null, activeImageType = 'original', isActive = false } = parsed.data;
 
   const pool = getPool();
+  
+  // 检查字段是否存在
+  let hasSvgFields = false;
+  try {
+    const [columns] = await pool.query(
+      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'company_stamps' AND COLUMN_NAME = 'svg_image_url'"
+    );
+    hasSvgFields = columns.length > 0;
+  } catch (e) {
+    // ignore
+  }
+  
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+
+    // 获取当前记录
+    const [existingRows] = await conn.query('SELECT * FROM company_stamps WHERE id=? LIMIT 1', [id]);
+    const existing = existingRows?.[0];
+    if (!existing) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'NOT_FOUND' });
+    }
 
     // Keep "single active" per seal_type
     if (isActive) {
       await conn.query('UPDATE company_stamps SET is_active=0 WHERE seal_type=?', [sealType]);
     }
 
-    const [result] = await conn.query(
-      'UPDATE company_stamps SET name=?, seal_type=?, image_url=?, is_active=? WHERE id=?',
-      [name, sealType, imageUrl, isActive ? 1 : 0, id]
-    );
+    // 使用传入的值，如果为空则保留原值
+    const finalImageUrl = imageUrl || existing.image_url;
+    const finalSvgImageUrl = svgImageUrl || existing.svg_image_url;
+    const finalActiveImageType = activeImageType || existing.active_image_type || 'original';
 
-    if (!result?.affectedRows) {
-      await conn.rollback();
-      return res.status(404).json({ error: 'NOT_FOUND' });
+    let result;
+    if (hasSvgFields) {
+      [result] = await conn.query(
+        'UPDATE company_stamps SET name=?, seal_type=?, image_url=?, svg_image_url=?, active_image_type=?, is_active=? WHERE id=?',
+        [name, sealType, finalImageUrl, finalSvgImageUrl, finalActiveImageType, isActive ? 1 : 0, id]
+      );
+    } else {
+      [result] = await conn.query(
+        'UPDATE company_stamps SET name=?, seal_type=?, image_url=?, is_active=? WHERE id=?',
+        [name, sealType, finalImageUrl, isActive ? 1 : 0, id]
+      );
     }
 
     await conn.commit();
@@ -227,5 +289,66 @@ router.delete('/:id', requirePermission('stamps', 'manage'), async (req, res) =>
     success: true
   });
   res.json({ ok: true });
+});
+
+router.post('/:id/switch-image', requirePermission('stamps', 'manage'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+
+  const { imageType } = req.body;
+  if (!['original', 'svg'].includes(imageType)) {
+    return res.status(400).json({ error: 'INVALID_IMAGE_TYPE' });
+  }
+
+  const pool = getPool();
+  
+  // 检查字段是否存在
+  let hasSvgFields = false;
+  try {
+    const [columns] = await pool.query(
+      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'company_stamps' AND COLUMN_NAME = 'svg_image_url'"
+    );
+    hasSvgFields = columns.length > 0;
+  } catch (e) {
+    // ignore
+  }
+  
+  if (!hasSvgFields) {
+    return res.status(400).json({ error: 'SVG_FIELDS_NOT_EXISTS', message: '请重启服务器以初始化SVG字段' });
+  }
+  
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    
+    const [rows] = await conn.query('SELECT id, svg_image_url FROM company_stamps WHERE id=? LIMIT 1', [id]);
+    const stamp = rows?.[0];
+    if (!stamp) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'NOT_FOUND' });
+    }
+    
+    if (imageType === 'svg' && !stamp.svg_image_url) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'NO_SVG_IMAGE' });
+    }
+
+    await conn.query('UPDATE company_stamps SET active_image_type=? WHERE id=?', [imageType, id]);
+    await conn.commit();
+    
+    await logOperationFromReq(req, {
+      module: '公司章',
+      action: '切换印章图片类型',
+      detail: { stampId: id, imageType },
+      success: true
+    });
+    
+    res.json({ ok: true });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
 });
 

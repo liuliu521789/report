@@ -35,13 +35,15 @@ router.get('/', async (req, res) => {
     `SELECT id, name_zh AS nameZh, code, sort_order AS sortOrder,
             default_permissions_json AS defaultPermissions,
             IFNULL(require_two_factor, 0) AS requireTwoFactor,
+            IFNULL(is_builtin, 0) AS isBuiltin,
             created_at AS createdAt
      FROM employee_categories ORDER BY sort_order ASC, id ASC`
   );
   const items = (rows || []).map((r) => ({
     ...r,
     defaultPermissions: parsePermissionsJson(r.defaultPermissions),
-    requireTwoFactor: !!(r.requireTwoFactor === 1 || r.requireTwoFactor === true)
+    requireTwoFactor: !!(Number(r.requireTwoFactor) === 1 || r.requireTwoFactor === true),
+    isBuiltin: !!(Number(r.isBuiltin) === 1 || r.isBuiltin === true)
   }));
   res.json({ items });
 });
@@ -107,13 +109,19 @@ router.delete('/:id', async (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
 
   const pool = getPool();
-  const [qc] = await pool.query('SELECT code FROM employee_categories WHERE id=?', [id]);
+  const [qc] = await pool.query(
+    'SELECT code, IFNULL(is_builtin, 0) AS is_builtin FROM employee_categories WHERE id=?',
+    [id]
+  );
   if (!qc?.[0]) return res.status(404).json({ error: 'NOT_FOUND' });
-  if (qc[0].code === 'qc' || qc[0].code === 'cs' || qc[0].code === 'chairman') {
+  if (Number(qc[0].is_builtin) === 1) {
     return res.status(400).json({ error: 'CANNOT_DELETE_BUILTIN' });
   }
 
-  const [useRows] = await pool.query('SELECT COUNT(*) AS c FROM users WHERE employee_category_id = ?', [id]);
+  const [useRows] = await pool.query(
+    'SELECT COUNT(*) AS c FROM users WHERE employee_category_id = ? AND deleted_at IS NULL',
+    [id]
+  );
   if (Number(useRows?.[0]?.c) > 0) return res.status(400).json({ error: 'CATEGORY_IN_USE' });
 
   await pool.query('DELETE FROM employee_categories WHERE id = ?', [id]);

@@ -43,7 +43,7 @@
             <el-input
               v-model="form.username"
               autocomplete="username"
-              placeholder="请输入用户名"
+              placeholder="请输入登录账号或手机号"
               clearable
               size="large"
             >
@@ -67,6 +67,22 @@
                 <el-icon><Lock /></el-icon>
               </template>
             </el-input>
+          </el-form-item>
+          <el-form-item v-if="needCaptcha" class="captcha-item">
+            <div class="captcha-row">
+              <el-input
+                v-model="captchaCode"
+                maxlength="8"
+                placeholder="请输入图形验证码"
+                clearable
+                size="large"
+                @keyup.enter="onLogin"
+              />
+              <div class="captcha-side">
+                <div class="captcha-image" @click="loadCaptcha" v-html="captchaSvg"></div>
+                <el-button text type="primary" class="captcha-refresh-text" @click="loadCaptcha">看不清，换一张</el-button>
+              </div>
+            </div>
           </el-form-item>
           <el-form-item class="login-form__actions">
             <el-button
@@ -100,7 +116,7 @@
           <el-button type="primary" class="login-btn totp-btn" size="large" :loading="loading" @click="onTotpLoginSubmit">
             验证并登录
           </el-button>
-          <el-button text type="primary" class="back-link" @click="backToPassword">返回重新输入密码</el-button>
+          <el-button text type="primary" class="back-link" @click="backToPassword" icon=Back>返回重新输入密码</el-button>
         </div>
 
         <div v-else class="totp-block">
@@ -124,21 +140,21 @@
               size="large"
               @keyup.enter="onTotpActivateSubmit"
             />
-            <el-button type="primary" class="login-btn totp-btn" size="large" :loading="loading" @click="onTotpActivateSubmit">
+            <el-button type="primary" class="login-btn totp-btn" size="large" :loading="loading" @click="onTotpActivateSubmit" icon=Check>
               确认绑定并登录
             </el-button>
-            <el-button text type="primary" class="back-link" @click="backToPassword">返回重新输入密码</el-button>
+            <el-button text type="primary" class="back-link" @click="backToPassword" icon=Back>返回重新输入密码</el-button>
           </template>
         </div>
 
-        <p v-if="step === 'password'" class="login-hint">默认测试账号：admin，密码：Admin@123</p>
+        <p v-if="step === 'password'" class="login-hint">默认测试账号：admin，密码：admin123</p>
       </div>
     </div>
   </div>
 </template>
 
 <script>
-import { login, totpActivate, totpProvision, totpVerifyLogin } from '../api';
+import { getLoginCaptcha, getMe, login, totpActivate, totpProvision, totpVerifyLogin } from '../api';
 import { useAuthStore } from '../stores/auth';
 import { User, Lock, Key, CircleCheckFilled, Document, Grid } from '@element-plus/icons-vue';
 
@@ -151,6 +167,10 @@ export default {
       loading: false,
       setupLoading: false,
       form: { username: '', password: '' },
+      needCaptcha: false,
+      captchaCode: '',
+      captchaToken: '',
+      captchaSvg: '',
       pendingToken: '',
       totpCode: '',
       qrDataUrl: '',
@@ -158,23 +178,57 @@ export default {
     };
   },
   methods: {
+    async hydrateSessionByMe() {
+      try {
+        const d = await getMe();
+        useAuthStore().applyMeResponse(d);
+      } catch {
+        /* ignore: login response already applied */
+      }
+    },
     backToPassword() {
       this.step = 'password';
+      this.needCaptcha = false;
+      this.captchaCode = '';
+      this.captchaToken = '';
+      this.captchaSvg = '';
       this.pendingToken = '';
       this.totpCode = '';
       this.qrDataUrl = '';
       this.otpauthHint = '';
     },
+    async loadCaptcha() {
+      try {
+        const d = await getLoginCaptcha();
+        this.captchaToken = d.captchaToken || '';
+        this.captchaSvg = d.svg || '';
+      } catch {
+        this.captchaToken = '';
+        this.captchaSvg = '';
+      }
+    },
     async onLogin() {
       if (!this.form.username || !this.form.password) {
-        this.$message.warning('请输入账号和密码');
+        this.$message.warning('请输入登录账号/手机号和密码');
+        return;
+      }
+      if (this.needCaptcha && !String(this.captchaCode || '').trim()) {
+        this.$message.warning('请输入图形验证码');
         return;
       }
       this.loading = true;
       try {
-        const data = await login(this.form.username, this.form.password);
+        const data = await login(this.form.username, this.form.password, {
+          captchaToken: this.captchaToken,
+          captchaCode: this.captchaCode
+        });
+        this.needCaptcha = false;
+        this.captchaCode = '';
+        this.captchaToken = '';
+        this.captchaSvg = '';
         if (data.token) {
           useAuthStore().applyLoginResponse(data);
+          await this.hydrateSessionByMe();
           this.$router.push('/dashboard');
           return;
         }
@@ -194,11 +248,32 @@ export default {
         this.$message.error('登录响应异常');
       } catch (e) {
         const err = e?.response?.data?.error;
+        if (e?.response?.data?.needCaptcha === true || err === 'CAPTCHA_REQUIRED') {
+          this.needCaptcha = true;
+          this.captchaCode = '';
+          await this.loadCaptcha();
+          if (err === 'CAPTCHA_REQUIRED') {
+            this.$message.error('请先完成图形验证码');
+          }
+          return;
+        }
+        if (err === 'CAPTCHA_INVALID') {
+          this.$message.error('图形验证码错误，请重试');
+          this.captchaCode = '';
+          await this.loadCaptcha();
+          return;
+        }
         const st = e?.response?.status;
         if (st === 403 && err === 'ACCOUNT_LOCKED') {
           this.$message.error('账号已临时锁定，请稍后再试');
+        } else if (st === 429 || err === 'TOO_MANY_REQUESTS') {
+          this.$message.error('请求过于频繁，请稍后再试');
         } else {
           this.$message.error(this.$apiUserMsg(e, '登录失败'));
+        }
+        if (this.needCaptcha) {
+          this.captchaCode = '';
+          await this.loadCaptcha();
         }
       } finally {
         this.loading = false;
@@ -230,6 +305,7 @@ export default {
       try {
         const data = await totpVerifyLogin(this.pendingToken, code);
         useAuthStore().applyLoginResponse(data);
+        await this.hydrateSessionByMe();
         this.$router.push('/dashboard');
       } catch (e) {
         const err = e?.response?.data?.error;
@@ -250,6 +326,7 @@ export default {
       try {
         const data = await totpActivate(this.pendingToken, code);
         useAuthStore().applyLoginResponse(data);
+        await this.hydrateSessionByMe();
         this.$message.success('双因素认证已启用');
         this.$router.push('/dashboard');
       } catch (e) {
@@ -453,6 +530,50 @@ export default {
 .login-form__actions {
   margin-top: 32px;
   margin-bottom: 0 !important;
+}
+
+.captcha-item {
+  margin-bottom: 16px !important;
+}
+
+.captcha-row {
+  width: 100%;
+  display: flex;
+  gap: 12px;
+}
+
+.captcha-row :deep(.el-input) {
+  flex: 1;
+}
+
+.captcha-image {
+  width: 120px;
+  height: 40px;
+  border: 1px solid rgba(30, 58, 95, 0.2);
+  border-radius: 10px;
+  cursor: pointer;
+  overflow: hidden;
+  background: #fff;
+}
+
+.captcha-image :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.captcha-side {
+  width: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.captcha-refresh-text {
+  padding: 0;
+  font-size: 12px;
+  justify-content: center;
 }
 
 .login-btn {

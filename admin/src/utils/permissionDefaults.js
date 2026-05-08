@@ -78,7 +78,9 @@ export function emptyPermissionShape() {
       contract_review: false,
       contract_view: false,
       contract_edit: false,
-      contract_delete: false
+      contract_delete: false,
+      contract_version_view: false,
+      contract_multi_approve: false
     },
     process_management: {
       view_flow: false

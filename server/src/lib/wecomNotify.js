@@ -1,4 +1,5 @@
 import { fetchWecomAccessToken, applyWecomTemplate, wecomSendMessage } from './wecomApi.js';
+import { signWecomContractReviewToken } from './wecomContractReviewToken.js';
 import {
   loadOrderFieldDefinitions,
   attachCustomerNamesToOrders,
@@ -37,7 +38,7 @@ export const WECOM_TEMPLATE_CODE_CATALOG = [
   },
   {
     code: WECOM_TEMPLATE_CONTRACT_SUBMIT_REVIEWER,
-    meaning: '合同提交审核后通知审核人',
+    meaning: '合同提交审核后通知审核人（可选用变量 reviewUrl 作为移动端审批链接）',
     usedBy: ['销售合同提交审核']
   },
   {
@@ -428,9 +429,23 @@ export async function tryNotifyContractReviewerOnSubmit(
         : '';
     const detail = clampWecomText(notifyBody);
 
+    let reviewUrl = '';
+    try {
+      const base = publicWecomBaseUrl();
+      const cid = contractRow?.id != null ? Number(contractRow.id) : NaN;
+      const tid = Number(toUid);
+      if (base && process.env.JWT_SECRET && Number.isFinite(cid) && cid > 0 && Number.isFinite(tid) && tid > 0) {
+        const tok = signWecomContractReviewToken(cid, tid);
+        reviewUrl = `${base}/api/public/wecom-contract-review?t=${encodeURIComponent(tok)}`;
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[wecom] contract reviewUrl omitted:', e?.message || e);
+    }
+
     await sendWecomTemplateMessage(pool, {
       templateCode,
-      variables: { detail, contractNo, customerName, fromUser: fromUsername },
+      variables: { detail, contractNo, customerName, fromUser: fromUsername, reviewUrl },
       toUser
     });
     // eslint-disable-next-line no-console

@@ -1,7 +1,7 @@
 <template>
   <div class="categories-page">
     <div class="toolbar">
-      <el-button type="primary" @click="openCreate">新增类别</el-button>
+      <el-button type="primary" @click="openCreate" icon=Plus>新增类别</el-button>
       <span class="hint">内置「品管」「客服」「董事长」不可删除；可新增其他类别并配置默认权限。</span>
     </div>
 
@@ -12,12 +12,12 @@
       <el-table-column prop="sortOrder" label="排序" width="80" />
       <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
-          <el-button link @click="openEdit(row)">编辑</el-button>
+          <el-button link @click="openEdit(row)" icon=Edit>编辑</el-button>
           <el-button
             link
             :disabled="row.code === 'qc' || row.code === 'cs' || row.code === 'chairman'"
             @click="onDelete(row)"
-          >
+           icon=Delete>
             删除
           </el-button>
         </template>
@@ -32,12 +32,12 @@
         <div class="mobile-line"><span>ID</span><span>{{ row.id }}</span></div>
         <div class="mobile-line"><span>排序</span><span>{{ row.sortOrder }}</span></div>
         <div class="mobile-actions">
-          <el-button size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button size="small" @click="openEdit(row)" icon=Edit>编辑</el-button>
           <el-button
             size="small"
             :disabled="row.code === 'qc' || row.code === 'cs' || row.code === 'chairman'"
             @click="onDelete(row)"
-          >
+           icon=Delete>
             删除
           </el-button>
         </div>
@@ -65,8 +65,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
+        <el-button @click="dialog = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submit" icon=Check>保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -271,5 +271,11 @@ export default {
   .categories-form :deep(.el-form-item__content) {
     margin-left: 0 !important;
   }
+}
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+:deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
 }
 </style>

@@ -18,7 +18,7 @@
           保存后，全体已登录员工在「操作指南」页面（侧栏底部入口）点击「联系技术工程师」，可将该微信号复制到剪贴板，再到微信中搜索添加或发起沟通。可留空，留空时员工将看到提示联系管理员。
         </p>
         <el-form-item>
-          <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+          <el-button type="primary" :loading="saving" @click="save" icon=Check>保存</el-button>
         </el-form-item>
       </el-form>
     </el-card>

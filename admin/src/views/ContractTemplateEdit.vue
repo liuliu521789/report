@@ -75,14 +75,14 @@
         <div v-if="isContractMode && isUploadContract" class="upload-contract-panel">
           <div class="toolbar in-editor-toolbar">
             <div>
-              <el-button @click="goBack">返回</el-button>
+              <el-button @click="goBack" icon=Back>返回</el-button>
             </div>
             <div class="toolbar-right">
               <el-button
                 v-if="perm('company', 'manage') || perm('company', 'view')"
                 @click="$router.push('/company')"
               >企业信息</el-button>
-              <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+              <el-button type="primary" :loading="saving" @click="save" icon=Check>保存</el-button>
             </div>
           </div>
           <el-form label-width="100px" class="editor-form">
@@ -92,7 +92,7 @@
             <el-form-item label="正文文件">
               <div class="upload-doc-row">
                 <span class="upload-doc-name">{{ uploadContractDocName || '—' }}</span>
-                <el-button @click="downloadUploadContractFile">下载</el-button>
+                <el-button @click="downloadUploadContractFile" icon=Download>下载</el-button>
                 <el-upload
                   :show-file-list="false"
                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.gif"
@@ -109,15 +109,15 @@
         <div class="edit-panel">
           <div class="toolbar in-editor-toolbar">
             <div>
-              <el-button @click="goBack">返回</el-button>
+              <el-button @click="goBack" icon=Back>返回</el-button>
             </div>
             <div class="toolbar-right">
               <el-button
                 v-if="perm('company', 'manage') || perm('company', 'view')"
                 @click="$router.push('/company')"
               >企业信息</el-button>
-              <el-button v-if="isContractMode" type="primary" :loading="saving" @click="save">保存合同</el-button>
-              <el-button v-else type="primary" :loading="saving" @click="save">保存模板</el-button>
+              <el-button v-if="isContractMode" type="primary" :loading="saving" @click="save" icon=Check>保存合同</el-button>
+              <el-button v-else type="primary" :loading="saving" @click="save" icon=Check>保存模板</el-button>
             </div>
           </div>
           <el-form label-width="96px" class="editor-form">
@@ -140,7 +140,7 @@
               </div>
             </el-form-item>
             <div v-if="contractBodyPreserveLocked" class="preserve-unlock-row">
-              <el-button type="warning" plain @click="unlockContractVisualReplaceBody">
+              <el-button type="warning" plain @click="unlockContractVisualReplaceBody" icon=Edit>
                 改用推荐版式编辑正文（将清空当前正文为空白表单结构，请谨慎）
               </el-button>
             </div>
@@ -245,7 +245,7 @@
                       <div class="tpl-insert-row mt6 table-ops">
                         <el-button size="small" @click="addVisualTableRow">＋ 增加行</el-button>
                         <el-button size="small" @click="removeVisualTableRow" :disabled="visual.tableRows.length <= 1">－ 减少行</el-button>
-                        <el-button v-if="!isContractMode" size="small" @click="editMode = 'raw'">
+                        <el-button v-if="!isContractMode" size="small" @click="editMode = 'raw'" icon=Edit>
                           去源码编辑插入占位符
                         </el-button>
                       </div>
@@ -435,7 +435,7 @@
 
           <div class="actions-bar mt24">
             <el-button type="primary" @click="setupDefaultApprovalFlow">初始化多级审批流</el-button>
-            <el-button @click="refreshApprovalSteps">刷新流程</el-button>
+            <el-button @click="refreshApprovalSteps" icon=Refresh>刷新流程</el-button>
           </div>
         </div>
       </div>
@@ -464,7 +464,10 @@ import {
 } from '../utils/contractTemplateDefaults';
 import { createDefaultVisual, CONTRACT_ORDER_LINE_HEADERS } from '../utils/contractVisualDefaults';
 import { parseContractHtmlToVisual } from '../utils/contractBodyToVisual';
-import { finalizeContractBodyForPreview } from '../utils/contractPreviewHtml';
+import {
+  finalizeContractBodyForPreview,
+  CONTRACT_PREVIEW_TITLE_FONT
+} from '../utils/contractPreviewHtml';
 
 export default {
   name: 'ContractTemplateEdit',
@@ -934,11 +937,12 @@ export default {
         .join('');
       const totalDisp =
         String(v.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
-      const cell = 'border:1px solid #000;padding:4px 6px;font-family:SimSun,宋体;font-size:12px;line-height:1.35';
+      const cell =
+        'border:1px solid #000;padding:4px 6px;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35';
       const totalRow = `<tr><td style="${cell};text-align:center">总金额</td><td colspan="8" style="${cell};text-align:left">${esc(
         totalDisp
       )}</td></tr>`;
-      return `<table style="width:100%;border-collapse:collapse;border:1px solid #000;font-family:SimSun,宋体;font-size:12px;line-height:1.35"><thead><tr>${head}</tr></thead><tbody>${body}${totalRow}</tbody></table>`;
+      return `<table style="width:100%;border-collapse:collapse;border:1px solid #000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35"><thead><tr>${head}</tr></thead><tbody>${body}${totalRow}</tbody></table>`;
     },
     visualToBodyHtml() {
       const v = this.visual || {};
@@ -989,8 +993,8 @@ export default {
         const leftHtml = left ? `<div>${left.label}：${left.value}</div>` : '<div>&nbsp;</div>';
         const rightHtml = right ? `<div>${right.label}：${right.value}</div>` : '<div>&nbsp;</div>';
         return `<tr>
-      <td style="border:none;padding:2px 8px 2px 0;width:58%;vertical-align:top">${leftHtml}</td>
-      <td style="border:none;padding:2px 0 2px 8px;vertical-align:top">${rightHtml}</td>
+      <td style="border:none;padding:2px 8px 2px 0;width:58%;vertical-align:top;text-align:left">${leftHtml}</td>
+      <td style="border:none;padding:2px 0 2px 8px;vertical-align:top;text-align:left">${rightHtml}</td>
     </tr>`;
       }).join('');
       const clausesHtml = (v.clauses || [])
@@ -1005,11 +1009,11 @@ export default {
 
       const partyBlock = v.showPartyBlock
         ? `
-<table border="1" cellpadding="8" style="width:100%;border-collapse:collapse;margin-top:10px">
+<table class="party-table" border="1" cellpadding="6" style="width:100%;border-collapse:collapse;border:1px solid #000;margin-top:10px;font-size:14px;line-height:1.35">
   <tr>
-    <td style="width:50%;vertical-align:top">
-      <div><strong>卖方</strong></div>
-      <div style="line-height:1.8">
+    <td style="width:50%;vertical-align:top;border:1px solid #000;padding:5px 8px">
+      <div class="party-col-title">卖方</div>
+      <div style="line-height:1.35">
         单位：${sellerUnit}<br>
         地址：${sellerAddress}<br>
         联系人：${sellerContact}<br>
@@ -1020,9 +1024,9 @@ export default {
         行号：${sellerBankNo}
       </div>
     </td>
-    <td style="width:50%;vertical-align:top">
-      <div><strong>买方</strong></div>
-      <div style="line-height:1.8">
+    <td style="width:50%;vertical-align:top;border:1px solid #000;padding:5px 8px">
+      <div class="party-col-title">买方</div>
+      <div style="line-height:1.35">
         单位：${buyerUnit}<br>
         地址：${buyerAddress}<br>
         联系人：${buyerContact}<br>
@@ -1038,11 +1042,16 @@ export default {
         : '';
 
       return `
-<div style="font-family:SimSun,宋体;line-height:1.8;font-size:14px;color:#000">
-  <p style="text-align:center"><strong>${headerCompany} ${headerTitle}</strong></p>
-  <table style="width:100%;border-collapse:collapse;border:none;margin:8px 0 10px 0;font-size:14px;line-height:1.5">
+<div style="width:100%;margin:0 auto;color:#000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.5">
+  <div style="text-align:center;margin-bottom:16px">
+    <div style="font-size:22px;letter-spacing:4px;line-height:1.2;font-family:${CONTRACT_PREVIEW_TITLE_FONT}">${headerCompany}</div>
+    <div style="font-size:22px;letter-spacing:6px;line-height:1.2;margin-top:4px;font-family:${CONTRACT_PREVIEW_TITLE_FONT}">${headerTitle}</div>
+  </div>
+  <div style="text-align:center;margin:8px 0 10px 0">
+  <table class="contract-header-meta" style="width:auto;max-width:100%;margin:0 auto;border-collapse:collapse;border:none;font-size:16px;line-height:1.5">
     ${headerRowsHtml}
   </table>
+  </div>
   ${clausesHtml}
   ${partyBlock}
 </div>
@@ -1299,17 +1308,75 @@ export default {
   background: #fff;
   border: 1px solid #000;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
-  padding: 18mm 16mm;
+  padding: 25.4mm 31.7mm;
   transform-origin: top left;
   transform: scale(var(--a4-scale, 0.55));
+  font-family: FangSong_GB2312, 仿宋_GB2312, 仿宋, FangSong;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #000;
+  text-align: justify;
+}
+.preview-a4 :deep(h1),
+.preview-a4 :deep(h2),
+.preview-a4 :deep(h3),
+.preview-a4 :deep(.contract-title) {
+  font-family: FZXiaoBiaoSong-S05, FZXiaoBiaoSong, 方正小标宋简体, 方正小标宋, 方正小标宋_GBK, FZShuSong_GB2312, SimSun;
+  font-size: 22px;
+  font-weight: normal;
+  text-align: center;
+  letter-spacing: 2px;
+}
+.preview-a4 :deep(p) {
+  text-indent: 2em;
+  margin: 0.5em 0;
 }
 .preview-a4 :deep(table) {
   width: 100%;
   border-collapse: collapse;
 }
+.preview-a4 :deep(.contract-header-meta) {
+  width: auto;
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  border: none;
+}
+.preview-a4 :deep(.contract-header-meta th),
+.preview-a4 :deep(.contract-header-meta td) {
+  border: none;
+  text-align: left;
+  vertical-align: top;
+}
 .preview-a4 :deep(th),
 .preview-a4 :deep(td) {
+  border: 1px solid #000;
+  padding: 6px 8px;
+  text-align: center;
+  font-size: 16px;
   word-break: break-word;
+}
+.preview-a4 :deep(.party-table) {
+  page-break-inside: avoid;
+  break-inside: avoid;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.preview-a4 :deep(.party-table tr) {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.preview-a4 :deep(.party-table td) {
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.35;
+  padding: 5px 8px;
+}
+.preview-a4 :deep(.party-table .party-col-title) {
+  text-align: center;
+  font-weight: 700;
+  margin-bottom: 4px;
+  display: block;
 }
 .section {
   margin: 12px 0 18px;

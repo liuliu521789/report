@@ -9,6 +9,7 @@ import XLSX from 'xlsx';
 import QRCode from 'qrcode';
 
 import { getPool } from '../db/pool.js';
+import { isSalesCustomerNgramFulltextReady } from '../db/ensureSchema.js';
 import { requireAuth } from '../middleware/auth.js';
 import { hasPermission } from '../lib/permissions.js';
 import { logOperationFromReq } from '../lib/audit.js';
@@ -21,8 +22,15 @@ import {
   MAPS_TO_KEYS,
   normalizeOrderDateInput,
   importHeaderSynonymsForField,
-  splitLabelWarehouseCell
+  splitLabelWarehouseCell,
+  roundOrderDecimal4
 } from '../lib/salesOrderFields.js';
+import {
+  formatOrderUploadTime,
+  buildOrderNotifyBody,
+  buildContractOrdersNotifyBody
+} from '../lib/salesOrderNotifyBody.js';
+import { applyContractReview } from '../lib/contractReviewApply.js';
 import {
   tryNotifyFinanceWecomOrderEvent,
   tryNotifyWarehouseWecomOrderApproved,
@@ -31,7 +39,12 @@ import {
   tryNotifyContractReviewerOnSubmit,
   tryNotifyContractCreatorOnReview
 } from '../lib/wecomNotify.js';
-import { fillContractTemplate, formatSigningDateZhShanghai, shanghaiYmdCompact } from '../lib/contractTemplateFill.js';
+import {
+  fillContractTemplate,
+  formatSigningDateZhShanghai,
+  releaseShanghaiContractNoLock,
+  reserveNextShanghaiContractNo
+} from '../lib/contractTemplateFill.js';
 import { amountToRmbUppercase } from '../lib/chineseMoney.js';
 import { buildContractOrderLinesHtml } from '../lib/contractOrderLines.js';
 import {
@@ -41,6 +54,7 @@ import {
   setupApprovalFlow,
   approveStep
 } from '../lib/contractVersion.js';
+import { resolveContractUploadFilePath } from '../lib/salesContractUploadPath.js';
 
 export const router = Router();
 
@@ -107,16 +121,6 @@ async function unlinkSalesContractUploadDocuments(pool, contractIds) {
     if (!full.startsWith(root)) continue;
     await fsPromises.unlink(full).catch(() => {});
   }
-}
-
-function resolveContractUploadFilePath(row) {
-  if (!row || row.contract_source !== 'upload') return null;
-  const root = path.resolve(process.cwd(), 'uploads');
-  const rel = String(row.document_stored_rel_path || '').replace(/\\/g, '/').replace(/^(\.\.\/)+/, '');
-  if (!rel || rel.includes('..')) return null;
-  const full = path.resolve(root, rel);
-  if (!full.startsWith(root)) return null;
-  return full;
 }
 
 /** 导入表头与模板对齐：去 BOM、空白、可选前导 *（截图常用）、全角斜杠等 */
@@ -199,6 +203,23 @@ function canViewAllSalesOrders(req) {
   return false;
 }
 
+/**
+ * 进入「合同列表/合同详情/合同文件」等读接口：除 contract_view 外，能生成/改/审/删的账号也应看到与自己相关的数据，
+ * 避免只勾了「生成合同」却永远 403、列表页空白。
+ * （template_manage 仅维护模板，不因此开放全量合同 SQL。）
+ */
+function canAccessSalesContractWorkspace(req) {
+  if (isSuper(req)) return true;
+  return (
+    perm(req, 'contract_management', 'contract_view') ||
+    perm(req, 'contract_management', 'contract_generate') ||
+    perm(req, 'contract_management', 'contract_submit') ||
+    perm(req, 'contract_management', 'contract_edit') ||
+    perm(req, 'contract_management', 'contract_delete') ||
+    perm(req, 'contract_management', 'contract_review')
+  );
+}
+
 /** 确认发货：独立权限 order_ship；保留 order_status_warehouse 以兼容旧数据（原「仓库发货」勾选项） */
 function canMarkOrderShipped(req) {
   if (isSuper(req)) return true;
@@ -230,6 +251,11 @@ async function assertSalesContractVisible(req, pool, c) {
   const seeAll = canViewAllSalesOrders(req);
   if (seeAll) return { ok: true, contract: c };
   if (isOrderCreatedByCurrentUser(c, req)) return { ok: true, contract: c };
+  const ru = c.reviewer_user_id != null ? Number(c.reviewer_user_id) : NaN;
+  if (Number.isFinite(ru) && ru >= 1 && ru === Number(req.user.userId)) return { ok: true, contract: c };
+  if (perm(req, 'contract_management', 'contract_review') && String(c.status || '') === 'pending_review') {
+    return { ok: true, contract: c };
+  }
   const [chk] = await pool.query(
     'SELECT 1 FROM sales_orders WHERE customer_id = ? AND created_by = ? LIMIT 1',
     [c.customer_id, req.user.userId]
@@ -246,12 +272,16 @@ function canMutateSalesContractAsCreator(req, c) {
 
 function contractStatusAllowsEdit(c, req) {
   if (isSuper(req)) return true;
-  return c.status === 'draft' || c.status === 'rejected';
+  if (c.status === 'draft' || c.status === 'rejected') return true;
+  if (c.status === 'approved' && perm(req, 'contract_management', 'contract_edit_approved')) return true;
+  return false;
 }
 
 function contractStatusAllowsDelete(c, req) {
   if (isSuper(req)) return true;
-  return c.status === 'draft' || c.status === 'rejected';
+  if (c.status === 'draft' || c.status === 'rejected') return true;
+  if (c.status === 'approved' && perm(req, 'contract_management', 'contract_delete_approved')) return true;
+  return false;
 }
 
 /**
@@ -282,8 +312,14 @@ function financeOrderListScopeSql(req) {
  * 避免「很久以前录入、今天才提交」的订单有通知但列表为空。
  */
 function appendOrderListDateRange(sql, args, q, req) {
-  const end = q.date_to ? new Date(q.date_to) : new Date();
-  const start = q.date_from ? new Date(q.date_from) : new Date(end.getTime() - 30 * 86400000);
+  const hasDateFrom = Boolean(q.date_from);
+  const hasDateTo = Boolean(q.date_to);
+  const shouldApplyDefaultRange = q.pending_finance_only || isPureFinanceOrderScope(req);
+  if (!hasDateFrom && !hasDateTo && !shouldApplyDefaultRange) {
+    return sql;
+  }
+  const end = hasDateTo ? new Date(q.date_to) : new Date();
+  const start = hasDateFrom ? new Date(q.date_from) : new Date(end.getTime() - 30 * 86400000);
   const startStr = start.toISOString().slice(0, 10);
   const endStr = end.toISOString().slice(0, 10);
   if (q.pending_finance_only) {
@@ -374,84 +410,6 @@ async function departmentSubtreeIds(pool, rootId) {
   return [...new Set(out)];
 }
 
-/** 单条订单摘要：发货日期（表单单据）、上传日期（入库时间）、厂家、型号、数量等 */
-function formatOrderSummaryLine(row, definitions) {
-  const { display_data } = mergeRowDataJson(row, definitions);
-  const nameKey = definitions.find((d) => d.maps_to === 'customer_name')?.field_key;
-  const modelKey = definitions.find((d) => d.maps_to === 'product_model')?.field_key;
-  const whKey = definitions.find((d) => d.maps_to === 'warehouse_model')?.field_key;
-  const qtyKey = definitions.find((d) => d.maps_to === 'quantity')?.field_key;
-  const pick = (key, fallback) => {
-    if (key != null && display_data[key] !== undefined && display_data[key] !== null) {
-      const s = String(display_data[key]).trim();
-      if (s !== '') return s;
-    }
-    if (fallback != null && fallback !== '') {
-      const s = String(fallback).trim();
-      if (s !== '') return s;
-    }
-    return '—';
-  };
-  const orderNo = row.order_no ? String(row.order_no) : '—';
-  const vendor = pick(nameKey, row.customer_name);
-  const model = pick(modelKey, row.product_model);
-  const wh = pick(whKey, row.warehouse_model);
-  const qty =
-    qtyKey != null && display_data[qtyKey] !== undefined && display_data[qtyKey] !== null && String(display_data[qtyKey]).trim() !== ''
-      ? String(display_data[qtyKey]).trim()
-      : row.quantity != null && String(row.quantity) !== ''
-        ? String(row.quantity)
-        : '—';
-  const orderDateKey = definitions.find((d) => d.field_key === 'order_date')?.field_key;
-  const shipDate =
-    orderDateKey != null && display_data[orderDateKey] !== undefined && display_data[orderDateKey] !== null
-      ? String(display_data[orderDateKey]).trim() || '—'
-      : '—';
-  const uploadAt = formatOrderUploadTime(row.created_at);
-  return `订单号：${orderNo}\n厂家：${vendor}\n发货日期：${shipDate}\n上传日期：${uploadAt}\n标签型号：${model}\n仓库型号：${wh}\n数量：${qty}`;
-}
-
-function formatOrderUploadTime(createdAt) {
-  if (createdAt == null) return '—';
-  const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
-  if (Number.isNaN(d.getTime())) return String(createdAt);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** 多条订单站内信正文（intro + 逐条基础信息） */
-function buildOrderMessageBody(definitions, rows, { intro = '', maxOrders = 15 } = {}) {
-  const list = rows.slice(0, maxOrders);
-  const blocks = list.map((r) => formatOrderSummaryLine(r, definitions));
-  let body = '';
-  if (intro) body += `${intro.trim()}\n\n`;
-  body += blocks.join('\n\n');
-  if (rows.length > maxOrders) {
-    body += `\n\n… 另有 ${rows.length - maxOrders} 笔订单未逐条列出，请到订单管理查看。`;
-  }
-  return body;
-}
-
-async function buildOrderNotifyBody(pool, orderRows, options) {
-  const definitions = await loadOrderFieldDefinitions(pool, { activeOnly: true });
-  const enriched = await attachCustomerNamesToOrders(pool, orderRows);
-  return buildOrderMessageBody(definitions, enriched, options);
-}
-
-/** 合同关联订单的站内信正文 */
-async function buildContractOrdersNotifyBody(pool, contractId, { intro = '', customerName = '' } = {}) {
-  const [ords] = await pool.query(
-    `SELECT o.* FROM sales_orders o
-     INNER JOIN sales_contract_orders sco ON sco.order_id = o.id
-     WHERE sco.contract_id = ?
-     ORDER BY o.id ASC`,
-    [contractId]
-  );
-  let head = intro.trim();
-  if (customerName) head += `${head ? '\n' : ''}客户/厂家：${customerName}`;
-  return buildOrderNotifyBody(pool, ords || [], { intro: head, maxOrders: 15 });
-}
-
 async function generateUniqueOrderNo(conn) {
   for (let attempt = 0; attempt < 16; attempt++) {
     const orderNo = `O${nanoid(16)}`;
@@ -483,6 +441,17 @@ async function assertMapsToAvailable(pool, mapsTo, excludeId = null) {
     e.code = 'MAPS_TO_CONFLICT';
     throw e;
   }
+}
+
+/** Excel 导入：全字段内容一致视为重复行（用于强提醒） */
+function orderImportRowFingerprint(definitions, obj) {
+  const parts = definitions.map((d) => {
+    const v = obj[d.field_key];
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number' && Number.isFinite(v)) return String(roundOrderDecimal4(v));
+    return String(v).trim().replace(/\s+/g, ' ');
+  });
+  return parts.join('\x1f');
 }
 
 async function insertOrderWithData(conn, { userId, data, definitions, statusRemark = '新建订单' }) {
@@ -533,16 +502,24 @@ async function insertOrderWithData(conn, { userId, data, definitions, statusRema
   return { id: ins.insertId, order_no: orderNo };
 }
 
-async function generateCustomerCode(conn, baseName) {
-  const head = 'C';
-  const safe = String(baseName || '').replace(/\s+/g, '').slice(0, 6) || 'AUTO';
-  for (let i = 0; i < 8; i++) {
-    const code = `${head}${safe}-${nanoid(6).toUpperCase()}`;
+function randomWyCustomerCode() {
+  return `WY${nanoid(8).replace(/[^A-Za-z0-9]/g, '0').toUpperCase()}`;
+}
+
+/** 全局唯一：WY + 8 位随机大写字母数字 */
+async function allocateUniqueCustomerCode(conn) {
+  for (let i = 0; i < 100; i++) {
+    const code = randomWyCustomerCode();
     const [hit] = await conn.query('SELECT id FROM sales_customers WHERE customer_code = ? LIMIT 1', [code]);
     if (!hit.length) return code;
   }
-  const fallback = `C${nanoid(10).toUpperCase()}`;
-  return fallback;
+  const e = new Error('生成客户编码失败');
+  e.code = 'GENERATE_CODE_FAILED';
+  throw e;
+}
+
+async function generateCustomerCode(conn) {
+  return allocateUniqueCustomerCode(conn);
 }
 
 async function getOrCreateCustomer(conn, { customer_code, customer_name, userId }) {
@@ -586,7 +563,7 @@ async function getOrCreateCustomer(conn, { customer_code, customer_name, userId 
     }
     return byName[0].id;
   }
-  const autoCode = await generateCustomerCode(conn, name);
+  const autoCode = await generateCustomerCode(conn);
   const [ins] = await conn.query(
     `INSERT INTO sales_customers (customer_code, customer_name, is_active, created_by, updated_by)
      VALUES (?, ?, 1, ?, ?)`,
@@ -658,6 +635,7 @@ async function enrichOrdersQc(pool, rows, qcMap) {
     return {
       ...o,
       qc_qrcode_id: qrcodeId,
+      qcQrcodeId: qrcodeId,
       qc_token: token,
       qc_public_url: qcPublicUrl,
       qc_report_label: qcReportLabel,
@@ -683,17 +661,16 @@ function orderEditable(row) {
 
 /** 行级删除授权：销售本人可硬删除自己单据的任意状态；财务/超管不可删已完成/已取消；其他非财务账号仅在「待审且未提交」时可删本人草稿 */
 function assertOrderDeleteAllowed(row, req) {
+  if (isSuper(req)) return;
   const own = isOrderCreatedByCurrentUser(row, req);
   const finance = perm(req, 'order_management', 'order_status_finance');
-  if (!isSuper(req) && !finance && own) {
-    return;
-  }
   if (['completed', 'cancelled'].includes(row.status)) {
     const e = new Error('INVALID_STATUS');
     e.code = 'INVALID_STATUS';
     throw e;
   }
-  if (!isSuper(req) && !finance && !(own && row.status === 'pending_review' && !row.submitted_for_review_at)) {
+  if (finance) return;
+  if (!(own && row.status === 'pending_review' && !row.submitted_for_review_at)) {
     const e = new Error('FORBIDDEN');
     e.code = 'FORBIDDEN';
     throw e;
@@ -718,9 +695,37 @@ router.get('/order-fields', async (req, res, next) => {
   }
 });
 
-const patchOrderQcSchema = z.object({
-  qrcode_id: z.union([z.number().int().positive(), z.null()])
-});
+/** 请求体可同时传 qrcodeId（推荐）或 qrcode_id；二者都有时必须一致 */
+const patchOrderQcSchema = z
+  .object({
+    qrcodeId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
+    qrcode_id: z.union([z.coerce.number().int().positive(), z.null()]).optional()
+  })
+  .superRefine((val, ctx) => {
+    const hi = val.qrcodeId !== undefined;
+    const hs = val.qrcode_id !== undefined;
+    if (!hi && !hs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Must provide qrcodeId or qrcode_id',
+        path: ['qrcodeId']
+      });
+      return;
+    }
+    if (
+      hi &&
+      hs &&
+      val.qrcodeId !== val.qrcode_id &&
+      Number(val.qrcodeId) !== Number(val.qrcode_id)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'qrcodeId and qrcode_id conflict',
+        path: ['qrcodeId']
+      });
+    }
+  })
+  .transform((val) => (val.qrcodeId !== undefined ? val.qrcodeId : val.qrcode_id));
 
 /** 订单绑定二维码：可选列表（仅需订单查询权限，无需 qrcodes.list） */
 router.get('/qrcodes/bind-candidates', async (req, res, next) => {
@@ -780,7 +785,13 @@ router.get('/qrcodes/bind-candidates', async (req, res, next) => {
     }
     const items = idRows.map((r) => {
       const it = byId.get(r.id) || { id: r.id, token: r.token, reportTags: [] };
-      return { id: it.id, token: it.token, createdAt: r.createdAt, reportTags: it.reportTags };
+      return {
+        id: it.id,
+        qrcodeId: it.id,
+        token: it.token,
+        createdAt: r.createdAt,
+        reportTags: it.reportTags
+      };
     });
     for (const item of items) {
       const scanUrl = base
@@ -799,7 +810,7 @@ router.patch('/orders/:id/qc-qrcode', async (req, res, next) => {
     if (!perm(req, 'order_management', 'order_edit')) return res.status(403).json({ error: 'FORBIDDEN' });
     const id = Number(req.params.id);
     if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'BAD_REQUEST' });
-    const body = patchOrderQcSchema.parse(req.body || {});
+    const qid = patchOrderQcSchema.parse(req.body || {});
     const pool = getPool();
     const [rows] = await pool.query('SELECT * FROM sales_orders WHERE id = ?', [id]);
     const row = rows[0];
@@ -807,16 +818,14 @@ router.patch('/orders/:id/qc-qrcode', async (req, res, next) => {
     if (!canViewAllSalesOrders(req) && !isOrderCreatedByCurrentUser(row, req)) {
       return res.status(403).json({ error: 'FORBIDDEN' });
     }
-    const qid = body.qrcode_id;
     if (qid != null) {
       const [qr] = await pool.query('SELECT id FROM qrcodes WHERE id = ? LIMIT 1', [qid]);
       if (!qr.length) return res.status(400).json({ error: 'QRCODE_NOT_FOUND' });
     }
-    await pool.query('UPDATE sales_orders SET qc_qrcode_id = ?, updated_by = ? WHERE id = ?', [
-      qid,
-      req.user.userId,
-      id
-    ]);
+    await pool.query(
+      'UPDATE sales_orders SET qc_qrcode_id = ?, updated_by = ?, row_version = row_version + 1 WHERE id = ?',
+      [qid, req.user.userId, id]
+    );
     await logOperationFromReq(req, {
       module: '销售订单',
       action: qid == null ? '解除质检二维码绑定' : '绑定质检二维码',
@@ -1080,9 +1089,17 @@ router.get('/customers', async (req, res, next) => {
     let where = onlyActive ? 'WHERE is_active = 1' : 'WHERE 1=1';
     const args = [];
     if (q) {
-      where += ' AND (customer_code LIKE ? OR customer_name LIKE ? OR IFNULL(contact_name, "") LIKE ?)';
-      const p = `%${q}%`;
-      args.push(p, p, p);
+      const useFt = q.length >= 2 && isSalesCustomerNgramFulltextReady();
+      if (useFt) {
+        where +=
+          ' AND (MATCH(customer_name, customer_code, contact_name) AGAINST (? IN NATURAL LANGUAGE MODE) OR customer_code LIKE ? OR customer_name LIKE ? OR IFNULL(contact_name, "") LIKE ?)';
+        const p = `%${q}%`;
+        args.push(q, p, p, p);
+      } else {
+        where += ' AND (customer_code LIKE ? OR customer_name LIKE ? OR IFNULL(contact_name, "") LIKE ?)';
+        const p = `%${q}%`;
+        args.push(p, p, p);
+      }
     }
     const countSql = `SELECT COUNT(*) as total FROM sales_customers ${where}`;
     const [countRows] = await pool.query(countSql, args);
@@ -1092,7 +1109,8 @@ router.get('/customers', async (req, res, next) => {
       id, customer_code, customer_name, contact_name, phone, address, is_active,
       created_at, updated_at, updated_by,
       (SELECT COUNT(*) FROM sales_orders WHERE customer_id = sales_customers.id) as order_count,
-      (SELECT COUNT(*) FROM sales_contracts WHERE customer_id = sales_customers.id) as contract_count
+      (SELECT COUNT(*) FROM sales_contracts WHERE customer_id = sales_customers.id) as contract_count,
+      (SELECT COUNT(*) FROM sales_contracts WHERE customer_id = sales_customers.id AND status != 'rejected') as contract_count_approved
       FROM sales_customers ${where}
       ORDER BY customer_name ASC, id DESC
       LIMIT ? OFFSET ?`;
@@ -1116,7 +1134,6 @@ router.post('/customers', async (req, res, next) => {
   try {
     if (!perm(req, 'customer_management', 'create')) return res.status(403).json({ error: 'FORBIDDEN' });
     const schema = z.object({
-      customer_code: z.string().min(1).max(64),
       customer_name: z.string().min(1).max(256),
       contact_name: z.string().max(128).optional().nullable(),
       phone: z.string().max(64).optional().nullable(),
@@ -1124,13 +1141,12 @@ router.post('/customers', async (req, res, next) => {
     });
     const body = schema.parse(req.body || {});
     const pool = getPool();
-    const [dup] = await pool.query('SELECT id FROM sales_customers WHERE customer_code = ?', [body.customer_code]);
-    if (dup.length) return res.status(400).json({ error: 'DUPLICATE_CUSTOMER_CODE' });
+    const customerCode = await allocateUniqueCustomerCode(pool);
     const [r] = await pool.query(
       `INSERT INTO sales_customers (customer_code, customer_name, contact_name, phone, address, is_active, created_by, updated_by)
        VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
       [
-        body.customer_code,
+        customerCode,
         body.customer_name,
         body.contact_name || null,
         body.phone || null,
@@ -1142,9 +1158,9 @@ router.post('/customers', async (req, res, next) => {
     await logOperationFromReq(req, {
       module: '客户管理',
       action: '新增客户',
-      detail: { id: r.insertId, customer_code: body.customer_code }
+      detail: { id: r.insertId, customer_code: customerCode }
     });
-    res.json({ id: r.insertId, success: true });
+    res.json({ id: r.insertId, success: true, customer_code: customerCode });
   } catch (e) {
     next(e);
   }
@@ -1157,7 +1173,6 @@ router.patch('/customers/:id', async (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'BAD_ID' });
     const schema = z.object({
-      customer_code: z.string().min(1).max(64).optional(),
       customer_name: z.string().min(1).max(256).optional(),
       contact_name: z.string().max(128).optional().nullable(),
       phone: z.string().max(64).optional().nullable(),
@@ -1166,20 +1181,8 @@ router.patch('/customers/:id', async (req, res, next) => {
     const body = schema.parse(req.body || {});
     if (Object.keys(body).length === 0) return res.status(400).json({ error: 'NO_CHANGES' });
     const pool = getPool();
-    // check duplicate code if changing
-    if (body.customer_code !== undefined) {
-      const [dup] = await pool.query(
-        'SELECT id FROM sales_customers WHERE customer_code = ? AND id != ? LIMIT 1',
-        [body.customer_code, id]
-      );
-      if (dup.length) return res.status(400).json({ error: 'DUPLICATE_CUSTOMER_CODE' });
-    }
     const setParts = [];
     const values = [];
-    if (body.customer_code !== undefined) {
-      setParts.push('customer_code = ?');
-      values.push(body.customer_code);
-    }
     if (body.customer_name !== undefined) {
       setParts.push('customer_name = ?');
       values.push(body.customer_name);
@@ -1267,12 +1270,21 @@ router.get('/customers/:id/stats', async (req, res, next) => {
       'SELECT COUNT(*) as contract_count FROM sales_contracts WHERE customer_id = ?',
       [id]
     );
+    const [approvedContractRows] = await pool.query(
+      "SELECT COUNT(*) as contract_count FROM sales_contracts WHERE customer_id = ? AND status != 'rejected'",
+      [id]
+    );
     res.json({
       customer_id: id,
+      customer_code: custRows[0].customer_code,
       customer_name: custRows[0].customer_name,
+      contact_name: custRows[0].contact_name,
+      phone: custRows[0].phone,
+      address: custRows[0].address,
       is_active: !!custRows[0].is_active,
       order_count: orderRows[0].order_count || 0,
-      contract_count: contractRows[0].contract_count || 0
+      contract_count: contractRows[0].contract_count || 0,
+      contract_count_approved: approvedContractRows[0].contract_count || 0
     });
   } catch (e) {
     next(e);
@@ -1540,30 +1552,47 @@ router.post('/internal-models/import', upload.single('file'), async (req, res, n
     for (let ri = startRow; ri < rows.length; ri++) {
       const line = rows[ri] || [];
       let rawName = String(line[nameIdx] ?? '').trim();
-      let code = String(line[codeIdx] ?? '')
+      const rawCodeCell = String(line[codeIdx] ?? '')
         .trim()
         .toUpperCase();
-      if (!code && !rawName) {
+      if (!rawCodeCell && !rawName) {
         skipped += 1;
         continue;
       }
-      if (!code) {
+      if (!rawCodeCell) {
         skipped += 1;
         errors.push({ row: ri + 1, reason: '缺少内部编码（英文代码列）' });
         continue;
       }
-      if (!codeRe.test(code)) {
+      // 支持一个单元格内多个编码：BP301P/NL301P、A／B、A,B、A;B 等
+      // 按“单行显示”需求：会规范化后合并为一个 internal_code（如 BP301P/NL301P），不拆多行
+      const codeCandidates = rawCodeCell
+        .split(/[\/／,，;；\s]+/)
+        .map((s) => String(s || '').trim().toUpperCase())
+        .filter(Boolean);
+      const uniqueCodes = [...new Set(codeCandidates)];
+      if (!uniqueCodes.length) {
         skipped += 1;
-        errors.push({ row: ri + 1, reason: `编码格式不合法: ${code}` });
+        errors.push({ row: ri + 1, reason: '缺少内部编码（英文代码列）' });
         continue;
       }
-      const name = (rawName || code).slice(0, 128);
-      const remarks = '表格导入';
+      const invalidCodes = uniqueCodes.filter((c) => !codeRe.test(c));
+      const validCodes = uniqueCodes.filter((c) => codeRe.test(c));
+      if (invalidCodes.length) {
+        errors.push({ row: ri + 1, reason: `编码格式不合法: ${invalidCodes.join(',')}` });
+      }
+      if (!validCodes.length) {
+        skipped += 1;
+        continue;
+      }
+      const mergedCode = validCodes.join('/');
+      const name = (rawName || mergedCode).slice(0, 128);
+      const remarks = uniqueCodes.length > 1 ? '表格导入（一行多编码，单行展示）' : '表格导入';
       const [r] = await pool.query(
         `INSERT INTO sales_internal_models (internal_code, name, is_active, remarks, created_by, updated_by)
          VALUES (?, ?, 1, ?, ?, ?)
          ON DUPLICATE KEY UPDATE name = VALUES(name), remarks = VALUES(remarks), updated_by = VALUES(updated_by)`,
-        [code, name, remarks, uid, uid]
+        [mergedCode, name, remarks, uid, uid]
       );
       if (Number(r.affectedRows) === 1) inserted += 1;
       else if (Number(r.affectedRows) === 2) updated += 1;
@@ -1616,6 +1645,75 @@ router.post('/internal-models/batch-delete', async (req, res, next) => {
   }
 });
 
+router.post('/internal-models/batch-enable', async (req, res, next) => {
+  try {
+    if (!perm(req, 'order_management', 'order_field_config')) return res.status(403).json({ error: 'FORBIDDEN' });
+    const schema = z.object({
+      ids: z.array(z.coerce.number().int().positive()).min(1).max(500)
+    });
+    const body = schema.parse(req.body || {});
+    const pool = getPool();
+    const ph = body.ids.map(() => '?').join(',');
+    const [existRows] = await pool.query(
+      `SELECT id, is_active FROM sales_internal_models WHERE id IN (${ph})`,
+      body.ids
+    );
+    const matched = Array.isArray(existRows) ? existRows.length : 0;
+    const [r] = await pool.query(
+      `UPDATE sales_internal_models
+       SET is_active = 1, updated_by = ?
+       WHERE id IN (${ph}) AND is_active <> 1`,
+      [req.user.userId, ...body.ids]
+    );
+    const changed = Number(r.affectedRows || 0);
+    await logOperationFromReq(req, {
+      module: '内部型号管理',
+      action: '批量启用内部型号',
+      detail: { ids: body.ids, matched, changed }
+    });
+    res.json({ ok: true, matched, changed });
+  } catch (e) {
+    if (e.errors?.length) return res.status(400).json({ error: 'VALIDATION_ERROR' });
+    next(e);
+  }
+});
+
+router.post('/internal-models/delete-all', async (req, res, next) => {
+  try {
+    if (!perm(req, 'order_management', 'order_field_config')) return res.status(403).json({ error: 'FORBIDDEN' });
+    const schema = z.object({
+      q: z.string().trim().max(128).optional().default(''),
+      status: z.enum(['', 'active', 'inactive']).optional().default('')
+    });
+    const body = schema.parse(req.body || {});
+    const q = String(body.q || '').trim();
+    const status = String(body.status || '').trim();
+    const pool = getPool();
+    let where = 'WHERE 1=1';
+    const args = [];
+    if (status === 'active') {
+      where += ' AND is_active = 1';
+    } else if (status === 'inactive') {
+      where += ' AND is_active = 0';
+    }
+    if (q) {
+      where += ' AND (internal_code LIKE ? OR name LIKE ?)';
+      const p = `%${q}%`;
+      args.push(p, p);
+    }
+    const [r] = await pool.query(`DELETE FROM sales_internal_models ${where}`, args);
+    await logOperationFromReq(req, {
+      module: '内部型号管理',
+      action: '删除全部内部型号（按筛选）',
+      detail: { q, status, deleted: Number(r.affectedRows || 0) }
+    });
+    res.json({ ok: true, deleted: Number(r.affectedRows || 0) });
+  } catch (e) {
+    if (e.errors?.length) return res.status(400).json({ error: 'VALIDATION_ERROR' });
+    next(e);
+  }
+});
+
 router.get('/messages', async (req, res, next) => {
   try {
     const uid = authenticatedNumericUserId(req);
@@ -1629,6 +1727,11 @@ router.get('/messages', async (req, res, next) => {
     const [rows] = await pool.query(sql, args);
     res.json({ items: (rows || []).map(jsonSafeSalesInternalMessageRow) });
   } catch (e) {
+    if (e.code === 'ER_NO_SUCH_TABLE') {
+      // eslint-disable-next-line no-console
+      console.error('[server] sales_internal_messages 缺失，请重启服务以执行建表自检');
+      return res.json({ items: [] });
+    }
     next(e);
   }
 });
@@ -1662,6 +1765,45 @@ router.post('/messages/:id/read', async (req, res, next) => {
   }
 });
 
+/** 删除单条站内信（仅本人收件箱） */
+router.delete('/messages/:id', async (req, res, next) => {
+  try {
+    const uid = authenticatedNumericUserId(req);
+    if (uid == null) return res.status(401).json({ error: 'UNAUTHORIZED' });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'INVALID_ID' });
+    const pool = getPool();
+    const [r] = await pool.query('DELETE FROM sales_internal_messages WHERE id = ? AND to_user_id = ?', [id, uid]);
+    res.json({ ok: true, deleted: Number(r.affectedRows || 0) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+const batchDeleteSalesMessagesSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(200)
+});
+
+/** 批量删除站内信（仅本人收件箱） */
+router.post('/messages/batch-delete', async (req, res, next) => {
+  try {
+    const uid = authenticatedNumericUserId(req);
+    if (uid == null) return res.status(401).json({ error: 'UNAUTHORIZED' });
+    const parsed = batchDeleteSalesMessagesSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'VALIDATION_ERROR' });
+    const ids = [...new Set(parsed.data.ids)];
+    const pool = getPool();
+    const ph = ids.map(() => '?').join(',');
+    const [r] = await pool.query(
+      `DELETE FROM sales_internal_messages WHERE to_user_id = ? AND id IN (${ph})`,
+      [uid, ...ids]
+    );
+    res.json({ ok: true, deleted: Number(r.affectedRows || 0) });
+  } catch (e) {
+    next(e);
+  }
+});
+
 const listQuerySchema = z.object({
   customer_name: z.string().optional(),
   customer_code: z.string().optional(),
@@ -1677,7 +1819,7 @@ const listQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
   page_size: z.preprocess(
     (v) => (v === undefined || v === null || v === '' ? 20 : v),
-    z.coerce.number().refine((n) => [10, 20, 50, 100].includes(n), { message: 'page_size' })
+    z.coerce.number().refine((n) => [10, 20, 50, 100, 200, 500].includes(n), { message: 'page_size' })
   ),
   sort: z.enum(['created_at_desc', 'created_at_asc', 'customer_name_desc', 'customer_name_asc']).default('created_at_desc'),
   pending_finance_only: z.preprocess((v) => v === true || v === '1' || v === 'true', z.boolean().optional())
@@ -1685,7 +1827,19 @@ const listQuerySchema = z.object({
 
 router.get('/orders', async (req, res, next) => {
   try {
-    if (!perm(req, 'order_management', 'order_query')) return res.status(403).json({ error: 'FORBIDDEN' });
+    const canOrderQuery = perm(req, 'order_management', 'order_query');
+    // eslint-disable-next-line no-console
+    console.log(
+      '[sales-debug]',
+      JSON.stringify({
+        tag: 'orders',
+        username: req.user?.username || null,
+        accountType: req.user?.accountType || null,
+        canOrderQuery,
+        order_management: req.user?.permissions?.order_management || null
+      })
+    );
+    if (!canOrderQuery) return res.status(403).json({ error: 'FORBIDDEN' });
     const q = listQuerySchema.parse(req.query);
     const pool = getPool();
     const uid = req.user.userId;
@@ -1822,14 +1976,19 @@ router.get('/orders', async (req, res, next) => {
   }
 });
 
-const orderDataBodySchema = z.object({
+const orderCreateBodySchema = z.object({
   data: z.record(z.string(), z.any())
+});
+
+const orderPatchBodySchema = z.object({
+  data: z.record(z.string(), z.any()),
+  row_version: z.coerce.number().int().min(1)
 });
 
 router.post('/orders', async (req, res, next) => {
   try {
     if (!perm(req, 'order_management', 'order_input')) return res.status(403).json({ error: 'FORBIDDEN' });
-    const body = orderDataBodySchema.parse(req.body || {});
+    const body = orderCreateBodySchema.parse(req.body || {});
     const pool = getPool();
     const definitions = await loadOrderFieldDefinitions(pool, { activeOnly: true });
     const conn = await pool.getConnection();
@@ -1869,7 +2028,7 @@ router.patch('/orders/:id', async (req, res, next) => {
   try {
     if (!perm(req, 'order_management', 'order_edit')) return res.status(403).json({ error: 'FORBIDDEN' });
     const id = Number(req.params.id);
-    const body = orderDataBodySchema.parse(req.body || {});
+    const body = orderPatchBodySchema.parse(req.body || {});
     const pool = getPool();
     const [rows] = await pool.query(
       `SELECT o.*, c.customer_code, c.customer_name
@@ -1906,8 +2065,10 @@ router.patch('/orders/:id', async (req, res, next) => {
         userId: req.user.userId
       });
       const leg = dataJsonToLegacyColumns(activeDefs, data);
-      await conn.query(
-        `UPDATE sales_orders SET customer_id = ?, product_code = ?, product_name = ?, product_model = ?, warehouse_model = ?, quantity = ?, unit_price = ?, amount = ?, remark = ?, data_json = CAST(? AS JSON), updated_by = ? WHERE id = ?`,
+      const expectedVer = Number(body.row_version);
+      const [upd] = await conn.query(
+        `UPDATE sales_orders SET customer_id = ?, product_code = ?, product_name = ?, product_model = ?, warehouse_model = ?, quantity = ?, unit_price = ?, amount = ?, remark = ?, data_json = CAST(? AS JSON), updated_by = ?, row_version = row_version + 1
+         WHERE id = ? AND row_version = ?`,
         [
           customerId,
           leg.product_code,
@@ -1920,9 +2081,17 @@ router.patch('/orders/:id', async (req, res, next) => {
           leg.remark,
           JSON.stringify(data),
           req.user.userId,
-          id
+          id,
+          expectedVer
         ]
       );
+      if (Number(upd.affectedRows || 0) !== 1) {
+        await conn.rollback();
+        return res.status(409).json({
+          error: 'CONCURRENT_UPDATE',
+          message: '订单已被他人修改或您打开的页面已过期，请关闭后重新打开再编辑'
+        });
+      }
       await conn.commit();
     } catch (e) {
       await conn.rollback();
@@ -1958,14 +2127,19 @@ router.post('/orders/:id/submit', async (req, res, next) => {
     if (!['pending_review', 'rejected'].includes(row.status)) return res.status(400).json({ error: 'INVALID_STATUS' });
     if (row.submitted_for_review_at) return res.status(400).json({ error: 'ALREADY_SUBMITTED' });
 
-    await pool.query(
-      `UPDATE sales_orders SET submitted_for_review_at = NOW(3), updated_by = ? WHERE id = ?`,
-      [req.user.userId, id]
+    const isResubmit = row.status === 'rejected';
+    const newStatus = isResubmit ? 'pending_review' : row.status;
+    const [submitResult] = await pool.query(
+      `UPDATE sales_orders
+       SET ${isResubmit ? 'status = ?, finance_reviewed_at = NULL, finance_reviewed_by = NULL, finance_comment = NULL, ' : ''}submitted_for_review_at = NOW(3), updated_by = ?, row_version = row_version + 1
+       WHERE id = ? AND status = ? AND submitted_for_review_at IS NULL`,
+      isResubmit ? [newStatus, req.user.userId, id, row.status] : [req.user.userId, id, row.status]
     );
+    if (!submitResult.affectedRows) return res.status(409).json({ error: 'ORDER_STATE_CHANGED' });
     await pool.query(
       `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-       VALUES (?, 'pending_review', 'pending_review', ?, '提交财务审核')`,
-      [id, req.user.userId]
+       VALUES (?, ?, 'pending_review', ?, '提交财务审核')`,
+      [id, row.status, req.user.userId]
     );
     const submitBody = await buildOrderNotifyBody(pool, [row], {
       intro: '有新的订单已提交财务审核，请及时处理。'
@@ -2007,10 +2181,13 @@ router.post('/orders/:id/withdraw', async (req, res, next) => {
     if (row.status !== 'pending_review' || !row.submitted_for_review_at) {
       return res.status(400).json({ error: 'NOT_SUBMITTED' });
     }
-    await pool.query(
-      `UPDATE sales_orders SET submitted_for_review_at = NULL, updated_by = ? WHERE id = ?`,
+    const [withdrawResult] = await pool.query(
+      `UPDATE sales_orders
+       SET submitted_for_review_at = NULL, updated_by = ?, row_version = row_version + 1
+       WHERE id = ? AND status = 'pending_review' AND submitted_for_review_at IS NOT NULL`,
       [req.user.userId, id]
     );
+    if (!withdrawResult.affectedRows) return res.status(409).json({ error: 'ORDER_STATE_CHANGED' });
     await pool.query(
       `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
        VALUES (?, 'pending_review', 'pending_review', ?, '撤回审核申请')`,
@@ -2086,16 +2263,38 @@ router.post('/orders/batch-submit', async (req, res, next) => {
         okIds.push(id);
       }
       if (okIds.length) {
-        const ph2 = okIds.map(() => '?').join(',');
-        await conn.query(
-          `UPDATE sales_orders SET submitted_for_review_at = NOW(3), updated_by = ? WHERE id IN (${ph2})`,
-          [req.user.userId, ...okIds]
-        );
+        const rejectedIds = okIds.filter((id) => byId.get(id)?.status === 'rejected');
+        const pendingIds = okIds.filter((id) => byId.get(id)?.status === 'pending_review');
+        if (pendingIds.length) {
+          const pendingPh = pendingIds.map(() => '?').join(',');
+          await conn.query(
+            `UPDATE sales_orders
+             SET submitted_for_review_at = NOW(3), updated_by = ?, row_version = row_version + 1
+             WHERE id IN (${pendingPh})`,
+            [req.user.userId, ...pendingIds]
+          );
+        }
+        if (rejectedIds.length) {
+          const rejectedPh = rejectedIds.map(() => '?').join(',');
+          await conn.query(
+            `UPDATE sales_orders
+             SET status = 'pending_review',
+                 submitted_for_review_at = NOW(3),
+                 finance_reviewed_at = NULL,
+                 finance_reviewed_by = NULL,
+                 finance_comment = NULL,
+                 updated_by = ?,
+                 row_version = row_version + 1
+             WHERE id IN (${rejectedPh})`,
+            [req.user.userId, ...rejectedIds]
+          );
+        }
         for (const id of okIds) {
+          const row = byId.get(id);
           await conn.query(
             `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-             VALUES (?, 'pending_review', 'pending_review', ?, '提交财务审核')`,
-            [id, req.user.userId]
+             VALUES (?, ?, 'pending_review', ?, '提交财务审核')`,
+            [id, row?.status || 'pending_review', req.user.userId]
           );
         }
       }
@@ -2130,10 +2329,22 @@ router.post('/orders/batch-submit', async (req, res, next) => {
         fromUserId: req.user.userId
       });
     }
+    const okItems = okRows.map((r) => ({
+      id: r.id,
+      order_no: r.order_no || null,
+      from_status: r.status,
+      to_status: 'pending_review'
+    }));
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '批量提交订单财务审核',
-      detail: { ok: okRows.length, failed: failed.length, ids: okRows.map((r) => r.id) }
+      detail: {
+        ok: okRows.length,
+        failed: failed.length,
+        ids: okRows.map((r) => r.id),
+        ok_items: okItems,
+        failed_items: failed.slice(0, 200)
+      }
     });
     res.json({ ok: okRows.length, failed });
   } catch (e) {
@@ -2184,7 +2395,7 @@ router.post('/orders/batch-finance-review', async (req, res, next) => {
         const ph2 = okIds.map(() => '?').join(',');
         if (body.result === 'approved') {
           await conn.query(
-            `UPDATE sales_orders SET status = 'approved', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, updated_by = ?
+            `UPDATE sales_orders SET status = 'approved', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, updated_by = ?, row_version = row_version + 1
              WHERE id IN (${ph2})`,
             [req.user.userId, body.comment || null, req.user.userId, ...okIds]
           );
@@ -2197,7 +2408,7 @@ router.post('/orders/batch-finance-review', async (req, res, next) => {
           }
         } else {
           await conn.query(
-            `UPDATE sales_orders SET status = 'rejected', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, submitted_for_review_at = NULL, updated_by = ?
+            `UPDATE sales_orders SET status = 'rejected', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, submitted_for_review_at = NULL, updated_by = ?, row_version = row_version + 1
              WHERE id IN (${ph2})`,
             [req.user.userId, body.comment, req.user.userId, ...okIds]
           );
@@ -2272,10 +2483,22 @@ router.post('/orders/batch-finance-review', async (req, res, next) => {
       }
     }
 
+    const okItems = okRows.map((r) => ({
+      id: r.id,
+      order_no: r.order_no || null,
+      from_status: 'pending_review',
+      to_status: body.result
+    }));
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '批量财务审核订单',
-      detail: { result: body.result, ok: okRows.length, failed: failed.length }
+      detail: {
+        result: body.result,
+        ok: okRows.length,
+        failed: failed.length,
+        ok_items: okItems,
+        failed_items: failed.slice(0, 200)
+      }
     });
     res.json({ ok: okRows.length, failed });
   } catch (e) {
@@ -2305,11 +2528,12 @@ router.post('/orders/:id/finance-review', async (req, res, next) => {
     }
 
     if (body.result === 'approved') {
-      await pool.query(
-        `UPDATE sales_orders SET status = 'approved', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, updated_by = ?
-         WHERE id = ?`,
+      const [approveResult] = await pool.query(
+        `UPDATE sales_orders SET status = 'approved', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, updated_by = ?, row_version = row_version + 1
+         WHERE id = ? AND status = 'pending_review' AND submitted_for_review_at IS NOT NULL`,
         [req.user.userId, body.comment || null, req.user.userId, id]
       );
+      if (!approveResult.affectedRows) return res.status(409).json({ error: 'ORDER_STATE_CHANGED' });
       await pool.query(
         `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
          VALUES (?, 'pending_review', 'approved', ?, ?)`,
@@ -2331,11 +2555,12 @@ router.post('/orders/:id/finance-review', async (req, res, next) => {
         fromUserId: req.user.userId
       });
     } else {
-      await pool.query(
-        `UPDATE sales_orders SET status = 'rejected', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, submitted_for_review_at = NULL, updated_by = ?
-         WHERE id = ?`,
+      const [rejectResult] = await pool.query(
+        `UPDATE sales_orders SET status = 'rejected', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, submitted_for_review_at = NULL, updated_by = ?, row_version = row_version + 1
+         WHERE id = ? AND status = 'pending_review' AND submitted_for_review_at IS NOT NULL`,
         [req.user.userId, body.comment, req.user.userId, id]
       );
+      if (!rejectResult.affectedRows) return res.status(409).json({ error: 'ORDER_STATE_CHANGED' });
       await pool.query(
         `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
          VALUES (?, 'pending_review', 'rejected', ?, ?)`,
@@ -2415,7 +2640,7 @@ router.post('/orders/batch-ship', async (req, res, next) => {
       if (okIds.length) {
         const ph2 = okIds.map(() => '?').join(',');
         await conn.query(
-          `UPDATE sales_orders SET status = 'shipped', shipped_at = NOW(3), shipped_by = ?, shipping_instruction = ?, updated_by = ? WHERE id IN (${ph2})`,
+          `UPDATE sales_orders SET status = 'shipped', shipped_at = NOW(3), shipped_by = ?, shipping_instruction = ?, updated_by = ?, row_version = row_version + 1 WHERE id IN (${ph2})`,
           [req.user.userId, shipVal, req.user.userId, ...okIds]
         );
         for (const id of okIds) {
@@ -2459,10 +2684,22 @@ router.post('/orders/batch-ship', async (req, res, next) => {
       }
     }
 
+    const okItems = okRows.map((r) => ({
+      id: r.id,
+      order_no: r.order_no || null,
+      from_status: r.status,
+      to_status: 'shipped'
+    }));
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '批量订单发货',
-      detail: { ok: okRows.length, failed: failed.length, ids: okRows.map((r) => r.id) }
+      detail: {
+        ok: okRows.length,
+        failed: failed.length,
+        ids: okRows.map((r) => r.id),
+        ok_items: okItems,
+        failed_items: failed.slice(0, 200)
+      }
     });
     res.json({ ok: okRows.length, failed });
   } catch (e) {
@@ -2480,10 +2717,11 @@ router.post('/orders/:id/ship', async (req, res, next) => {
     const row = rows[0];
     if (!row) return res.status(404).json({ error: 'NOT_FOUND' });
     if (row.status !== 'approved') return res.status(400).json({ error: 'INVALID_STATUS' });
-    await pool.query(
-      `UPDATE sales_orders SET status = 'shipped', shipped_at = NOW(3), shipped_by = ?, shipping_instruction = ?, updated_by = ? WHERE id = ?`,
+    const [shipResult] = await pool.query(
+      `UPDATE sales_orders SET status = 'shipped', shipped_at = NOW(3), shipped_by = ?, shipping_instruction = ?, updated_by = ?, row_version = row_version + 1 WHERE id = ? AND status = 'approved'`,
       [req.user.userId, body.shipping_instruction || null, req.user.userId, id]
     );
+    if (!shipResult.affectedRows) return res.status(409).json({ error: 'ORDER_STATE_CHANGED' });
     await pool.query(
       `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
        VALUES (?, 'approved', 'shipped', ?, ?)`,
@@ -2529,10 +2767,11 @@ router.post('/orders/:id/complete', async (req, res, next) => {
     const row = rows[0];
     if (!row) return res.status(404).json({ error: 'NOT_FOUND' });
     if (row.status !== 'shipped') return res.status(400).json({ error: 'INVALID_STATUS' });
-    await pool.query(
-      `UPDATE sales_orders SET status = 'completed', updated_by = ? WHERE id = ?`,
+    const [completeResult] = await pool.query(
+      `UPDATE sales_orders SET status = 'completed', updated_by = ?, row_version = row_version + 1 WHERE id = ? AND status = 'shipped'`,
       [req.user.userId, id]
     );
+    if (!completeResult.affectedRows) return res.status(409).json({ error: 'ORDER_STATE_CHANGED' });
     await pool.query(
       `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
        VALUES (?, 'shipped', 'completed', ?, '完结')`,
@@ -2584,10 +2823,11 @@ router.post('/orders/:id/cancel', async (req, res, next) => {
     if (['shipped', 'completed', 'cancelled'].includes(row.status)) {
       return res.status(400).json({ error: 'INVALID_STATUS' });
     }
-    await pool.query(
-      `UPDATE sales_orders SET status = 'cancelled', updated_by = ? WHERE id = ?`,
-      [req.user.userId, id]
+    const [cancelResult] = await pool.query(
+      `UPDATE sales_orders SET status = 'cancelled', updated_by = ?, row_version = row_version + 1 WHERE id = ? AND status = ?`,
+      [req.user.userId, id, row.status]
     );
+    if (!cancelResult.affectedRows) return res.status(409).json({ error: 'ORDER_STATE_CHANGED' });
     await pool.query(
       `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
        VALUES (?, ?, 'cancelled', ?, '取消订单')`,
@@ -2671,6 +2911,7 @@ router.post('/orders/batch-delete', async (req, res, next) => {
     const conn = await pool.getConnection();
     const failed = [];
     let deleted = 0;
+    const deletedItems = [];
     try {
       await conn.beginTransaction();
       const ph = wanted.map(() => '?').join(',');
@@ -2691,6 +2932,11 @@ router.post('/orders/batch-delete', async (req, res, next) => {
           continue;
         }
         okIds.push(id);
+        deletedItems.push({
+          id: row.id,
+          order_no: row.order_no || null,
+          status: row.status
+        });
       }
       if (okIds.length) {
         const ph2 = okIds.map(() => '?').join(',');
@@ -2708,7 +2954,13 @@ router.post('/orders/batch-delete', async (req, res, next) => {
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '批量删除订单',
-      detail: { deleted, failed: failed.length, ids: wanted }
+      detail: {
+        deleted,
+        failed: failed.length,
+        ids: wanted,
+        deleted_items: deletedItems,
+        failed_items: failed.slice(0, 200)
+      }
     });
     res.json({ ok: deleted, failed });
   } catch (e) {
@@ -2939,8 +3191,17 @@ router.get('/orders/template/xlsx', async (req, res, next) => {
 
 router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next) => {
   try {
-    if (!perm(req, 'order_management', 'order_input')) return res.status(403).json({ error: 'FORBIDDEN' });
+    if (!perm(req, 'order_management', 'order_input')) {
+      return res.status(403).json({
+        error: 'FORBIDDEN_ORDER_INPUT',
+        message: '缺少权限：销售·订单-录入/Excel导入'
+      });
+    }
     if (!req.file?.buffer) return res.status(400).json({ error: 'FILE_REQUIRED' });
+    const uid = authenticatedNumericUserId(req);
+    if (uid == null) {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: '登录状态无效，请重新登录后重试' });
+    }
     const pool = getPool();
     const definitions = await loadOrderFieldDefinitions(pool, { activeOnly: true });
     if (!definitions.length) return res.status(400).json({ error: 'NO_FIELDS_DEFINED' });
@@ -2999,8 +3260,12 @@ router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next)
       columnIndexes.push(idx);
     }
     const warehouseDefI = definitions.findIndex((d) => d.field_key === 'warehouse_model');
-    const errors = [];
-    let ok = 0;
+    const confirmDup =
+      req.body?.confirm_duplicate_import === '1' ||
+      req.body?.confirm_duplicate_import === 'true' ||
+      req.body?.confirm_duplicate_import === true;
+
+    const prepared = [];
     for (let ri = 1; ri < data.length; ri++) {
       const line = data[ri];
       if (!line || !line.some((c) => String(c || '').trim())) continue;
@@ -3020,11 +3285,101 @@ router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next)
         obj.product_model = coerceImportCell(label, 'text');
         obj.warehouse_model = coerceImportCell(warehouse, 'text');
       }
+      prepared.push({ rowNum, data: obj });
+    }
+
+    const fpMap = new Map();
+    for (const pr of prepared) {
+      const fp = orderImportRowFingerprint(definitions, pr.data);
+      if (!fpMap.has(fp)) fpMap.set(fp, []);
+      fpMap.get(fp).push(pr.rowNum);
+    }
+    const duplicate_groups = [];
+    for (const rows of fpMap.values()) {
+      if (rows.length > 1) duplicate_groups.push({ rows: [...rows].sort((a, b) => a - b) });
+    }
+    if (duplicate_groups.length && !confirmDup) {
+      return res.status(409).json({
+        error: 'EXCEL_DUPLICATE_ROWS',
+        message:
+          '表格中存在多行「全字段内容完全一致」的重复数据。请删除多余行；若业务上确需写入多笔相同订单，请在确认后继续导入。',
+        duplicate_groups
+      });
+    }
+
+    const errors = [];
+    const duplicates = [];
+    let ok = 0;
+    const seeAllOrders = canViewAllSalesOrders(req);
+    for (const { rowNum, data: obj } of prepared) {
       const conn = await pool.getConnection();
       try {
         await conn.beginTransaction();
+        
+        // 检查数据库中是否已存在相同订单
+        const leg = dataJsonToLegacyColumns(definitions, obj);
+        const codeKey = definitions.find((d) => d.maps_to === 'customer_code')?.field_key;
+        const nameKey = definitions.find((d) => d.maps_to === 'customer_name')?.field_key;
+        const customerId = await getOrCreateCustomer(conn, {
+          customer_code: codeKey ? obj[codeKey] : '',
+          customer_name: nameKey ? obj[nameKey] : '',
+          userId: uid
+        });
+        
+        // 检查是否存在相同的订单
+        let duplicateSql = `SELECT o.id, o.order_no, o.product_name, o.product_model, o.product_code, c.customer_name 
+           FROM sales_orders o 
+           LEFT JOIN sales_customers c ON c.id = o.customer_id
+           WHERE o.customer_id = ? 
+           AND o.product_code = ? 
+           AND o.product_name = ? 
+           AND o.product_model = ? 
+           AND o.warehouse_model = ? 
+           AND o.quantity = ? 
+           AND o.unit_price = ? 
+           AND o.amount = ? 
+           AND o.status != 'cancelled'`;
+        const duplicateArgs = [
+          customerId,
+          leg.product_code || '',
+          leg.product_name || '',
+          leg.product_model || '',
+          leg.warehouse_model || '',
+          leg.quantity || 0,
+          leg.unit_price || 0,
+          leg.amount || 0
+        ];
+        if (!seeAllOrders) {
+          duplicateSql += ' AND o.created_by = ?';
+          duplicateArgs.push(uid);
+        }
+        duplicateSql += ' LIMIT 1';
+
+        const [existing] = await conn.query(
+          duplicateSql,
+          duplicateArgs
+        );
+        
+        if (existing.length > 0) {
+          const dup = existing[0];
+          duplicates.push({
+            row: rowNum,
+            imported_customer: dup.customer_name || '',
+            imported_product: leg.product_name || '',
+            imported_model: leg.product_model || '',
+            imported_batch_no: leg.product_code || '',
+            existing_order_no: dup.order_no || '',
+            existing_customer: dup.customer_name || '',
+            existing_product: dup.product_name || '',
+            existing_batch_no: dup.product_code || ''
+          });
+          await conn.rollback();
+          conn.release();
+          continue;
+        }
+        
         await insertOrderWithData(conn, {
-          userId: req.user.userId,
+          userId: uid,
           data: obj,
           definitions,
           statusRemark: 'Excel导入'
@@ -3048,9 +3403,9 @@ router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next)
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '导入订单',
-      detail: { ok, errors: errors.length }
+      detail: { ok, errors: errors.length, duplicates: duplicates.length, duplicate_groups_ok: confirmDup ? duplicate_groups.length : 0 }
     });
-    res.json({ ok, errors });
+    res.json({ ok, errors, duplicates, duplicate_import_confirmed: confirmDup && duplicate_groups.length > 0 });
   } catch (e) {
     next(e);
   }
@@ -3159,11 +3514,60 @@ router.delete('/contract-templates/:id', async (req, res, next) => {
   }
 });
 
-const generateContractSchema = z.object({
-  template_id: z.coerce.number().int().positive(),
-  order_ids: z.array(z.coerce.number().int().positive()).min(1),
-  title: z.string().max(256).optional()
-});
+/** 推荐 templateId + orderIds；兼容历史 template_id + order_ids */
+const generateContractSchema = z
+  .object({
+    templateId: z.coerce.number().int().positive().optional(),
+    template_id: z.coerce.number().int().positive().optional(),
+    orderIds: z.array(z.coerce.number().int().positive()).min(1).optional(),
+    order_ids: z.array(z.coerce.number().int().positive()).min(1).optional(),
+    title: z.string().max(256).optional()
+  })
+  .superRefine((val, ctx) => {
+    const tid = val.templateId ?? val.template_id;
+    const oids = val.orderIds ?? val.order_ids;
+    if (tid === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Must provide templateId or template_id',
+        path: ['templateId']
+      });
+    }
+    if (!oids?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Must provide orderIds or order_ids',
+        path: ['orderIds']
+      });
+    }
+    if (
+      val.templateId !== undefined &&
+      val.template_id !== undefined &&
+      Number(val.templateId) !== Number(val.template_id)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'templateId and template_id conflict',
+        path: ['templateId']
+      });
+    }
+    if (val.orderIds && val.order_ids) {
+      const a = val.orderIds.join(',');
+      const b = val.order_ids.join(',');
+      if (a !== b) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'orderIds and order_ids conflict',
+          path: ['orderIds']
+        });
+      }
+    }
+  })
+  .transform((val) => ({
+    template_id: val.templateId ?? val.template_id,
+    order_ids: val.orderIds ?? val.order_ids,
+    title: val.title
+  }));
 
 router.post('/contracts/generate', async (req, res, next) => {
   try {
@@ -3196,22 +3600,6 @@ router.post('/contracts/generate', async (req, res, next) => {
     const companyNameZh = companyRows[0]?.company_name_zh || '';
 
     const linesHtml = buildContractOrderLinesHtml(orders);
-    const contractNo = `HT${shanghaiYmdCompact()}${nanoid(6).toUpperCase()}`;
-    /** 明细金额由用户在合同内填写；占位总金额用 0 */
-    const amountTotal = 0;
-    const first = orders[0];
-    const filledRaw = fillContractTemplate(tpl.body_html, {
-      CUSTOMER_NAME: first.customer_name || '',
-      ORDER_LINES: linesHtml,
-      AMOUNT_TOTAL: amountTotal,
-      AMOUNT_TOTAL_CN: amountToRmbUppercase(amountTotal),
-      CONTRACT_NO: contractNo,
-      SIGN_DATE_ZH: formatSigningDateZhShanghai(),
-      COMPANY_NAME_ZH: companyNameZh,
-      CUSTOMER_ADDRESS: first.customer_address || '',
-      CUSTOMER_CONTACT: first.customer_contact || '',
-      CUSTOMER_PHONE: first.customer_phone || ''
-    });
 
     /**
      * 兜底：历史模板可能缺少统一外层 div（或字体声明），导致前端无法将正文反解析回可视化表单。
@@ -3225,10 +3613,28 @@ router.post('/contracts/generate', async (req, res, next) => {
       return `<div style="font-family:SimSun,宋体;line-height:1.8;font-size:14px;color:#000">${s}</div>`;
     }
 
-    const filled = ensureStandardContractOuterWrap(filledRaw);
     const conn = await pool.getConnection();
+    let cnLockKey = null;
     try {
       await conn.beginTransaction();
+      const { contractNo, lockKey } = await reserveNextShanghaiContractNo(conn);
+      cnLockKey = lockKey;
+      /** 明细金额由用户在合同内填写；占位总金额用 0 */
+      const amountTotal = 0;
+      const first = orders[0];
+      const filledRaw = fillContractTemplate(tpl.body_html, {
+        CUSTOMER_NAME: first.customer_name || '',
+        ORDER_LINES: linesHtml,
+        AMOUNT_TOTAL: amountTotal,
+        AMOUNT_TOTAL_CN: amountToRmbUppercase(amountTotal),
+        CONTRACT_NO: contractNo,
+        SIGN_DATE_ZH: formatSigningDateZhShanghai(),
+        COMPANY_NAME_ZH: companyNameZh,
+        CUSTOMER_ADDRESS: first.customer_address || '',
+        CUSTOMER_CONTACT: first.customer_contact || '',
+        CUSTOMER_PHONE: first.customer_phone || ''
+      });
+      const filled = ensureStandardContractOuterWrap(filledRaw);
       const [ins] = await conn.query(
         `INSERT INTO sales_contracts (contract_no, template_id, customer_id, title, body_html, status, created_by)
          VALUES (?, ?, ?, ?, ?, 'draft', ?)`,
@@ -3261,9 +3667,12 @@ router.post('/contracts/generate', async (req, res, next) => {
       await conn.rollback();
       throw e;
     } finally {
+      await releaseShanghaiContractNoLock(conn, cnLockKey);
       conn.release();
     }
   } catch (e) {
+    if (e && e.code === 'CONTRACT_NO_DAY_LIMIT') return res.status(400).json({ error: 'CONTRACT_NO_DAY_LIMIT' });
+    if (e && e.code === 'CONTRACT_NO_LOCK_FAILED') return res.status(503).json({ error: 'CONTRACT_NO_LOCK_FAILED' });
     next(e);
   }
 });
@@ -3287,13 +3696,17 @@ router.post('/contracts/upload-document', contractDocumentUpload.single('file'),
       );
       if (!chk.length) return res.status(403).json({ error: 'FORBIDDEN' });
     }
-    const contractNo = `HT${shanghaiYmdCompact()}${nanoid(6).toUpperCase()}`;
     const origName = String(f.originalname || 'contract');
-    const title = titleRaw || origName.replace(/\.[^/.]+$/, '') || `文档合同-${contractNo}`;
     const conn = await pool.getConnection();
     let contractId;
+    let contractNo = '';
+    let cnLockKey = null;
     try {
       await conn.beginTransaction();
+      const reserved = await reserveNextShanghaiContractNo(conn);
+      contractNo = reserved.contractNo;
+      cnLockKey = reserved.lockKey;
+      const title = titleRaw || origName.replace(/\.[^/.]+$/, '') || `文档合同-${contractNo}`;
       const [ins] = await conn.query(
         `INSERT INTO sales_contracts (contract_no, template_id, customer_id, title, body_html, contract_source, status, created_by)
          VALUES (?, NULL, ?, ?, ?, 'upload', 'draft', ?)`,
@@ -3321,6 +3734,7 @@ router.post('/contracts/upload-document', contractDocumentUpload.single('file'),
       await conn.rollback();
       throw e;
     } finally {
+      await releaseShanghaiContractNoLock(conn, cnLockKey);
       conn.release();
     }
     await logOperationFromReq(req, {
@@ -3330,13 +3744,15 @@ router.post('/contracts/upload-document', contractDocumentUpload.single('file'),
     });
     res.json({ id: contractId, contract_no: contractNo });
   } catch (e) {
+    if (e && e.code === 'CONTRACT_NO_DAY_LIMIT') return res.status(400).json({ error: 'CONTRACT_NO_DAY_LIMIT' });
+    if (e && e.code === 'CONTRACT_NO_LOCK_FAILED') return res.status(503).json({ error: 'CONTRACT_NO_LOCK_FAILED' });
     next(e);
   }
 });
 
 router.get('/contracts', async (req, res, next) => {
   try {
-    if (!perm(req, 'contract_management', 'contract_view')) return res.status(403).json({ error: 'FORBIDDEN' });
+    if (!canAccessSalesContractWorkspace(req)) return res.status(403).json({ error: 'FORBIDDEN' });
     const pool = getPool();
     const seeAll = canViewAllSalesOrders(req);
     const qRaw = req.query.q != null ? String(req.query.q).trim() : '';
@@ -3349,10 +3765,18 @@ router.get('/contracts', async (req, res, next) => {
     let where = ' WHERE 1=1';
     const args = [];
     if (!seeAll) {
-      where += ` AND (c.created_by = ? OR c.customer_id IN (
-        SELECT DISTINCT customer_id FROM sales_orders WHERE created_by = ?
-      ))`;
-      args.push(req.user.userId, req.user.userId);
+      /** 审批人未录入该客户订单时，仅凭「客户关联订单」会筛掉待审合同；须包含当前审批责任人及待审队列（与 contract_review 权限一致） */
+      where += ` AND (
+        c.created_by = ?
+        OR c.reviewer_user_id = ?
+        OR c.customer_id IN (
+          SELECT DISTINCT customer_id FROM sales_orders WHERE created_by = ?
+        )`;
+      args.push(req.user.userId, req.user.userId, req.user.userId);
+      if (perm(req, 'contract_management', 'contract_review')) {
+        where += ` OR c.status = 'pending_review'`;
+      }
+      where += ')';
     }
     if (qRaw) {
       where += ` AND (c.contract_no LIKE ? OR cu.customer_name LIKE ? OR IFNULL(c.title,'') LIKE ?)`;
@@ -3364,12 +3788,16 @@ router.get('/contracts', async (req, res, next) => {
       args.push(statusFilter);
     }
     const customerFilterRaw = req.query.customer_id != null ? String(req.query.customer_id).trim() : '';
+    const customerCodeRaw = req.query.customer_code != null ? String(req.query.customer_code).trim() : '';
     if (customerFilterRaw !== '') {
       const cid = Number(customerFilterRaw);
       if (Number.isFinite(cid) && cid >= 1) {
         where += ' AND c.customer_id = ?';
         args.push(cid);
       }
+    } else if (customerCodeRaw) {
+      where += ' AND cu.customer_code = ?';
+      args.push(customerCodeRaw);
     }
 
     const from = `FROM sales_contracts c
@@ -3450,7 +3878,7 @@ router.post('/contracts/bulk-delete', async (req, res, next) => {
 
 router.get('/contracts/:id', async (req, res, next) => {
   try {
-    if (!perm(req, 'contract_management', 'contract_view')) return res.status(403).json({ error: 'FORBIDDEN' });
+    if (!canAccessSalesContractWorkspace(req)) return res.status(403).json({ error: 'FORBIDDEN' });
     const pool = getPool();
     const [rows] = await pool.query(
       `SELECT c.*, cu.customer_name,
@@ -3461,22 +3889,17 @@ router.get('/contracts/:id', async (req, res, next) => {
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ error: 'NOT_FOUND' });
-    const seeAll = canViewAllSalesOrders(req);
     const c = rows[0];
-    if (!seeAll && !isOrderCreatedByCurrentUser(c, req)) {
-      const [chk] = await pool.query(
-        'SELECT 1 FROM sales_orders WHERE customer_id = ? AND created_by = ? LIMIT 1',
-        [c.customer_id, req.user.userId]
-      );
-      if (!chk.length) return res.status(403).json({ error: 'FORBIDDEN' });
-    }
+    const vis = await assertSalesContractVisible(req, pool, c);
+    if (!vis.ok) return res.status(vis.code === 'NOT_FOUND' ? 404 : 403).json({ error: vis.code || 'FORBIDDEN' });
     const [orders] = await pool.query(
       `SELECT o.id, o.order_no, o.product_name, o.product_model, o.amount FROM sales_orders o
        INNER JOIN sales_contract_orders sco ON sco.order_id = o.id WHERE sco.contract_id = ?`,
       [req.params.id]
     );
     const [audits] = await pool.query(
-      `SELECT a.*, u.username AS actor_username FROM sales_contract_audit_logs a
+      `SELECT a.*, u.username AS actor_username, u.real_name AS actor_real_name
+       FROM sales_contract_audit_logs a
        LEFT JOIN users u ON u.id = a.actor_id WHERE a.contract_id = ? ORDER BY a.created_at ASC`,
       [req.params.id]
     );
@@ -3488,7 +3911,7 @@ router.get('/contracts/:id', async (req, res, next) => {
 
 router.get('/contracts/:id/document', async (req, res, next) => {
   try {
-    if (!perm(req, 'contract_management', 'contract_view')) return res.status(403).json({ error: 'FORBIDDEN' });
+    if (!canAccessSalesContractWorkspace(req)) return res.status(403).json({ error: 'FORBIDDEN' });
     const cid = Number(req.params.id);
     if (!Number.isFinite(cid) || cid < 1) return res.status(400).json({ error: 'BAD_REQUEST' });
     const pool = getPool();
@@ -3572,7 +3995,17 @@ router.patch('/contracts/:id', async (req, res, next) => {
     if (!perm(req, 'contract_management', 'contract_edit')) return res.status(403).json({ error: 'FORBIDDEN' });
     const id = Number(req.params.id);
     if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'BAD_REQUEST' });
-    const body = patchContractSchema.parse(req.body || {});
+    const parsedBody = patchContractSchema.safeParse(req.body || {});
+    if (!parsedBody.success) {
+      const iss = parsedBody.error.issues[0];
+      const p0 = Array.isArray(iss?.path) ? iss.path[0] : null;
+      let message = '请检查合同标题与正文';
+      if (iss?.code === 'too_big' && p0 === 'title') message = '合同标题不能超过256个字符';
+      if (iss?.code === 'too_small' && p0 === 'body_html') message = '合同正文不能为空';
+      if (String(iss?.message || '') === 'EMPTY_PATCH') message = '请至少提交标题或正文其中一项';
+      return res.status(400).json({ error: 'VALIDATION_FAILED', message });
+    }
+    const body = parsedBody.data;
     const pool = getPool();
     const c = await fetchSalesContractRow(pool, id);
     const vis = await assertSalesContractVisible(req, pool, c);
@@ -3655,9 +4088,14 @@ router.delete('/contracts/:id', async (req, res, next) => {
   }
 });
 
-const submitContractSchema = z.object({
-  reviewer_user_id: z.coerce.number().int().positive()
-});
+const submitContractSchema = z
+  .object({
+    reviewer_user_id: z.coerce.number().int().positive().optional(),
+    reviewer_user_ids: z.array(z.coerce.number().int().positive()).min(1).max(20).optional()
+  })
+  .refine((v) => {
+    return Number.isFinite(Number(v?.reviewer_user_id)) || (Array.isArray(v?.reviewer_user_ids) && v.reviewer_user_ids.length > 0);
+  }, { message: 'reviewer_user_id or reviewer_user_ids required' });
 
 router.post('/contracts/:id/submit', async (req, res, next) => {
   try {
@@ -3673,45 +4111,155 @@ router.post('/contracts/:id/submit', async (req, res, next) => {
     if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
     if (!isSuper(req) && !isOrderCreatedByCurrentUser(c, req)) return res.status(403).json({ error: 'FORBIDDEN' });
     if (!['draft', 'rejected'].includes(c.status)) return res.status(400).json({ error: 'INVALID_STATUS' });
+    const rawReviewerIds = Array.isArray(body.reviewer_user_ids) && body.reviewer_user_ids.length
+      ? body.reviewer_user_ids
+      : [body.reviewer_user_id];
+    const reviewerIds = [...new Set(rawReviewerIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))];
+    if (!reviewerIds.length) return res.status(400).json({ error: 'INVALID_REVIEWER' });
     const [rev] = await pool.query(
       `SELECT u.id FROM users u
-       INNER JOIN employee_categories cat ON cat.id = u.employee_category_id
-       WHERE u.id = ? AND u.is_active = 1 AND u.account_type IN ('employee', 'manager')
-         AND (cat.code = 'finance' OR cat.code = 'sales_admin')`,
-      [body.reviewer_user_id]
+       WHERE u.id IN (${reviewerIds.map(() => '?').join(',')})
+         AND u.is_active = 1
+         AND u.account_type IN ('employee', 'manager')`,
+      reviewerIds
     );
-    if (!rev.length) return res.status(400).json({ error: 'INVALID_REVIEWER' });
+    const validIds = new Set((rev || []).map((r) => Number(r.id)));
+    if (validIds.size !== reviewerIds.length) return res.status(400).json({ error: 'INVALID_REVIEWER' });
+    const firstReviewerId = reviewerIds[0];
+    const [reviewerRows] = await pool.query(
+      `SELECT id,
+              username,
+              real_name
+       FROM users
+       WHERE id IN (${reviewerIds.map(() => '?').join(',')})`,
+      reviewerIds
+    );
+    const reviewerNameById = new Map(
+      (reviewerRows || []).map((r) => {
+        const realName = r?.real_name != null ? String(r.real_name).trim() : '';
+        const username = r?.username != null ? String(r.username).trim() : '';
+        const display = realName || username || `用户#${r.id}`;
+        return [Number(r.id), username && username !== display ? `${display}(${username})` : display];
+      })
+    );
+    const reviewerChainText = reviewerIds
+      .map((id) => reviewerNameById.get(Number(id)) || `用户#${id}`)
+      .join(' -> ');
+    const approvalFlow = {
+      type: 'sequential',
+      reviewer_user_ids: reviewerIds,
+      current_index: 0
+    };
     await pool.query(
-      `UPDATE sales_contracts SET status = 'pending_review', reviewer_user_id = ?, updated_at = NOW(3) WHERE id = ?`,
-      [body.reviewer_user_id, req.params.id]
+      `UPDATE sales_contracts
+       SET status = 'pending_review',
+           reviewer_user_id = ?,
+           approval_flow_json = CAST(? AS JSON),
+           updated_at = NOW(3)
+       WHERE id = ?`,
+      [firstReviewerId, JSON.stringify(approvalFlow), req.params.id]
     );
     await pool.query(
       `INSERT INTO sales_contract_audit_logs (contract_id, actor_id, action, result, comment_text)
        VALUES (?, ?, 'submit', NULL, ?)`,
-      [req.params.id, req.user.userId, `提交审核，审核人用户ID ${body.reviewer_user_id}`]
+      [req.params.id, req.user.userId, `提交审核，审批链：${reviewerChainText}`]
     );
     const contractSubmitBody = await buildContractOrdersNotifyBody(pool, Number(req.params.id), {
       intro: `合同 ${c.contract_no} 待您审核。`,
       customerName: c.linked_customer_name || ''
     });
-    await notifyUser(pool, body.reviewer_user_id, {
-      title: '合同待审核',
-      bodyText: contractSubmitBody,
-      fromUserId: req.user.userId,
-      refType: 'contract',
-      refId: Number(req.params.id),
-      msgCategory: 'todo'
-    });
-    await tryNotifyContractReviewerOnSubmit(pool, {
-      contractRow: c,
-      notifyBody: contractSubmitBody,
-      fromUserId: req.user.userId,
-      reviewerUserId: body.reviewer_user_id
-    });
+    for (let i = 0; i < reviewerIds.length; i += 1) {
+      const reviewerId = reviewerIds[i];
+      const seq = i + 1;
+      const titledBody =
+        reviewerIds.length > 1
+          ? `${contractSubmitBody}\n\n审批顺序：第 ${seq}/${reviewerIds.length} 位`
+          : contractSubmitBody;
+      await notifyUser(pool, reviewerId, {
+        title: reviewerIds.length > 1 ? `合同待审核（第 ${seq}/${reviewerIds.length} 位）` : '合同待审核',
+        bodyText: titledBody,
+        fromUserId: req.user.userId,
+        refType: 'contract',
+        refId: Number(req.params.id),
+        msgCategory: 'todo'
+      });
+      await tryNotifyContractReviewerOnSubmit(pool, {
+        contractRow: c,
+        notifyBody: titledBody,
+        fromUserId: req.user.userId,
+        reviewerUserId: reviewerId
+      });
+    }
     await logOperationFromReq(req, {
       module: '销售合同',
       action: '提交合同审核',
       detail: { id: req.params.id }
+    });
+    res.json({
+      ok: true,
+      totalReviewers: reviewerIds.length,
+      currentReviewerUserId: firstReviewerId
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** 创建人（或超管）撤回待审合同：退回草稿并通知当前审批人 */
+router.post('/contracts/:id/withdraw', async (req, res, next) => {
+  try {
+    if (!perm(req, 'contract_management', 'contract_submit')) return res.status(403).json({ error: 'FORBIDDEN' });
+    const pool = getPool();
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const [rows] = await pool.query(
+      `SELECT c.*, cu.customer_name AS linked_customer_name FROM sales_contracts c
+       INNER JOIN sales_customers cu ON cu.id = c.customer_id WHERE c.id = ?`,
+      [id]
+    );
+    const c = rows[0];
+    if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
+    if (!isSuper(req) && !isOrderCreatedByCurrentUser(c, req)) return res.status(403).json({ error: 'FORBIDDEN' });
+    if (c.status !== 'pending_review') return res.status(400).json({ error: 'INVALID_STATUS' });
+
+    const reviewerId = c.reviewer_user_id != null ? Number(c.reviewer_user_id) : NaN;
+
+    const [withdrawResult] = await pool.query(
+      `UPDATE sales_contracts
+       SET status = 'draft',
+           reviewer_user_id = NULL,
+           approval_flow_json = NULL,
+           updated_at = NOW(3)
+       WHERE id = ? AND status = 'pending_review'`,
+      [id]
+    );
+    if (!withdrawResult.affectedRows) return res.status(409).json({ error: 'CONTRACT_STATE_CHANGED' });
+
+    await pool.query(
+      `INSERT INTO sales_contract_audit_logs (contract_id, actor_id, action, result, comment_text)
+       VALUES (?, ?, 'withdraw_submit', NULL, ?)`,
+      [id, req.user.userId, '撤销审核申请，合同退回草稿']
+    );
+
+    if (Number.isFinite(reviewerId) && reviewerId >= 1 && Number(reviewerId) !== Number(req.user.userId)) {
+      const withdrawBody = await buildContractOrdersNotifyBody(pool, id, {
+        intro: `合同 ${c.contract_no} 已由创建人撤销审核申请，已退回草稿，无需再审批。`,
+        customerName: c.linked_customer_name || ''
+      });
+      await notifyUser(pool, reviewerId, {
+        title: '合同已撤销审核申请',
+        bodyText: withdrawBody,
+        fromUserId: req.user.userId,
+        refType: 'contract',
+        refId: id,
+        msgCategory: 'notice'
+      });
+    }
+
+    await logOperationFromReq(req, {
+      module: '销售合同',
+      action: '撤销合同审核申请',
+      detail: { id }
     });
     res.json({ ok: true });
   } catch (e) {
@@ -3732,52 +4280,120 @@ router.post('/contracts/:id/review', async (req, res, next) => {
       return res.status(400).json({ error: 'COMMENT_REQUIRED' });
     }
     const pool = getPool();
-    const [rows] = await pool.query(
-      `SELECT c.*, cu.customer_name AS linked_customer_name FROM sales_contracts c
-       INNER JOIN sales_customers cu ON cu.id = c.customer_id WHERE c.id = ?`,
-      [req.params.id]
+    const contractId = Number(req.params.id);
+    const [chk] = await pool.query(
+      'SELECT reviewer_user_id FROM sales_contracts WHERE id = ? LIMIT 1',
+      [contractId]
     );
-    const c = rows[0];
-    if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
-    if (c.status !== 'pending_review') return res.status(400).json({ error: 'INVALID_STATUS' });
-    if (!isSuper(req) && c.reviewer_user_id !== req.user.userId) return res.status(403).json({ error: 'FORBIDDEN' });
-    const st = body.result === 'approved' ? 'approved' : 'rejected';
-    await pool.query(`UPDATE sales_contracts SET status = ?, updated_at = NOW(3) WHERE id = ?`, [st, req.params.id]);
-    await pool.query(
-      `INSERT INTO sales_contract_audit_logs (contract_id, actor_id, action, result, comment_text)
-       VALUES (?, ?, 'review', ?, ?)`,
-      [req.params.id, req.user.userId, body.result, body.comment || null]
-    );
-    if (c.created_by) {
-      const reviewIntro =
-        body.result === 'approved'
-          ? `合同 ${c.contract_no} 审核已通过。`
-          : `合同 ${c.contract_no} 审核已驳回。\n审核意见：${body.comment || ''}`;
-      const contractReviewBody = await buildContractOrdersNotifyBody(pool, Number(req.params.id), {
-        intro: reviewIntro,
-        customerName: c.linked_customer_name || ''
+    const ru = chk?.[0]?.reviewer_user_id;
+    if (!isSuper(req)) {
+      if (ru == null || Number(ru) !== Number(req.user.userId)) {
+        return res.status(403).json({ error: 'FORBIDDEN' });
+      }
+    }
+    const r = await applyContractReview(pool, {
+      contractId,
+      actorUserId: req.user.userId,
+      reviewerUserIdForCheck: isSuper(req) && ru != null ? Number(ru) : null,
+      result: body.result,
+      comment: body.comment || ''
+    });
+    if (!r.ok) return res.status(r.httpStatus || 400).json({ error: r.code });
+    if (r.variant === 'progressed') {
+      await logOperationFromReq(req, {
+        module: '销售合同',
+        action: '审核合同',
+        detail: { id: contractId, result: 'approved_step', nextReviewerUserId: r.nextReviewerUserId }
       });
-      await notifyUser(pool, c.created_by, {
-        title: `合同审核${body.result === 'approved' ? '通过' : '驳回'}`,
-        bodyText: contractReviewBody,
-        fromUserId: req.user.userId,
-        refType: 'contract',
-        refId: Number(req.params.id),
-        msgCategory: body.result === 'approved' ? 'notice' : 'todo'
-      });
-      await tryNotifyContractCreatorOnReview(pool, {
-        contractRow: c,
-        notifyBody: contractReviewBody,
-        fromUserId: req.user.userId,
-        result: body.result,
-        reviewComment: body.comment || ''
-      });
+      return res.json({ ok: true, progressed: true, nextReviewerUserId: r.nextReviewerUserId });
     }
     await logOperationFromReq(req, {
       module: '销售合同',
       action: '审核合同',
-      detail: { id: req.params.id, result: body.result }
+      detail: { id: contractId, result: body.result }
     });
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** 创建人催办当前审批人：站内信 + 企业微信（与提交审核同源模板）；15 分钟内同一合同同一操作人仅一次 */
+router.post('/contracts/:id/remind-reviewer', async (req, res, next) => {
+  try {
+    if (!perm(req, 'contract_management', 'contract_submit')) {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+    const pool = getPool();
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'BAD_REQUEST' });
+
+    const [rows] = await pool.query(
+      `SELECT c.*, cu.customer_name AS linked_customer_name FROM sales_contracts c
+       INNER JOIN sales_customers cu ON cu.id = c.customer_id WHERE c.id = ?`,
+      [id]
+    );
+    const c = rows[0];
+    if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
+    if (!isSuper(req) && !isOrderCreatedByCurrentUser(c, req)) {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+    if (c.status !== 'pending_review') return res.status(400).json({ error: 'INVALID_STATUS' });
+
+    const reviewerId = c.reviewer_user_id != null ? Number(c.reviewer_user_id) : NaN;
+    if (!Number.isFinite(reviewerId) || reviewerId < 1) {
+      return res.status(400).json({ error: 'NO_REVIEWER' });
+    }
+    if (Number(reviewerId) === Number(req.user.userId)) {
+      return res.status(400).json({ error: 'CANNOT_URGE_SELF' });
+    }
+
+    const [recent] = await pool.query(
+      `SELECT id FROM sales_contract_audit_logs
+       WHERE contract_id = ? AND actor_id = ? AND action = 'urge_review'
+         AND created_at > DATE_SUB(NOW(3), INTERVAL 15 MINUTE)
+       LIMIT 1`,
+      [id, req.user.userId]
+    );
+    if (recent.length) return res.status(400).json({ error: 'URGE_TOO_FREQUENT' });
+
+    const [au] = await pool.query('SELECT username FROM users WHERE id = ? LIMIT 1', [req.user.userId]);
+    const actorUsername = au?.[0]?.username != null ? String(au[0].username) : '';
+
+    await pool.query(
+      `INSERT INTO sales_contract_audit_logs (contract_id, actor_id, action, result, comment_text)
+       VALUES (?, ?, 'urge_review', NULL, ?)`,
+      [id, req.user.userId, `催办当前审批人（用户ID ${reviewerId}）`]
+    );
+
+    const baseBody = await buildContractOrdersNotifyBody(pool, id, {
+      intro: `【催办】合同 ${c.contract_no} 待您审批，请尽快处理。`,
+      customerName: c.linked_customer_name || ''
+    });
+    const urgeBody = `${baseBody}\n\n由 ${actorUsername || '同事'} 发起催办。`;
+
+    await notifyUser(pool, reviewerId, {
+      title: '合同审批催办',
+      bodyText: urgeBody,
+      fromUserId: req.user.userId,
+      refType: 'contract',
+      refId: id,
+      msgCategory: 'todo'
+    });
+
+    await tryNotifyContractReviewerOnSubmit(pool, {
+      contractRow: c,
+      notifyBody: urgeBody,
+      fromUserId: req.user.userId,
+      reviewerUserId: reviewerId
+    });
+
+    await logOperationFromReq(req, {
+      module: '销售合同',
+      action: '催办合同审批',
+      detail: { contractId: id, reviewerUserId: reviewerId }
+    });
+
     res.json({ ok: true });
   } catch (e) {
     next(e);
@@ -3818,7 +4434,7 @@ router.get('/process/order-logs', async (req, res, next) => {
   }
 });
 
-/** 财务审核员列表（提交合同时选人）；可选 departmentId= 部门树筛选（含子部门） */
+/** 审批人列表（提交合同时选人）；可选 departmentId= 部门树筛选（含子部门） */
 router.get('/finance-reviewers', async (req, res, next) => {
   try {
     if (!perm(req, 'contract_management', 'contract_submit')) return res.status(403).json({ error: 'FORBIDDEN' });
@@ -3832,16 +4448,24 @@ router.get('/finance-reviewers', async (req, res, next) => {
       if (!chk?.[0]) return res.status(400).json({ error: 'BAD_DEPARTMENT' });
       deptIds = await departmentSubtreeIds(pool, rootId);
     }
-    let sql = `SELECT u.id, u.username, u.department_id AS departmentId, d.name_zh AS departmentNameZh
+    let sql = `SELECT u.id,
+                      u.username,
+                      u.real_name AS realName,
+                      CASE
+                        WHEN u.real_name IS NOT NULL AND TRIM(u.real_name) <> '' THEN u.real_name
+                        ELSE u.username
+                      END AS displayName,
+                      u.department_id AS departmentId,
+                      d.name_zh AS departmentNameZh
        FROM users u
-       INNER JOIN employee_categories c ON c.id = u.employee_category_id
        LEFT JOIN departments d ON d.id = u.department_id
-       WHERE u.account_type IN ('employee', 'manager') AND u.is_active = 1 AND c.code IN ('finance', 'sales_admin')`;
+       WHERE u.account_type IN ('employee', 'manager') AND u.is_active = 1`;
     const args = [];
     if (deptIds?.length) {
       sql += ` AND u.department_id IN (${deptIds.map(() => '?').join(',')})`;
       args.push(...deptIds);
     }
+    sql += ' ORDER BY d.sort_order ASC, d.id ASC, u.username ASC';
     const [rows] = await pool.query(sql, args);
     res.json({ items: rows });
   } catch (e) {

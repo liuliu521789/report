@@ -14,7 +14,7 @@
             <span class="hint inline-hint">卖方公司名称等来自企业信息，对应报告中「公司信息」页。</span>
           </div>
           <div class="right">
-            <el-button type="primary" @click="goNewTemplate">新建模板</el-button>
+            <el-button type="primary" @click="goNewTemplate" icon=Plus>新建模板</el-button>
           </div>
         </div>
         <div class="table-wrap">
@@ -25,14 +25,14 @@
             </el-table-column>
             <el-table-column label="操作" width="200" fixed="right">
               <template #default="{ row }">
-                <el-button link @click="goEditTemplate(row)">编辑</el-button>
-                <el-button link type="danger" @click="removeTpl(row)">删除</el-button>
+                <el-button link @click="goEditTemplate(row)" icon=Edit>编辑</el-button>
+                <el-button link type="danger" @click="removeTpl(row)" icon=Delete>删除</el-button>
               </template>
             </el-table-column>
           </el-table>
         </div>
       </el-tab-pane>
-      <el-tab-pane v-if="perm('contract_management', 'contract_view')" label="合同列表" name="list">
+      <el-tab-pane v-if="canAccessSalesContractWorkspace()" label="合同列表" name="list">
         <div class="toolbar">
           <div class="left">
             <el-input
@@ -48,28 +48,28 @@
               <el-option label="已通过" value="approved" />
               <el-option label="已驳回" value="rejected" />
             </el-select>
-            <el-button type="primary" @click="onContractSearch">查询</el-button>
+            <el-button type="primary" @click="onContractSearch" icon=Search>查询</el-button>
             <el-button
               v-if="perm('contract_management', 'contract_delete')"
               type="danger"
               plain
               :disabled="!selectedContracts.length"
               @click="confirmBulkDeleteContracts"
-            >批量删除</el-button>
+             icon=Delete>批量删除</el-button>
           </div>
           <div class="right">
             <el-button
               v-if="perm('contract_management', 'contract_generate')"
               type="primary"
               @click="openUploadDocDialog"
-            >上传文档合同</el-button>
+             icon=Upload>上传文档合同</el-button>
             <el-button
               v-if="perm('contract_management', 'contract_generate')"
               plain
               type="primary"
               @click="$router.push('/sales/orders')"
             >去订单生成合同</el-button>
-            <el-button @click="loadContracts">刷新</el-button>
+            <el-button @click="loadContracts" icon=Refresh>刷新</el-button>
           </div>
         </div>
         <div class="table-wrap">
@@ -98,7 +98,14 @@
             </el-table-column>
             <el-table-column prop="status" label="审核状态" min-width="168" align="center">
               <template #default="{ row }">
-                <div class="contracts-status-cell">
+                <div
+                  class="contracts-status-cell contracts-status-cell--flow"
+                  title="点击查看审批流程"
+                  role="button"
+                  tabindex="0"
+                  @click.stop="openApprovalFlowDrawer(row)"
+                  @keydown.enter.prevent.stop="openApprovalFlowDrawer(row)"
+                >
                   <SalesStatusPill kind="contract" :status="row.status" :reject-reason="row.last_reject_comment || ''" />
                 </div>
               </template>
@@ -109,17 +116,38 @@
             </el-table-column>
             <el-table-column label="操作" width="400" fixed="right">
               <template #default="{ row }">
-                <el-button link type="primary" @click="openContractPreview(row)">预览</el-button>
+                <el-button link type="primary" @click="openContractPreview(row)" icon=View>预览</el-button>
                 <el-button link @click="openDetail(row)">详情</el-button>
-                <el-button v-if="canEditContract(row)" link type="primary" @click="goContractEditor(row)">编辑</el-button>
-                <el-button v-if="canDeleteContract(row)" link type="danger" @click="removeContract(row)">删除</el-button>
+                <el-tooltip
+                  v-if="isEditDisabled(row)"
+                  content="已审核通过的合同需要超级管理员授权才能编辑"
+                  placement="top"
+                >
+                  <el-button link type="info" disabled icon=Edit>编辑</el-button>
+                </el-tooltip>
+                <el-button v-else-if="canEditContract(row)" link type="primary" @click="goContractEditor(row)" icon=Edit>编辑</el-button>
+                <el-tooltip
+                  v-if="isDeleteDisabled(row)"
+                  content="已审核通过的合同需要超级管理员授权才能删除"
+                  placement="top"
+                >
+                  <el-button link type="info" disabled icon=Delete>删除</el-button>
+                </el-tooltip>
+                <el-button v-else-if="canDeleteContract(row)" link type="danger" @click="removeContract(row)" icon=Delete>删除</el-button>
                 <el-button
-                  v-if="perm('contract_management', 'contract_submit') && canEditContract(row)"
+                  v-if="contractSubmitToolbarAction(row) === 'submit'"
                   link
                   @click="openSubmit(row)"
+                  icon=Check
                 >提交审核</el-button>
                 <el-button
-                  v-if="perm('contract_management', 'contract_review') && row.status === 'pending_review' && isReviewer(row)"
+                  v-else-if="contractSubmitToolbarAction(row) === 'withdraw'"
+                  link
+                  type="danger"
+                  @click="confirmWithdrawContractReview(row)"
+                >撤销审核</el-button>
+                <el-button
+                  v-if="perm('contract_management', 'contract_review') && row.status === 'pending_review' && (isSuperAdmin() || isReviewer(row))"
                   link
                   type="warning"
                   @click="openReview(row)"
@@ -151,8 +179,8 @@
               class="field-flow-order-no"
               @keyup.enter="loadFlow"
             />
-            <el-button size="small" type="primary" @click="loadFlow">查询</el-button>
-            <el-button size="small" @click="loadFlow">刷新</el-button>
+            <el-button size="small" type="primary" @click="loadFlow" icon=Search>查询</el-button>
+            <el-button size="small" @click="loadFlow" icon=Refresh>刷新</el-button>
             <span class="hint inline-hint">按订单汇总，与合同列表分开；展开查看流程步骤。</span>
           </div>
         </div>
@@ -254,7 +282,16 @@
           <div>客户：{{ detail.contract.customer_name }}</div>
           <div class="meta-status">
             <span class="meta-status-label">审核状态</span>
-            <SalesStatusPill kind="contract" :status="detail.contract.status" :reject-reason="contractRejectReason(detail)" />
+            <span
+              class="meta-status-pill-hit"
+              title="点击查看审批流程"
+              role="button"
+              tabindex="0"
+              @click.stop="openApprovalFlowDrawerFromDetail"
+              @keydown.enter.prevent.stop="openApprovalFlowDrawerFromDetail"
+            >
+              <SalesStatusPill kind="contract" :status="detail.contract.status" :reject-reason="contractRejectReason(detail)" />
+            </span>
           </div>
         </div>
         <template v-if="detail.contract?.contract_source === 'upload'">
@@ -265,7 +302,7 @@
                 · {{ detail.contract.document_original_filename }}
               </span>
             </div>
-            <el-button type="primary" size="small" @click="downloadDetailContractFile">下载合同文件</el-button>
+            <el-button type="primary" size="small" @click="downloadDetailContractFile" icon=Download>下载合同文件</el-button>
           </div>
         </template>
         <div v-else class="html-preview" v-html="detailBodyPreviewHtml" />
@@ -275,13 +312,88 @@
           <el-table-column prop="product_name" label="商品" />
           <el-table-column prop="amount" label="金额" />
         </el-table>
-        <div class="sub">审核记录</div>
-        <el-timeline>
-          <el-timeline-item v-for="a in detail.audits" :key="a.id" :timestamp="$dt(a.created_at)">
-            {{ a.action }} · {{ a.actor_username || '—' }} · {{ a.result || '' }} {{ a.comment_text || '' }}
-          </el-timeline-item>
-        </el-timeline>
+        <div class="sub">审批流程</div>
+        <div v-if="canUrgeContractReviewer(detail.contract)" class="approval-flow-urge-banner">
+          <el-button type="primary" link :loading="urgeSubmitting" @click="doUrgeReviewer(detail.contract.id)">
+            催一下当前审批人
+          </el-button>
+          <span class="hint">将向审批人发送站内信与企业微信；15 分钟内同一合同仅可催一次</span>
+        </div>
+        <div class="approval-flow-panel">
+          <template v-if="detailApprovalTimelineSteps.length">
+            <div
+              v-for="(step, idx) in detailApprovalTimelineSteps"
+              :key="'detail-flow-' + step.key"
+              class="approval-flow-row"
+            >
+              <div class="approval-flow-axis">
+                <span class="approval-flow-dot" :class="step.dotClass" />
+                <span v-if="idx < detailApprovalTimelineSteps.length - 1" class="approval-flow-line" />
+              </div>
+              <div class="approval-flow-main">
+                <div class="approval-flow-step-title">{{ step.stepTitle }}</div>
+                <div class="approval-flow-card">
+                  <div class="approval-flow-user-line">
+                    <span class="approval-flow-user-name">{{ step.actorName }}</span>
+                  </div>
+                  <div class="approval-flow-time-row">{{ step.timeText }}</div>
+                  <div class="approval-flow-status-text" :class="step.statusTextClass">{{ step.statusText }}</div>
+                  <div v-if="step.opinionText" class="approval-flow-opinion">
+                    <div class="approval-flow-opinion-label">{{ step.opinionLabel }}</div>
+                    <div class="approval-flow-opinion-body">{{ step.opinionText }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <el-empty v-else description="暂无审批记录" :image-size="64" />
+        </div>
       </template>
+    </el-drawer>
+
+    <el-drawer v-model="approvalFlowDrawerOpen" title="审批流程" direction="rtl" size="420px" destroy-on-close>
+      <div v-loading="approvalFlowLoading" class="approval-flow-drawer-inner">
+        <template v-if="approvalFlowContract">
+          <div class="approval-flow-drawer-meta">
+            <div class="approval-flow-drawer-meta-no">{{ approvalFlowContract.contract_no }}</div>
+            <div v-if="approvalFlowContract.customer_name" class="approval-flow-drawer-meta-sub">
+              客户：{{ approvalFlowContract.customer_name }}
+            </div>
+            <div class="approval-flow-drawer-meta-sub">{{ approvalFlowContract.title || '—' }}</div>
+            <div v-if="canUrgeContractReviewer(approvalFlowContract)" class="approval-flow-urge-row">
+              <el-button type="primary" link :loading="urgeSubmitting" @click="doUrgeReviewer()">催一下</el-button>
+              <span class="hint">15 分钟内同一合同仅可催一次</span>
+            </div>
+          </div>
+        </template>
+        <template v-if="approvalFlowTimelineSteps.length">
+          <div
+            v-for="(step, idx) in approvalFlowTimelineSteps"
+            :key="'flow-' + step.key"
+            class="approval-flow-row"
+          >
+            <div class="approval-flow-axis">
+              <span class="approval-flow-dot" :class="step.dotClass" />
+              <span v-if="idx < approvalFlowTimelineSteps.length - 1" class="approval-flow-line" />
+            </div>
+            <div class="approval-flow-main">
+              <div class="approval-flow-step-title">{{ step.stepTitle }}</div>
+              <div class="approval-flow-card">
+                <div class="approval-flow-user-line">
+                  <span class="approval-flow-user-name">{{ step.actorName }}</span>
+                </div>
+                <div class="approval-flow-time-row">{{ step.timeText }}</div>
+                <div class="approval-flow-status-text" :class="step.statusTextClass">{{ step.statusText }}</div>
+                <div v-if="step.opinionText" class="approval-flow-opinion">
+                  <div class="approval-flow-opinion-label">{{ step.opinionLabel }}</div>
+                  <div class="approval-flow-opinion-body">{{ step.opinionText }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+        <el-empty v-else-if="!approvalFlowLoading" description="暂无审批记录" :image-size="72" />
+      </div>
     </el-drawer>
 
     <el-dialog v-model="uploadDocOpen" title="上传文档合同" width="480px" destroy-on-close @open="onUploadDocDialogOpen">
@@ -323,8 +435,8 @@
         </el-form>
       </div>
       <template #footer>
-        <el-button @click="uploadDocOpen = false">取消</el-button>
-        <el-button type="primary" :loading="uploadDocSubmitting" @click="submitUploadDoc">确定</el-button>
+        <el-button @click="uploadDocOpen = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="uploadDocSubmitting" @click="submitUploadDoc" icon=Check>确定</el-button>
       </template>
     </el-dialog>
 
@@ -342,12 +454,29 @@
         placeholder="可选：按部门筛选"
         class="w-full mb12"
       />
-      <el-select v-model="submitReviewerId" placeholder="选择审批人" filterable class="w-full">
-        <el-option v-for="u in reviewers" :key="u.id" :label="reviewerOptionLabel(u)" :value="u.id" />
-      </el-select>
+      <div class="submit-approver-builder">
+        <el-select v-model="submitReviewerId" placeholder="选择审批人后点击添加" filterable class="w-full">
+          <el-option v-for="u in reviewers" :key="u.id" :label="reviewerOptionLabel(u)" :value="u.id" />
+        </el-select>
+        <el-button type="primary" plain @click="addSubmitReviewer" :disabled="!submitReviewerId">添加审批人</el-button>
+      </div>
+      <div class="submit-approver-list">
+        <div class="submit-approver-title">审批顺序（从上到下）</div>
+        <el-empty v-if="!submitReviewerIds.length" description="请至少添加 1 位审批人" :image-size="56" />
+        <div v-else class="submit-approver-items">
+          <div v-for="(id, idx) in submitReviewerIds" :key="`submit-reviewer-${id}-${idx}`" class="submit-approver-item">
+            <div class="submit-approver-label">{{ idx + 1 }}. {{ reviewerLabelById(id) }}</div>
+            <div class="submit-approver-actions">
+              <el-button link :disabled="idx === 0" @click="moveSubmitReviewer(idx, -1)">上移</el-button>
+              <el-button link :disabled="idx === submitReviewerIds.length - 1" @click="moveSubmitReviewer(idx, 1)">下移</el-button>
+              <el-button link type="danger" @click="removeSubmitReviewer(idx)">移除</el-button>
+            </div>
+          </div>
+        </div>
+      </div>
       <template #footer>
-        <el-button @click="submitOpen = false">取消</el-button>
-        <el-button type="primary" :loading="submitLoading" @click="doSubmit">提交</el-button>
+        <el-button @click="submitOpen = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="submitLoading" @click="doSubmit" icon=Check>提交</el-button>
       </template>
     </el-dialog>
 
@@ -358,8 +487,8 @@
       </el-radio-group>
       <el-input v-model="reviewForm.comment" type="textarea" rows="3" placeholder="驳回必填意见" />
       <template #footer>
-        <el-button @click="reviewOpen = false">取消</el-button>
-        <el-button type="primary" :loading="reviewLoading" @click="doReview">确定</el-button>
+        <el-button @click="reviewOpen = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="reviewLoading" @click="doReview" icon=Check>确定</el-button>
       </template>
     </el-dialog>
 
@@ -393,16 +522,25 @@
         />
         <div v-else-if="contractPreviewMode === 'other'" class="contract-preview-other">
           <p>当前为老版 .doc 或其它格式，无法在页面内预览。</p>
-          <el-button type="primary" @click="downloadPreviewContractFile">下载查看</el-button>
+          <el-button type="primary" @click="downloadPreviewContractFile" icon=Download>下载查看</el-button>
         </div>
       </div>
       <template #footer>
-        <el-button @click="contractPreviewOpen = false">关闭</el-button>
-        <el-button
-          type="primary"
-          :disabled="contractPreviewMode === 'other' || (contractPreviewMode === 'html' && !contractPreviewHtml)"
-          @click="printContractPreview"
-        >打印</el-button>
+        <el-button @click="contractPreviewOpen = false" icon=Close>关闭</el-button>
+        <el-tooltip
+          placement="top"
+          content="若纸上出现日期、网址或页码，请在打印对话框「更多设置」中关闭「页眉和页脚」。"
+          :show-after="300"
+        >
+          <span class="print-tooltip-trigger">
+            <el-button
+              type="primary"
+              :disabled="contractPreviewMode === 'other' || (contractPreviewMode === 'html' && !contractPreviewHtml)"
+              @click="printContractPreview"
+              icon=Printer
+              >打印</el-button>
+          </span>
+        </el-tooltip>
       </template>
     </el-dialog>
 
@@ -410,8 +548,11 @@
 </template>
 
 <script>
-import { perm, isSuperAdmin } from '../utils/permissions';
+import { mapState } from 'pinia';
+import { useAuthStore } from '../stores/auth';
+import { perm, isSuperAdmin, canAccessSalesContractWorkspace } from '../utils/permissions';
 import {
+  getMe,
   listContractTemplates,
   deleteContractTemplate,
   listSalesContracts,
@@ -420,6 +561,8 @@ import {
   bulkDeleteSalesContracts,
   submitSalesContract,
   reviewSalesContract,
+  withdrawSalesContractReview,
+  remindSalesContractReviewer,
   listFinanceReviewers,
   listDepartmentsTree,
   listSalesProcessLogs,
@@ -430,7 +573,12 @@ import {
 } from '../api';
 import mammoth from 'mammoth';
 import SalesStatusPill from '../components/SalesStatusPill.vue';
-import { finalizeContractBodyForPreview, buildContractPreviewPrintWindowHtml } from '../utils/contractPreviewHtml';
+import {
+  finalizeContractBodyForPreview,
+  printHtmlDocumentInHiddenIframe,
+  printContractPreviewFromHtml,
+  escapeHtmlText
+} from '../utils/contractPreviewHtml';
 import { orderFlowStatusZh } from '../utils/salesStatusDisplay';
 
 export default {
@@ -438,6 +586,7 @@ export default {
   components: { SalesStatusPill },
   data() {
     return {
+      /** 首屏前在 created 中按权限设为 tpl | list | flow，避免仅有模板/流程权时 v-model=list 无对应 pane */
       tab: 'list',
       templates: [],
       tplFilterQ: '',
@@ -460,10 +609,16 @@ export default {
       contractPreviewTitle: '合同预览',
       detailOpen: false,
       detail: null,
+      approvalFlowDrawerOpen: false,
+      approvalFlowLoading: false,
+      approvalFlowContract: null,
+      approvalFlowAudits: [],
+      urgeSubmitting: false,
       submitOpen: false,
       submitLoading: false,
       submitRow: null,
       submitReviewerId: null,
+      submitReviewerIds: [],
       submitDeptFilter: null,
       submitDeptTree: [],
       reviewers: [],
@@ -529,36 +684,117 @@ export default {
         COMPANY_NAME_ZH: c.company_name_zh != null ? String(c.company_name_zh) : ''
       };
       return finalizeContractBodyForPreview(this.detail.contract.body_html, this.detail.orders || [], vars);
-    }
+    },
+    /** 列表点击「审核状态」抽屉：审批时间轴 */
+    approvalFlowTimelineSteps() {
+      return this.buildApprovalTimelineSteps(this.approvalFlowAudits);
+    },
+    /** 合同详情内嵌审批时间轴 */
+    detailApprovalTimelineSteps() {
+      return this.buildApprovalTimelineSteps(this.detail?.audits);
+    },
+    ...mapState(useAuthStore, ['permissions', 'accountType'])
   },
   watch: {
+    /** Layout.getMe 在子组件 mounted 之后才执行；此处权限更新后补拉列表，否则永不发起 GET /contracts */
+    permissions: {
+      deep: true,
+      handler() {
+        if (this.$route.path !== '/sales/contracts') return;
+        if (!canAccessSalesContractWorkspace()) return;
+        this.loadContracts();
+      }
+    },
+    accountType() {
+      if (this.$route.path !== '/sales/contracts') return;
+      if (!canAccessSalesContractWorkspace()) return;
+      this.loadContracts();
+    },
+    tab(t) {
+      if (t === 'list' && this.$route.path === '/sales/contracts') this.loadContracts();
+    },
     '$route.query.tab'() {
       this.syncTabFromQuery();
+    },
+    '$route.query.customer_code'() {
+      this.tab = 'list';
+      this.clampActiveTab();
+      this.loadContracts();
     },
     '$route.path'(p) {
       if (p === '/sales/contracts') {
         this.syncTabFromQuery();
         this.loadTemplates();
+        this.loadContracts();
       }
     }
   },
-  mounted() {
-    if (perm('contract_management', 'contract_view')) this.tab = 'list';
+  created() {
+    if (canAccessSalesContractWorkspace()) this.tab = 'list';
     else if (perm('contract_management', 'template_manage')) this.tab = 'tpl';
     else if (perm('process_management', 'view_flow')) this.tab = 'flow';
     this.syncTabFromQuery();
+  },
+  async mounted() {
+    const auth = useAuthStore();
+    if (auth.token && !canAccessSalesContractWorkspace()) {
+      try {
+        const d = await getMe();
+        auth.applyMeResponse(d);
+      } catch {
+        /* ignore：仍可能由 Layout.getMe 稍后写入权限，靠 permissions 监听补拉 */
+      }
+    }
     this.loadTemplates();
-    this.loadContracts();
+    await this.loadContracts();
     this.loadFlow();
+  },
+  beforeUnmount() {
+    this.detailOpen = false;
+    this.approvalFlowDrawerOpen = false;
+    this.uploadDocOpen = false;
+    this.submitOpen = false;
+    this.reviewOpen = false;
+    this.contractPreviewOpen = false;
+    if (this.contractPreviewPdfUrl) {
+      try {
+        URL.revokeObjectURL(this.contractPreviewPdfUrl);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (this.contractPreviewImageUrl) {
+      try {
+        URL.revokeObjectURL(this.contractPreviewImageUrl);
+      } catch {
+        /* ignore */
+      }
+    }
   },
   methods: {
     orderFlowStatusZh,
     perm,
+    isSuperAdmin,
+    canAccessSalesContractWorkspace,
     syncTabFromQuery() {
       const t = this.$route.query.tab;
       if (t === 'tpl' && perm('contract_management', 'template_manage')) this.tab = 'tpl';
-      else if (t === 'list' && perm('contract_management', 'contract_view')) this.tab = 'list';
+      else if (t === 'list' && canAccessSalesContractWorkspace()) this.tab = 'list';
       else if (t === 'flow' && perm('process_management', 'view_flow')) this.tab = 'flow';
+      this.clampActiveTab();
+    },
+    clampActiveTab() {
+      const canTpl = perm('contract_management', 'template_manage');
+      const canList = canAccessSalesContractWorkspace();
+      const canFlow = perm('process_management', 'view_flow');
+      const ok =
+        (this.tab === 'tpl' && canTpl) ||
+        (this.tab === 'list' && canList) ||
+        (this.tab === 'flow' && canFlow);
+      if (ok) return;
+      if (canList) this.tab = 'list';
+      else if (canTpl) this.tab = 'tpl';
+      else if (canFlow) this.tab = 'flow';
     },
     goContractEditor(row) {
       if (!row?.id || !this.canEditContract(row)) return;
@@ -586,6 +822,180 @@ export default {
       }
       return '';
     },
+    auditActionLabel(action) {
+      const map = {
+        submit: '提交审核',
+        review: '审批处理',
+        urge_review: '催办',
+        withdraw_submit: '撤销审核',
+        create: '创建合同',
+        update: '修改合同'
+      };
+      return map[action] || action || '操作';
+    },
+    auditActionTagType(action) {
+      if (action === 'submit') return 'warning';
+      if (action === 'review') return 'primary';
+      return 'info';
+    },
+    auditResultLabel(result) {
+      if (result === 'approved') return '通过';
+      if (result === 'rejected') return '驳回';
+      return result || '';
+    },
+    auditResultTagType(result) {
+      if (result === 'approved') return 'success';
+      if (result === 'rejected') return 'danger';
+      return 'info';
+    },
+    /** 将审核日志转为纵向审批流程步骤（参考钉钉式时间轴） */
+    buildApprovalTimelineSteps(audits) {
+      const raw = Array.isArray(audits) ? [...audits] : [];
+      raw.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      return raw.map((a, idx) => {
+        const timeText = this.$dt(a.created_at);
+        const rn = String(a.actor_real_name || '').trim();
+        const un = String(a.actor_username || '').trim();
+        const actorName = rn || un || '—';
+        const idKey = a.id != null ? String(a.id) : `idx-${idx}`;
+        const comment = String(a.comment_text || '').trim();
+        if (a.action === 'urge_review') {
+          return {
+            key: `urge-${idKey}`,
+            stepTitle: '催办',
+            actorName,
+            timeText,
+            statusText: '已提醒审批人',
+            statusTextClass: 'approval-flow-status-text--warn',
+            dotClass: 'approval-flow-dot--warn',
+            opinionLabel: '说明',
+            opinionText: comment
+          };
+        }
+        if (a.action === 'submit') {
+          return {
+            key: `submit-${idKey}`,
+            stepTitle: '提交申请',
+            actorName,
+            timeText,
+            statusText: '发起审批',
+            statusTextClass: 'approval-flow-status-text--success',
+            dotClass: 'approval-flow-dot--primary',
+            opinionLabel: '说明',
+            opinionText: comment
+          };
+        }
+        if (a.action === 'withdraw_submit') {
+          return {
+            key: `withdraw-${idKey}`,
+            stepTitle: '撤销申请',
+            actorName,
+            timeText,
+            statusText: '已退回草稿',
+            statusTextClass: 'approval-flow-status-text--warn',
+            dotClass: 'approval-flow-dot--warn',
+            opinionLabel: '说明',
+            opinionText: comment
+          };
+        }
+        if (a.action === 'review') {
+          const rejected = a.result === 'rejected';
+          const isChainStep =
+            !rejected &&
+            comment &&
+            (comment.includes('流转至') ||
+              (comment.includes('第 ') && comment.includes('位审批通过')));
+          return {
+            key: `review-${idKey}`,
+            stepTitle: '审批节点',
+            actorName,
+            timeText,
+            statusText: rejected ? '审批不通过' : isChainStep ? '通过（待后续节点）' : '通过',
+            statusTextClass: rejected ? 'approval-flow-status-text--danger' : 'approval-flow-status-text--success',
+            dotClass: rejected ? 'approval-flow-dot--danger' : 'approval-flow-dot--primary',
+            opinionLabel: '审批意见',
+            opinionText: comment
+          };
+        }
+        return {
+          key: `other-${idKey}`,
+          stepTitle: this.auditActionLabel(a.action),
+          actorName,
+          timeText,
+          statusText: a.result ? this.auditResultLabel(a.result) : '—',
+          statusTextClass: 'approval-flow-status-text--muted',
+          dotClass: 'approval-flow-dot--muted',
+          opinionLabel: '备注',
+          opinionText: comment
+        };
+      });
+    },
+    canUrgeContractReviewer(c) {
+      if (!c) return false;
+      if (c.status !== 'pending_review') return false;
+      const rid = c.reviewer_user_id;
+      if (rid == null || rid === '' || !Number(rid)) return false;
+      if (!perm('contract_management', 'contract_submit')) return false;
+      const uid = this.myUserId();
+      if (uid != null && Number(rid) === Number(uid)) return false;
+      if (isSuperAdmin()) return true;
+      return Number(c.created_by) === Number(uid);
+    },
+    async doUrgeReviewer(explicitId) {
+      const id = Number(explicitId ?? this.approvalFlowContract?.id ?? this.detail?.contract?.id);
+      if (!Number.isFinite(id) || id < 1) return;
+      try {
+        await this.$confirm(
+          '将向当前审批人发送站内信与企业微信提醒（对方须已绑定企业微信账号）。每人每合同 15 分钟内仅可催一次。',
+          '催一下',
+          { type: 'info', confirmButtonText: '发送', cancelButtonText: '取消' }
+        );
+      } catch {
+        return;
+      }
+      this.urgeSubmitting = true;
+      try {
+        await remindSalesContractReviewer(id);
+        this.$message.success('已发送催办');
+        const d = await getSalesContract(id);
+        if (this.approvalFlowDrawerOpen) {
+          this.approvalFlowContract = d.contract || null;
+          this.approvalFlowAudits = d.audits || [];
+        }
+        if (this.detailOpen && this.detail?.contract?.id === id) {
+          this.detail = d;
+        }
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '催办失败'));
+      } finally {
+        this.urgeSubmitting = false;
+      }
+    },
+    async openApprovalFlowDrawer(row) {
+      if (!row?.id) return;
+      this.approvalFlowDrawerOpen = true;
+      this.approvalFlowLoading = true;
+      this.approvalFlowContract = null;
+      this.approvalFlowAudits = [];
+      try {
+        const d = await getSalesContract(row.id);
+        this.approvalFlowContract = d.contract || null;
+        this.approvalFlowAudits = d.audits || [];
+      } catch {
+        this.$message.error('加载审批流程失败');
+        this.approvalFlowDrawerOpen = false;
+      } finally {
+        this.approvalFlowLoading = false;
+      }
+    },
+    openApprovalFlowDrawerFromDetail() {
+      const id = this.detail?.contract?.id;
+      if (!id) return;
+      this.approvalFlowContract = this.detail.contract;
+      this.approvalFlowAudits = this.detail.audits || [];
+      this.approvalFlowDrawerOpen = true;
+      this.approvalFlowLoading = false;
+    },
     myUserId() {
       const raw = localStorage.getItem('token');
       if (!raw) return null;
@@ -599,29 +1009,108 @@ export default {
       }
     },
     isMine(row) {
-      return row.created_by === this.myUserId();
+      const uid = this.myUserId();
+      if (uid == null || row?.created_by == null) return false;
+      return Number(row.created_by) === Number(uid);
     },
     isReviewer(row) {
-      return row.reviewer_user_id === this.myUserId();
+      const uid = this.myUserId();
+      if (uid == null || row?.reviewer_user_id == null) return false;
+      return Number(row.reviewer_user_id) === Number(uid);
+    },
+    /** 提交审核与撤销审核同一位置互斥：草稿/驳回可提交，待审且创建人（或超管）可撤销 */
+    contractSubmitToolbarAction(row) {
+      if (!row || !perm('contract_management', 'contract_submit')) return null;
+      if (row.status === 'pending_review' && (isSuperAdmin() || this.isMine(row))) return 'withdraw';
+      if ((row.status === 'draft' || row.status === 'rejected') && this.canEditContract(row)) return 'submit';
+      return null;
+    },
+    async confirmWithdrawContractReview(row) {
+      if (!row?.id) return;
+      try {
+        await this.$confirm(
+          '撤销后合同将退回草稿，当前审批人不再处理该申请。是否继续？',
+          '撤销审核',
+          { type: 'warning', confirmButtonText: '撤销', cancelButtonText: '取消' }
+        );
+      } catch {
+        return;
+      }
+      try {
+        await withdrawSalesContractReview(row.id);
+        this.$message.success('已撤销审核');
+        this.loadContracts();
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '撤销失败'));
+      }
     },
     canEditContract(row) {
       if (!row || !perm('contract_management', 'contract_edit')) return false;
       if (isSuperAdmin()) return true;
       if (!this.isMine(row)) return false;
-      return row.status === 'draft' || row.status === 'rejected';
+      if (row.status === 'draft' || row.status === 'rejected') return true;
+      if (row.status === 'approved' && perm('contract_management', 'contract_edit_approved')) return true;
+      return false;
     },
     canDeleteContract(row) {
       if (!row || !perm('contract_management', 'contract_delete')) return false;
       if (isSuperAdmin()) return true;
       if (!this.isMine(row)) return false;
-      return row.status === 'draft' || row.status === 'rejected';
+      if (row.status === 'draft' || row.status === 'rejected') return true;
+      if (row.status === 'approved' && perm('contract_management', 'contract_delete_approved')) return true;
+      return false;
+    },
+    isEditDisabled(row) {
+      if (!row) return false;
+      if (row.status === 'approved' && !this.canEditContract(row)) return true;
+      return false;
+    },
+    isDeleteDisabled(row) {
+      if (!row) return false;
+      if (row.status === 'approved' && !this.canDeleteContract(row)) return true;
+      return false;
     },
     contractRowSelectable(row) {
       return this.canDeleteContract(row);
     },
     reviewerOptionLabel(u) {
-      if (u.departmentNameZh) return `${u.username}（${u.departmentNameZh}）`;
-      return u.username;
+      const name = String(u?.displayName || u?.realName || u?.username || '').trim();
+      const account = String(u?.username || '').trim();
+      const dept = String(u?.departmentNameZh || '').trim();
+      const main = name || account || `用户#${u?.id ?? ''}`;
+      if (dept && account && account !== main) return `${main}（${account}｜${dept}）`;
+      if (dept) return `${main}（${dept}）`;
+      if (account && account !== main) return `${main}（${account}）`;
+      return main;
+    },
+    reviewerLabelById(id) {
+      const hit = (this.reviewers || []).find((u) => Number(u.id) === Number(id));
+      if (hit) return this.reviewerOptionLabel(hit);
+      return `用户 #${id}`;
+    },
+    addSubmitReviewer() {
+      const id = Number(this.submitReviewerId);
+      if (!Number.isFinite(id) || id < 1) return;
+      if (this.submitReviewerIds.includes(id)) {
+        this.$message.warning('该审批人已在流程中');
+        return;
+      }
+      this.submitReviewerIds.push(id);
+    },
+    moveSubmitReviewer(idx, delta) {
+      const to = idx + delta;
+      if (idx < 0 || idx >= this.submitReviewerIds.length) return;
+      if (to < 0 || to >= this.submitReviewerIds.length) return;
+      const next = [...this.submitReviewerIds];
+      const [cur] = next.splice(idx, 1);
+      next.splice(to, 0, cur);
+      this.submitReviewerIds = next;
+    },
+    removeSubmitReviewer(idx) {
+      if (idx < 0 || idx >= this.submitReviewerIds.length) return;
+      const next = [...this.submitReviewerIds];
+      next.splice(idx, 1);
+      this.submitReviewerIds = next;
     },
     async fetchSubmitReviewers() {
       try {
@@ -655,11 +1144,13 @@ export default {
       this.selectedContracts = rows || [];
     },
     async loadContracts() {
-      if (!perm('contract_management', 'contract_view')) return;
+      if (!canAccessSalesContractWorkspace()) return;
       try {
+        const cc = this.$route?.query?.customer_code;
         const d = await listSalesContracts({
           q: this.contractQ || undefined,
           status: this.contractStatus || undefined,
+          customer_code: cc || undefined,
           limit: this.contractPageSize,
           offset: (this.contractPage - 1) * this.contractPageSize
         });
@@ -673,9 +1164,10 @@ export default {
           this.$refs.contractsTableRef?.clearSelection?.();
         });
         this.selectedContracts = [];
-      } catch {
+      } catch (e) {
         this.contracts = [];
         this.contractTotal = 0;
+        this.$message.error(this.$apiUserMsg(e, '加载合同列表失败'));
       }
     },
     onContractSearch() {
@@ -803,86 +1295,42 @@ export default {
       }
     },
     printContractPreview() {
+      const docTitle = (this.contractPreviewTitle && String(this.contractPreviewTitle).trim()) || '合同打印';
       if (this.contractPreviewMode === 'pdf' && this.contractPreviewPdfUrl) {
         const w = window.open(this.contractPreviewPdfUrl, '_blank');
         if (!w) this.$message.warning('请允许弹窗后重试打印');
         return;
       }
       if (this.contractPreviewMode === 'docx' && this.contractPreviewDocxHtml) {
-        const w = window.open('', '_blank');
-        if (!w) {
-          this.$message.warning('浏览器阻止了弹窗，请允许后重试');
-          return;
-        }
         const docHtml = this.contractPreviewDocxHtml;
-        w.document.open();
-        w.document.write(
-          `<!DOCTYPE html><html><head><meta charset="utf-8"><title>打印</title><style>
+        const full = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtmlText(
+          docTitle
+        )}</title><style>
           body{margin:0;padding:16px;font-family:SimSun,宋体,Segoe UI,sans-serif;font-size:14px;line-height:1.65;color:#111;}
           table{border-collapse:collapse;} td,th{border:1px solid #ccc;padding:4px 8px;}
-          @media print{@page{margin:12mm;}body{padding:0;}}
-          </style></head><body>${docHtml}</body></html>`
-        );
-        w.document.close();
-        const triggerPrint = () => {
-          w.focus();
-          try {
-            w.print();
-          } catch {
-            /* ignore */
-          }
-        };
-        if (w.document.readyState === 'complete') triggerPrint();
-        else w.onload = triggerPrint;
+          @media print{@page{margin:0;}body{padding:12mm;}}
+          </style></head><body>${docHtml}</body></html>`;
+        printHtmlDocumentInHiddenIframe(full);
         return;
       }
       if (this.contractPreviewMode === 'image' && this.contractPreviewImageUrl) {
-        const w = window.open('', '_blank');
-        if (!w) {
-          this.$message.warning('浏览器阻止了弹窗，请允许后重试');
-          return;
-        }
         const src = this.contractPreviewImageUrl;
-        w.document.open();
-        w.document.write(
-          `<!DOCTYPE html><html><head><meta charset="utf-8"><title>打印</title><style>
+        const srcEsc = String(src)
+          .replace(/&/g, '&amp;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+        const full = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtmlText(
+          docTitle
+        )}</title><style>
           body{margin:0;text-align:center;padding:12px;} img{max-width:100%;height:auto;}
-          @media print{@page{margin:10mm;} body{padding:0;} img{max-width:100%;}}
-          </style></head><body><img src="${src}" alt="" /></body></html>`
-        );
-        w.document.close();
-        const triggerPrint = () => {
-          w.focus();
-          try {
-            w.print();
-          } catch {
-            /* ignore */
-          }
-        };
-        if (w.document.readyState === 'complete') triggerPrint();
-        else w.onload = triggerPrint;
+          @media print{@page{margin:0;} body{padding:10mm;} img{max-width:100%;}}
+          </style></head><body><img src="${srcEsc}" alt="" /></body></html>`;
+        printHtmlDocumentInHiddenIframe(full);
         return;
       }
       const html = this.contractPreviewHtml;
       if (!html) return;
-      const w = window.open('', '_blank');
-      if (!w) {
-        this.$message.warning('浏览器阻止了弹窗，请允许后重试');
-        return;
-      }
-      w.document.open();
-      w.document.write(buildContractPreviewPrintWindowHtml(html, ''));
-      w.document.close();
-      const triggerPrint = () => {
-        w.focus();
-        try {
-          w.print();
-        } catch {
-          /* ignore */
-        }
-      };
-      if (w.document.readyState === 'complete') triggerPrint();
-      else w.onload = triggerPrint;
+      printContractPreviewFromHtml(html, docTitle);
     },
     async loadFlow() {
       if (!perm('process_management', 'view_flow')) return;
@@ -995,6 +1443,7 @@ export default {
     async openSubmit(row) {
       this.submitRow = row;
       this.submitReviewerId = null;
+      this.submitReviewerIds = [];
       this.submitDeptFilter = null;
       try {
         if (!this.submitDeptTree.length) {
@@ -1008,13 +1457,18 @@ export default {
       this.submitOpen = true;
     },
     async doSubmit() {
-      if (!this.submitReviewerId) {
-        this.$message.warning('请选择审核人');
+      if (!this.submitReviewerIds.length && this.submitReviewerId) {
+        this.addSubmitReviewer();
+      }
+      if (!this.submitReviewerIds.length) {
+        this.$message.warning('请至少添加 1 位审批人');
         return;
       }
       this.submitLoading = true;
       try {
-        await submitSalesContract(this.submitRow.id, { reviewer_user_id: this.submitReviewerId });
+        await submitSalesContract(this.submitRow.id, {
+          reviewer_user_ids: this.submitReviewerIds
+        });
         this.$message.success('已提交');
         this.submitOpen = false;
         this.loadContracts();
@@ -1195,18 +1649,86 @@ export default {
 .contract-preview-dialog-inner {
   min-height: 50vh;
 }
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+:deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
+}
+:deep(.el-button + .el-button) {
+  margin-left: 8px;
+}
 .contract-preview-html {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 12px;
+  padding: 24px 32px;
   max-height: 70vh;
   overflow: auto;
-  font-size: 13px;
+  font-family: FangSong_GB2312, 仿宋_GB2312, 仿宋, FangSong;
+  font-size: 16px;
   line-height: 1.5;
+  color: #000;
+  text-align: justify;
+}
+.contract-preview-html :deep(h1),
+.contract-preview-html :deep(h2),
+.contract-preview-html :deep(h3),
+.contract-preview-html :deep(.contract-title) {
+  font-family: FZXiaoBiaoSong-S05, FZXiaoBiaoSong, 方正小标宋简体, 方正小标宋, 方正小标宋_GBK, FZShuSong_GB2312, SimSun;
+  font-size: 22px;
+  font-weight: normal;
+  text-align: center;
+  letter-spacing: 2px;
+}
+.contract-preview-html :deep(p) {
+  text-indent: 2em;
+  margin: 0.5em 0;
 }
 .contract-preview-html :deep(table) {
   border-collapse: collapse;
   width: 100%;
+}
+.contract-preview-html :deep(.contract-header-meta) {
+  width: auto;
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  border: none;
+}
+.contract-preview-html :deep(.contract-header-meta th),
+.contract-preview-html :deep(.contract-header-meta td) {
+  border: none;
+  text-align: left;
+  vertical-align: top;
+}
+.contract-preview-html :deep(th),
+.contract-preview-html :deep(td) {
+  border: 1px solid #000;
+  padding: 6px 8px;
+  text-align: center;
+  font-size: 16px;
+}
+.contract-preview-html :deep(.party-table) {
+  page-break-inside: avoid;
+  break-inside: avoid;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.contract-preview-html :deep(.party-table tr) {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.contract-preview-html :deep(.party-table td) {
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.35;
+  padding: 5px 8px;
+}
+.contract-preview-html :deep(.party-table .party-col-title) {
+  text-align: center;
+  font-weight: 700;
+  margin-bottom: 4px;
+  display: block;
 }
 .contract-preview-docx {
   border: 1px solid #e5e7eb;
@@ -1252,12 +1774,35 @@ export default {
   color: #64748b;
   letter-spacing: 0.02em;
 }
+.meta-status-pill-hit {
+  display: inline-flex;
+  cursor: pointer;
+  border-radius: 10px;
+  outline: none;
+}
+.meta-status-pill-hit:focus-visible {
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-5);
+}
 .contracts-status-cell {
   display: flex;
   justify-content: center;
   align-items: center;
   width: 100%;
   padding: 2px 0;
+}
+.contracts-status-cell--flow {
+  cursor: pointer;
+  border-radius: 10px;
+  outline: none;
+}
+.contracts-status-cell--flow:hover :deep(.sales-status-pill) {
+  filter: brightness(0.97);
+}
+.contracts-status-cell--flow:focus-visible {
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-5);
+}
+.print-tooltip-trigger {
+  display: inline-block;
 }
 .html-preview {
   border: 1px solid #eee;
@@ -1269,6 +1814,164 @@ export default {
 .sub {
   font-weight: 600;
   margin: 12px 0 8px;
+}
+.approval-flow-panel {
+  padding-top: 4px;
+}
+.approval-flow-drawer-inner {
+  min-height: 120px;
+}
+.approval-flow-drawer-meta {
+  margin: -6px 0 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #ebeef5;
+}
+.approval-flow-drawer-meta-no {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+.approval-flow-drawer-meta-sub {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 6px;
+  line-height: 1.45;
+}
+.approval-flow-urge-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.approval-flow-urge-row .hint {
+  flex: 1;
+  min-width: 200px;
+}
+.approval-flow-urge-banner {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+.approval-flow-urge-banner .hint {
+  flex: 1;
+  min-width: 220px;
+  margin: 0;
+}
+.approval-flow-row {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+}
+.approval-flow-axis {
+  position: relative;
+  width: 12px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.approval-flow-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  z-index: 1;
+  box-sizing: border-box;
+}
+.approval-flow-dot--primary {
+  background: #409eff;
+  border: 2px solid #d9ecff;
+}
+.approval-flow-dot--danger {
+  background: #f56c6c;
+  border: 2px solid #fde2e2;
+}
+.approval-flow-dot--muted {
+  background: #c0c4cc;
+}
+.approval-flow-dot--warn {
+  background: #e6a23c;
+  border: 2px solid #faecd8;
+}
+.approval-flow-line {
+  flex: 1;
+  width: 2px;
+  min-height: 12px;
+  margin-top: 2px;
+  background: linear-gradient(180deg, #c6e2ff 0%, #dcdfe6 100%);
+  border-radius: 1px;
+}
+.approval-flow-main {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 22px;
+}
+.approval-flow-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+  letter-spacing: 0.02em;
+}
+.approval-flow-card {
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.approval-flow-user-line {
+  font-size: 14px;
+  color: #303133;
+  font-weight: 500;
+}
+.approval-flow-user-name {
+  word-break: break-word;
+}
+.approval-flow-time-row {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 6px;
+}
+.approval-flow-status-text {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.approval-flow-status-text--success {
+  color: #67c23a;
+}
+.approval-flow-status-text--danger {
+  color: #f56c6c;
+}
+.approval-flow-status-text--muted {
+  color: #909399;
+}
+.approval-flow-status-text--warn {
+  color: #e6a23c;
+}
+.approval-flow-opinion {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e4e7ed;
+}
+.approval-flow-opinion-label {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 6px;
+}
+.approval-flow-opinion-body {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 680px;
 }
 .flow-body {
   min-height: 120px;
@@ -1354,6 +2057,45 @@ export default {
   margin-bottom: 10px;
   line-height: 1.45;
 }
+.submit-approver-builder {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.submit-approver-list {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fafafa;
+}
+.submit-approver-title {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+.submit-approver-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.submit-approver-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.submit-approver-label {
+  font-size: 13px;
+}
+.submit-approver-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 @media (max-width: 992px) {
   .sales-contracts .toolbar {
     flex-direction: column;
@@ -1373,6 +2115,9 @@ export default {
   }
   .pagination-wrap {
     justify-content: center;
+  }
+  .submit-approver-builder {
+    flex-direction: column;
   }
 }
 </style>

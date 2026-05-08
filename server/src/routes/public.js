@@ -1,7 +1,13 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
+import { createReadStream } from 'fs';
+import fsPromises from 'fs/promises';
 import puppeteer from 'puppeteer';
 
 import { getPool } from '../db/pool.js';
+import { clientIp, logOperation } from '../lib/audit.js';
+import { verifyWecomContractReviewToken } from '../lib/wecomContractReviewToken.js';
+import { applyContractReview } from '../lib/contractReviewApply.js';
+import { resolveContractUploadFilePath } from '../lib/salesContractUploadPath.js';
 import {
   getCompanySettings,
   getReportCustomerPayload,
@@ -16,6 +22,170 @@ import {
 } from '../lib/salesOrderFields.js';
 
 export const router = Router();
+
+const wecomContractReviewForm = express.urlencoded({ extended: true, limit: '256kb' });
+
+function escapeHtmlContractReview(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** 合同审批页 CSP：允许展示模板 HTML（含样式/外链图片），禁止脚本与外链脚本 */
+const WECOM_CONTRACT_REVIEW_CSP = [
+  "default-src 'none'",
+  "img-src * data: blob: https: http:",
+  "font-src * data: https: http:",
+  "style-src 'unsafe-inline' https: http:",
+  "script-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "connect-src 'none'",
+  "frame-src 'self'"
+].join('; ');
+
+function contentDispositionInlineFilename(downloadName) {
+  const name = String(downloadName || 'file');
+  const ascii = name.replace(/[^\x20-\x7E]+/g, '_').slice(0, 180) || 'file';
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+function contentDispositionAttachmentFilename(downloadName) {
+  const name = String(downloadName || 'file');
+  const ascii = name.replace(/[^\x20-\x7E]+/g, '_').slice(0, 180) || 'file';
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+function wecomContractReviewIframePreviewableMime(mime) {
+  const m = String(mime || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  return m === 'application/pdf' || m.startsWith('image/');
+}
+
+/** 仅合同正文区（模板 HTML 或上传预览）；依赖 CSP 抑制脚本 */
+function buildWecomContractReviewDetailHtml(row, tokenPlain) {
+  const esc = escapeHtmlContractReview;
+  const docUrl = `/api/public/wecom-contract-review/document?t=${encodeURIComponent(tokenPlain)}`;
+  const docUrlAttr = esc(docUrl);
+  const dlUrl = `/api/public/wecom-contract-review/document?t=${encodeURIComponent(tokenPlain)}&dl=1`;
+  const dlUrlAttr = esc(dlUrl);
+
+  const src = String(row.contract_source || 'template').toLowerCase();
+
+  let bodyBlock = '';
+  if (src === 'upload') {
+    const fn = esc(row.document_original_filename || '合同附件');
+    const mime = row.document_mime_type || '';
+    if (wecomContractReviewIframePreviewableMime(mime)) {
+      bodyBlock = `<div class="doc-frame-wrap"><iframe class="doc-frame" title="合同文件" src="${docUrlAttr}"></iframe></div><p class="doc-hint">${fn}</p>`;
+    } else {
+      bodyBlock = `<p class="doc-fallback">本合同为上传文件（${fn}），手机内置预览可能不支持该格式。</p><a class="btn-dl" href="${dlUrlAttr}">下载查看全文</a>`;
+    }
+  } else {
+    const raw = row.body_html != null ? String(row.body_html) : '';
+    bodyBlock = raw.trim()
+      ? `<div class="contract-html">${raw}</div>`
+      : '<p class="muted">暂无合同正文</p>';
+  }
+
+  return `<div class="detail"><div class="contract-panel">${bodyBlock}</div></div>`;
+}
+
+async function loadWecomContractReviewDetailPayload(pool, contractId, tokenPlain) {
+  const [rows] = await pool.query(
+    `SELECT c.*, cu.customer_name
+     FROM sales_contracts c
+     INNER JOIN sales_customers cu ON cu.id = c.customer_id
+     WHERE c.id = ? LIMIT 1`,
+    [contractId]
+  );
+  const row = rows?.[0];
+  if (!row) return { row: null, detailHtml: '' };
+  const detailHtml = buildWecomContractReviewDetailHtml(row, tokenPlain);
+  return { row, detailHtml };
+}
+
+function wecomContractReviewResultHtml(ok, title, message) {
+  const safeTitle = escapeHtmlContractReview(title);
+  const safeMsg = escapeHtmlContractReview(message);
+  const icon = ok ? '✓' : '!';
+  const iconColor = ok ? '#16a34a' : '#dc2626';
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${safeTitle}</title>
+<style>body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f1f5f9;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:20px;box-sizing:border-box;}
+.card{background:#fff;border-radius:14px;padding:22px 18px 26px;max-width:440px;width:100%;box-shadow:0 4px 24px rgba(15,23,42,.08);}
+h1{font-size:17px;margin:0 0 12px;text-align:center;color:#0f172a;}
+.ic{text-align:center;font-size:36px;margin-bottom:8px;color:${iconColor};}
+p{margin:0;font-size:14px;line-height:1.65;color:#475569;text-align:center;white-space:pre-wrap;word-break:break-word;}
+.fine{margin-top:18px;font-size:12px;color:#94a3b8;text-align:center;line-height:1.45;}
+</style></head><body><div class="card"><div class="ic">${icon}</div><h1>${safeTitle}</h1><p>${safeMsg}</p><p class="fine">可关闭本页；必要时请在电脑端核对合同列表状态。</p></div></body></html>`;
+}
+
+function wecomContractReviewPageHtml({ tokenEsc, blockReason, canAct, detailHtml }) {
+  const reason = blockReason
+    ? `<p class="warn">${escapeHtmlContractReview(blockReason)}</p>`
+    : '';
+  const formSection = canAct
+    ? `<div class="approve-panel"><form method="post" action="/api/public/wecom-contract-review/submit" class="form">
+        <input type="hidden" name="t" value="${tokenEsc}" />
+        <label class="lab">驳回时请填写意见</label>
+        <textarea name="comment" rows="4" placeholder="通过可不填；驳回必填"></textarea>
+        <div class="btns">
+          <button type="submit" name="result" value="approved" class="btn btn-ok">通过</button>
+          <button type="submit" name="result" value="rejected" class="btn btn-no">驳回</button>
+        </div>
+      </form></div>`
+    : '';
+  const detail = detailHtml || '';
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>合同审批</title>
+<style>
+*{box-sizing:border-box;} html,body{max-width:100%;overflow-x:hidden;}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#e8f0fe;min-height:100vh;padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom));} 
+.wrap{width:100%;max-width:100%;margin:0 auto;} h1{font-size:17px;margin:0 0 10px;color:#1e293b;font-weight:700;}
+.warn{color:#b45309;font-size:14px;line-height:1.5;margin:0 0 12px;padding:10px 12px;background:#fffbeb;border-radius:10px;border:1px solid #fde68a;}
+.detail{margin-bottom:12px;width:100%;max-width:100%;}
+.contract-panel{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 8px;width:100%;max-width:100%;overflow-x:hidden;}
+.muted{color:#94a3b8;font-size:13px;margin:0;}
+.contract-html{font-size:13px;line-height:1.6;color:#1e293b;width:100%;max-width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%;}
+.contract-html img,svg{max-width:100%!important;height:auto!important;}
+.contract-html video{max-width:100%!important;height:auto!important;}
+.contract-html table{width:100%!important;max-width:100%!important;table-layout:fixed!important;border-collapse:collapse;}
+.contract-html colgroup col{width:auto!important;}
+.contract-html td,.contract-html th{
+  min-width:0;
+  max-width:100%;
+  word-break:break-word;
+  overflow-wrap:anywhere;
+  white-space:normal!important;
+  vertical-align:top;
+  padding:5px 4px!important;
+  font-size:inherit;
+}
+.contract-html td[style],.contract-html th[style]{width:auto!important;min-width:0!important;}
+.contract-html div,.contract-html section,.contract-html p{max-width:100%;}
+.contract-html pre{white-space:pre-wrap;word-break:break-word;max-width:100%;overflow-x:hidden;}
+.doc-frame-wrap{border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#fff;width:100%;max-width:100%;}
+.doc-frame{width:100%;max-width:100%;height:min(70vh,520px);border:none;display:block;}
+.doc-hint{font-size:12px;color:#64748b;margin:8px 0 0;text-align:center;}
+.doc-fallback{font-size:14px;color:#475569;line-height:1.55;margin:0 0 12px;}
+.btn-dl{display:block;text-align:center;padding:12px;border-radius:10px;background:#2563eb;color:#fff;text-decoration:none;font-weight:600;font-size:15px;}
+.approve-panel{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 12px;width:100%;max-width:100%;}
+.form{margin:0;} .lab{display:block;font-size:13px;color:#64748b;margin-bottom:8px;}
+textarea{width:100%;max-width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;resize:vertical;min-height:88px;}
+.btns{display:flex;gap:10px;margin-top:14px;} 
+.btn{flex:1;padding:13px 12px;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.btn-ok{background:#22c55e;color:#fff;} .btn-no{background:#fff;color:#dc2626;border:2px solid #fecaca;}
+.fine{font-size:12px;color:#94a3b8;line-height:1.45;margin-top:14px;text-align:center;}
+</style></head><body><div class="wrap"><h1>合同审批</h1>
+${detail}
+${reason}
+${formSection}
+<p class="fine">链接仅当前审批人可用，请勿转发。打开即代表您确认在企业微信内身份可信。</p>
+</div></body></html>`;
+}
 
 function mapActiveStamps(rows) {
   const out = {
@@ -586,6 +756,226 @@ router.get('/api/public/wecom-order-ship', async (req, res) => {
   }
 });
 
+/** 审批链接内嵌预览：上传类合同 PDF/图片等同源 iframe；dl=1 强制下载 */
+router.get('/api/public/wecom-contract-review/document', async (req, res) => {
+  try {
+    const token = String(req.query.t || '').trim();
+    const wantDl = String(req.query.dl || '').trim() === '1';
+    if (!token) return res.status(400).type('text').send('bad token');
+    let payload;
+    try {
+      payload = verifyWecomContractReviewToken(token);
+    } catch {
+      return res.status(403).type('text').send('forbidden');
+    }
+    const pool = getPool();
+    const [rows] = await pool.query(
+      `SELECT contract_source, document_stored_rel_path, document_mime_type, document_original_filename
+       FROM sales_contracts WHERE id = ? LIMIT 1`,
+      [payload.contractId]
+    );
+    const row = rows?.[0];
+    if (!row || String(row.contract_source || '').toLowerCase() !== 'upload') {
+      return res.status(404).type('text').send('not found');
+    }
+    const full = resolveContractUploadFilePath(row);
+    if (!full) return res.status(404).type('text').send('not found');
+    try {
+      await fsPromises.access(full);
+    } catch {
+      return res.status(404).type('text').send('missing');
+    }
+    const mime =
+      String(row.document_mime_type || 'application/octet-stream').split(';')[0].trim() ||
+      'application/octet-stream';
+    res.setHeader(
+      'Content-Disposition',
+      wantDl
+        ? contentDispositionAttachmentFilename(row.document_original_filename)
+        : contentDispositionInlineFilename(row.document_original_filename)
+    );
+    res.setHeader('Content-Type', mime);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    const stream = createReadStream(full);
+    stream.on('error', () => {
+      if (!res.headersSent) res.status(500).end();
+    });
+    stream.pipe(res);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-contract-review-document]', e?.message || e);
+    if (!res.headersSent) res.status(500).type('text').send('error');
+  }
+});
+
+/** 企业微信打开：合同审批页（JWT 绑定合同 + 当前审批人） */
+router.get('/api/public/wecom-contract-review', async (req, res) => {
+  try {
+    const token = String(req.query.t || '').trim();
+    if (!token) {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '无法打开', '链接无效。'));
+    }
+    let payload;
+    try {
+      payload = verifyWecomContractReviewToken(token);
+    } catch {
+      return res
+        .status(400)
+        .type('html')
+        .send(
+          wecomContractReviewResultHtml(
+            false,
+            '链接无效或已过期',
+            '请从企业微信通知重新进入，或联系同事重新提交审核。'
+          )
+        );
+    }
+    const pool = getPool();
+    const { row, detailHtml } = await loadWecomContractReviewDetailPayload(pool, payload.contractId, token);
+    if (!row) {
+      return res
+        .status(404)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '合同不存在', '记录可能已删除。'));
+    }
+    const tokenEsc = escapeHtmlContractReview(token);
+    res.setHeader('Content-Security-Policy', WECOM_CONTRACT_REVIEW_CSP);
+    if (String(row.status) !== 'pending_review') {
+      return res.type('html').send(
+        wecomContractReviewPageHtml({
+          tokenEsc,
+          blockReason: '当前合同不在「待审核」状态，无需在本页操作。',
+          canAct: false,
+          detailHtml
+        })
+      );
+    }
+    if (Number(row.reviewer_user_id) !== Number(payload.reviewerUserId)) {
+      return res.type('html').send(
+        wecomContractReviewPageHtml({
+          tokenEsc,
+          blockReason: '您不是当前环节的审批责任人，或审批已流转给他人。',
+          canAct: false,
+          detailHtml
+        })
+      );
+    }
+    return res.type('html').send(
+      wecomContractReviewPageHtml({
+        tokenEsc,
+        blockReason: '',
+        canAct: true,
+        detailHtml
+      })
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-contract-review]', e?.message || e);
+    return res
+      .status(500)
+      .type('html')
+      .send(wecomContractReviewResultHtml(false, '暂时无法打开', '服务器异常，请稍后在电脑端处理。'));
+  }
+});
+
+router.post('/api/public/wecom-contract-review/submit', wecomContractReviewForm, async (req, res) => {
+  try {
+    const token = String(req.body?.t || '').trim();
+    const result = String(req.body?.result || '').trim();
+    const comment = String(req.body?.comment || '');
+    if (!token) {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '提交失败', '缺少凭证，请从通知链接重新打开。'));
+    }
+    if (result !== 'approved' && result !== 'rejected') {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '提交失败', '请选择通过或驳回。'));
+    }
+    let payload;
+    try {
+      payload = verifyWecomContractReviewToken(token);
+    } catch {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '链接无效或已过期', '请从企业微信通知重新进入。'));
+    }
+    const pool = getPool();
+    const applyRes = await applyContractReview(pool, {
+      contractId: payload.contractId,
+      actorUserId: payload.reviewerUserId,
+      result,
+      comment
+    });
+    if (!applyRes.ok) {
+      const msg =
+        applyRes.code === 'COMMENT_REQUIRED'
+          ? '驳回须填写意见，请返回上一页修改后重试。'
+          : applyRes.code === 'INVALID_STATUS'
+            ? '当前状态不允许审批（可能已处理）。'
+            : applyRes.code === 'FORBIDDEN'
+              ? '无权操作（审批人或环节已变更）。'
+              : '操作失败，请稍后在电脑端处理。';
+      return res
+        .status(applyRes.httpStatus || 400)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '无法完成', msg));
+    }
+
+    let actorUsername = '';
+    const [ur] = await pool.query('SELECT username FROM users WHERE id = ? LIMIT 1', [payload.reviewerUserId]);
+    actorUsername = ur?.[0]?.username != null ? String(ur[0].username) : '';
+
+    await logOperation(pool, {
+      userId: payload.reviewerUserId,
+      username: actorUsername,
+      module: '销售合同',
+      action: '审核合同(企业微信)',
+      detail: {
+        contractId: payload.contractId,
+        result,
+        variant: applyRes.variant,
+        nextReviewerUserId: applyRes.nextReviewerUserId ?? null
+      },
+      success: true,
+      ip: clientIp(req),
+      userAgent: req.headers['user-agent'] || ''
+    });
+
+    if (applyRes.variant === 'progressed') {
+      return res
+        .type('html')
+        .send(
+          wecomContractReviewResultHtml(
+            true,
+            '已通过',
+            '本节点已通过，系统已通知下一审批人（站内信与企业微信）。'
+          )
+        );
+    }
+    const okTitle = result === 'approved' ? '审批完成' : '已驳回';
+    const okMsg =
+      result === 'approved'
+        ? '合同已标记为「已通过」。创建人将收到通知。'
+        : '合同已驳回，创建人将收到通知与驳回意见。';
+    return res.type('html').send(wecomContractReviewResultHtml(true, okTitle, okMsg));
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-contract-review-submit]', e?.message || e);
+    return res
+      .status(500)
+      .type('html')
+      .send(wecomContractReviewResultHtml(false, '暂时无法处理', '服务器异常，请稍后在电脑端审批。'));
+  }
+});
+
 function sendReportCustomerHtml(req, res) {
   res.type('html').send(`<!doctype html>
 <html lang="zh-CN">
@@ -653,7 +1043,7 @@ function sendReportCustomerHtml(req, res) {
       .meta-row-2 { display: flex; gap: 32px; margin-bottom: 16px; }
       .meta-pair { flex: 1; min-width: 0; }
       .meta-line { display: flex; align-items: flex-end; gap: 8px; }
-      .meta-label-side { flex: 0 0 auto; text-align: right; padding-bottom: 2px; max-width: 42%; }
+      .meta-label-side { flex: 0 0 110px; text-align: right; padding-bottom: 2px; }
       .meta-label-side .lab-cn { font-size: 15px; color: #222; line-height: 1.2; }
       .meta-label-side .lab-en { font-size: 11px; color: #666; line-height: 1.2; margin-top: 2px; }
       .meta-value-side {
@@ -736,20 +1126,40 @@ function sendReportCustomerHtml(req, res) {
         opacity: 0.9;
         pointer-events: none;
       }
+      .seal-footer.seal-on-label[src$=".svg"] {
+        width: 80px;
+        height: 80px;
+        object-fit: fill;
+      }
       .seal-footer.seal-on-label.seal-dept {
         max-width: 120px;
         max-height: 120px;
         opacity: 0.88;
       }
-      .td-seal-wrap { position: relative; min-height: 60px; vertical-align: middle !important; padding-right: 100px !important; }
-      /* 合格/复检章：限制最大尺寸，保持原始宽高比，不拉伸变形 */
+      .seal-footer.seal-on-label.seal-dept[src$=".svg"] {
+        width: 120px;
+        height: 120px;
+        object-fit: fill;
+      }
+      /* 结论/备注值格：仅定位，不改行高（不使用 min-height/flex 撑高） */
+      .td-seal-wrap {
+        position: relative;
+        vertical-align: middle !important;
+      }
+      .td-seal-inner {
+        box-sizing: border-box;
+      }
+      .td-seal-inner > span {
+        position: relative;
+        z-index: 1;
+      }
+      /* 合格/复检章：相对单元格绝对定位，不占流，不影响表格行高 */
       .td-seal-wrap img.seal-table {
         position: absolute;
-        right: 6px;
+        left: 50%;
         top: 50%;
-        transform: translateY(-50%);
-        left: auto;
-        margin: 0;
+        transform: translate(-50%, -50%);
+        z-index: 2;
         opacity: 0.9;
         width: auto;
         height: auto;
@@ -757,6 +1167,12 @@ function sendReportCustomerHtml(req, res) {
         max-height: 96px;
         object-fit: contain;
         object-position: center center;
+        pointer-events: none;
+      }
+      .td-seal-wrap img.seal-table[src$=".svg"] {
+        width: 96px;
+        height: 96px;
+        object-fit: fill;
       }
 
       /* 作废报告：印章在编号行正上方、右对齐、水平不倾斜 */
@@ -1024,6 +1440,12 @@ function sendReportCustomerHtml(req, res) {
         .wx-browser-guide {
           display: none !important;
         }
+        .td-seal-wrap img.seal-table {
+          position: absolute !important;
+          left: 50% !important;
+          top: 50% !important;
+          transform: translate(-50%, -50%) !important;
+        }
       }
     </style>
   </head>
@@ -1062,68 +1484,7 @@ function sendReportCustomerHtml(req, res) {
           <div class="report-title-en" id="reportTitleEn"></div>
         </div>
 
-        <div class="meta-rows">
-          <div class="meta-row-2">
-            <div class="meta-pair">
-              <div class="meta-line">
-                <div class="meta-label-side">
-                  <div class="lab-cn">产品名称</div>
-                  <div class="lab-en">Product Name</div>
-                </div>
-                <div class="meta-value-side" id="meta_product"></div>
-              </div>
-            </div>
-            <div class="meta-pair">
-              <div class="meta-line">
-                <div class="meta-label-side">
-                  <div class="lab-cn">包装规格</div>
-                  <div class="lab-en">Packing</div>
-                </div>
-                <div class="meta-value-side" id="meta_packing"></div>
-              </div>
-            </div>
-          </div>
-          <div class="meta-row-2">
-            <div class="meta-pair">
-              <div class="meta-line">
-                <div class="meta-label-side">
-                  <div class="lab-cn">本批数量</div>
-                  <div class="lab-en">Batch Weight</div>
-                </div>
-                <div class="meta-value-side" id="meta_batch_qty"></div>
-              </div>
-            </div>
-            <div class="meta-pair">
-              <div class="meta-line">
-                <div class="meta-label-side">
-                  <div class="lab-cn">生产批号</div>
-                  <div class="lab-en">Batch No.</div>
-                </div>
-                <div class="meta-value-side" id="meta_batch_no"></div>
-              </div>
-            </div>
-          </div>
-          <div class="meta-row-2">
-            <div class="meta-pair">
-              <div class="meta-line">
-                <div class="meta-label-side">
-                  <div class="lab-cn">检验日期</div>
-                  <div class="lab-en">Analysis Date</div>
-                </div>
-                <div class="meta-value-side" id="meta_analysis_date"></div>
-              </div>
-            </div>
-            <div class="meta-pair">
-              <div class="meta-line">
-                <div class="meta-label-side">
-                  <div class="lab-cn">出厂日期</div>
-                  <div class="lab-en">EX-mill Date</div>
-                </div>
-                <div class="meta-value-side" id="meta_ex_mill"></div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <div class="meta-rows" id="metaRows"></div>
 
         <table class="main-table">
           <thead>
@@ -1132,23 +1493,27 @@ function sendReportCustomerHtml(req, res) {
           <tbody id="items"></tbody>
           <tbody class="main-table-bottom">
             <tr>
-              <td colspan="3" class="cell-merged-label">
+              <td id="finalConclusionLabelCell" colspan="3" class="cell-merged-label">
                 检验结论
                 <div class="en">Test conclusion</div>
               </td>
               <td class="td-seal-wrap">
-                <span id="finalConclusionText" class="val-red"></span>
-                <img id="sealPass" class="seal seal-pass seal-table" style="display:none" alt="合格章" />
+                <div class="td-seal-inner">
+                  <span id="finalConclusionText" class="val-red"></span>
+                  <img id="sealPass" class="seal seal-pass seal-table" style="display:none" alt="合格章" />
+                </div>
               </td>
             </tr>
             <tr>
-              <td colspan="3" class="cell-merged-label">
+              <td id="remarksLabelCell" colspan="3" class="cell-merged-label">
                 备注
                 <div class="en">Remarks</div>
               </td>
               <td class="td-seal-wrap">
-                <span id="remarksText" class="val-red"></span>
-                <img id="sealRecheck" class="seal seal-recheck seal-table" style="display:none" alt="复检章" />
+                <div class="td-seal-inner">
+                  <span id="remarksText" class="val-red"></span>
+                  <img id="sealRecheck" class="seal seal-recheck seal-table" style="display:none" alt="复检章" />
+                </div>
               </td>
             </tr>
           </tbody>
@@ -1565,31 +1930,77 @@ function sendReportCustomerHtml(req, res) {
 
           document.getElementById('m_reportNo').textContent = r.reportNo || '';
 
-          const prodBi = fieldBi(fields, 'product_name');
-          const prodZh = (toBi(prodBi).zh || r.productName || '').trim();
-          document.getElementById('meta_product').textContent = prodZh || '';
-
-          document.getElementById('meta_packing').innerHTML = renderZhOnly(fieldBi(fields, 'packing'));
-          document.getElementById('meta_batch_qty').innerHTML = renderZhOnly(fieldBi(fields, 'batch_weight'));
-
-          const batchBi = fieldBi(fields, 'batch_no');
-          const bZh = (toBi(batchBi).zh || r.batchNo || '').trim();
-          document.getElementById('meta_batch_no').textContent = bZh || '';
-
-          document.getElementById('meta_analysis_date').innerHTML = renderZhOnly(fieldBi(fields, 'analysis_date'));
-          document.getElementById('meta_ex_mill').innerHTML = renderZhOnly(fieldBi(fields, 'ex_mill_date'));
-
           const appliedSeals = data.appliedSeals || {};
 
           const tableField =
             fields.find((f) => f.fieldKey === 'inspection_table' && f.fieldType === 'table') ||
             fields.find((f) => f.fieldType === 'table');
+
+          const metaRows = document.getElementById('metaRows');
+          if (metaRows) {
+            const FIXED_FIELD_CONFIG = [
+              { key: 'product_name', labelZh: '产品名称', labelEn: 'Product Name', fallback: function(r) { return r.productName; } },
+              { key: 'packing', labelZh: '包装规格', labelEn: 'Packing', fallback: null },
+              { key: 'batch_weight', labelZh: '本批数量', labelEn: 'Batch Weight', fallback: null },
+              { key: 'batch_no', labelZh: '生产批号', labelEn: 'Batch No.', fallback: function(r) { return r.batchNo; } },
+              { key: 'analysis_date', labelZh: '检验日期', labelEn: 'Analysis Date', fallback: null },
+              { key: 'ex_mill_date', labelZh: '出厂日期', labelEn: 'EX-mill Date', fallback: null }
+            ];
+
+            var allDisplayFields = [];
+            FIXED_FIELD_CONFIG.forEach(function(config) {
+              var f = fields.find(function(field) { return field.fieldKey === config.key; });
+              if (f) {
+                var bi = toBi(parseMaybeJson(f.fieldValue));
+                var val = bi.zh || '';
+                if (config.fallback && !val.trim()) {
+                  val = config.fallback(r) || '';
+                }
+                allDisplayFields.push({ labelZh: config.labelZh, labelEn: config.labelEn, value: val, bi: bi });
+              }
+            });
+
+            var customFields = fields.filter(
+              function(f) { return f !== tableField && !LAYOUT_KEYS.has(String(f.fieldKey || '')); }
+            );
+            customFields.forEach(function(cf) {
+              var cv = parseMaybeJson(cf.fieldValue);
+              var cbi = toBi(cv);
+              allDisplayFields.push({ labelZh: cf.fieldLabel || cf.fieldKey || '', labelEn: cf.fieldLabelEn || '', value: cbi.zh || '', bi: cbi });
+            });
+
+            for (var i = 0; i < allDisplayFields.length; i += 2) {
+              var crow = document.createElement('div');
+              crow.className = 'meta-row-2';
+              for (var j = i; j < Math.min(i + 2, allDisplayFields.length); j++) {
+                var ff = allDisplayFields[j];
+                var pair = document.createElement('div');
+                pair.className = 'meta-pair';
+                pair.innerHTML =
+                  '<div class="meta-line">' +
+                    '<div class="meta-label-side">' +
+                      '<div class="lab-cn">' + esc(ff.labelZh) + '</div>' +
+                      (ff.labelEn ? '<div class="lab-en">' + esc(ff.labelEn) + '</div>' : '') +
+                    '</div>' +
+                    '<div class="meta-value-side">' + renderZhOnly(ff.bi) + '</div>' +
+                  '</div>';
+                crow.appendChild(pair);
+              }
+              if (Math.min(i + 2, allDisplayFields.length) - i < 2) {
+                var placeholder = document.createElement('div');
+                placeholder.className = 'meta-pair';
+                placeholder.style.visibility = 'hidden';
+                crow.appendChild(placeholder);
+              }
+              metaRows.appendChild(crow);
+            }
+          }
           let itemRows = [];
           let colLabels = [
-            { zh: '检验项目', en: 'Test item' },
-            { zh: '单位', en: 'Unit' },
-            { zh: '标准值', en: 'Normal value' },
-            { zh: '检测值', en: 'Test value' }
+            { key: 'item', zh: '检验项目', en: 'Test item' },
+            { key: 'unit', zh: '单位', en: 'Unit' },
+            { key: 'standard', zh: '标准值', en: 'Normal value' },
+            { key: 'result', zh: '检测值', en: 'Test value' }
           ];
           if (tableField && tableField.fieldValue) {
             try {
@@ -1607,18 +2018,38 @@ function sendReportCustomerHtml(req, res) {
               else if (parsed?.items) itemRows = parsed.items;
               else if (parsed?.tests) itemRows = parsed.tests;
               else itemRows = [];
-              if (parsed?.columnLabels && parsed.columnLabels.length === 4) {
-                colLabels = parsed.columnLabels.map((c) => ({
+              if (parsed?.columnLabels && parsed.columnLabels.length >= 4) {
+                const legacyKeys = ['item', 'unit', 'standard', 'result', 'basis'];
+                colLabels = parsed.columnLabels.map((c, idx) => ({
+                  key: typeof c === 'object' && c?.key ? String(c.key) : legacyKeys[idx] || ('col_' + idx),
                   zh: typeof c === 'object' ? c.zh ?? '' : String(c),
                   en: typeof c === 'object' ? c.en ?? '' : ''
                 }));
+              }
+              const hasBasisByLabel = colLabels.some((c) => {
+                const zh = String(c?.zh || '');
+                const en = String(c?.en || '');
+                const key = String(c?.key || '');
+                return key === 'basis' || zh.includes('检验依据') || /basis|reference/i.test(en);
+              });
+              function basisHasText(v) {
+                if (v == null) return false;
+                if (typeof v === 'string') return v.trim() !== '';
+                if (typeof v === 'object') return !!(String(v.zh || '').trim() || String(v.en || '').trim() || String(v.cn || '').trim());
+                return false;
+              }
+              const hasBasisByRows = (itemRows || []).some((it) => it && (basisHasText(it.basis) || basisHasText(it.reference)));
+              const hasBasisByFlag = parsed?.hasBasisColumn === true;
+              if (!hasBasisByLabel && (hasBasisByRows || hasBasisByFlag)) {
+                colLabels.push({ key: 'basis', zh: '单项检验依据', en: 'Inspection basis' });
               }
             } catch (e) {
               itemRows = [];
             }
           }
 
-          const colWidths = ['34%', '12%', '27%', '27%'];
+          const colWidths = colLabels.length >= 5 ? ['28%', '10%', '20%', '20%', '22%'] : ['34%', '12%', '27%', '27%'];
+          const mergedColspan = Math.max(1, colLabels.length - 1);
           const headHtml = colLabels
             .map(
               (c, i) =>
@@ -1634,34 +2065,41 @@ function sendReportCustomerHtml(req, res) {
             )
             .join('');
           document.getElementById('itemHead').innerHTML = headHtml;
+          const finalConclusionLabelCell = document.getElementById('finalConclusionLabelCell');
+          const remarksLabelCell = document.getElementById('remarksLabelCell');
+          if (finalConclusionLabelCell) finalConclusionLabelCell.colSpan = mergedColspan;
+          if (remarksLabelCell) remarksLabelCell.colSpan = mergedColspan;
 
           const itemHtml = (itemRows || [])
             .map((it) => {
-              const item = it.item ?? it.name ?? it.project ?? '';
-              const unit = it.unit ?? it.unitName ?? it.units ?? '';
-              const standard = it.standard ?? it.spec ?? '';
-              const result = it.result ?? it.value ?? '';
+              const valueByKey = (key, colIndex) => {
+                const fallbackByIndex = [
+                  it.item ?? it.name ?? it.project ?? '',
+                  it.unit ?? it.unitName ?? it.units ?? '',
+                  it.standard ?? it.spec ?? '',
+                  it.result ?? it.value ?? '',
+                  it.basis ?? it.reference ?? ''
+                ];
+                if (key && it[key] != null) return it[key];
+                return fallbackByIndex[colIndex] ?? '';
+              };
+              const cellHtml = colLabels
+                .map((c, idx) => {
+                  const val = valueByKey(c.key, idx);
+                  if (idx === 0) return '<td>' + renderItemCol(val) + '</td>';
+                  return '<td>' + renderZhOnly(val) + '</td>';
+                })
+                .join('');
               return (
                 '<tr>' +
-                '<td>' +
-                renderItemCol(item) +
-                '</td>' +
-                '<td>' +
-                renderZhOnly(unit) +
-                '</td>' +
-                '<td>' +
-                renderZhOnly(standard) +
-                '</td>' +
-                '<td>' +
-                renderZhOnly(result) +
-                '</td>' +
+                cellHtml +
                 '</tr>'
               );
             })
             .join('');
           document.getElementById('items').innerHTML =
             itemHtml ||
-            '<tr><td colspan="4" class="muted" style="text-align:center;padding:16px">（未配置检测项目表，请在后台为该报告添加表格类字段）</td></tr>';
+            '<tr><td colspan="' + colLabels.length + '" class="muted" style="text-align:center;padding:16px">（未配置检测项目表，请在后台为该报告添加表格类字段）</td></tr>';
 
           const tcVal = fieldBi(fields, 'test_conclusion');
           const tcBi = toBi(tcVal);
@@ -1679,29 +2117,8 @@ function sendReportCustomerHtml(req, res) {
             ? renderRedZhOnly(remVal)
             : '<span class="val-red">&nbsp;</span>';
 
-          const otherFields = fields.filter(
-            (f) => f !== tableField && !LAYOUT_KEYS.has(String(f.fieldKey || ''))
-          );
-          const otherHtml = otherFields
-            .map((f) => {
-              const labelZh = f.fieldLabel || f.fieldKey || '';
-              const labelEn = f.fieldLabelEn || '';
-              const v = parseMaybeJson(f.fieldValue);
-              const valueHtml = renderZhOnly(v);
-              const labelHtml =
-                '<div>' + esc(labelZh) + '</div>' +
-                '<div style="font-size:12px;color:#666;margin-top:2px">' + esc(labelEn) + '</div>';
-              return '<tr><td>' + labelHtml + '</td><td>' + valueHtml + '</td></tr>';
-            })
-            .join('');
-          const sec = document.getElementById('sectionOthers');
-          if (otherHtml) {
-            document.getElementById('others').innerHTML = otherHtml;
-            sec.style.display = '';
-          } else {
-            document.getElementById('others').innerHTML = '';
-            sec.style.display = 'none';
-          }
+          const secOthers = document.getElementById('sectionOthers');
+          if (secOthers) secOthers.style.display = 'none';
 
           if (appliedSeals.department_qc?.imageUrl && sealDepartment) {
             sealDepartment.src = appliedSeals.department_qc.imageUrl;

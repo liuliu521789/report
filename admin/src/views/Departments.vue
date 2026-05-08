@@ -1,7 +1,7 @@
 <template>
   <div class="dept-page">
     <div class="toolbar">
-      <el-button type="primary" @click="openCreate">新增部门</el-button>
+      <el-button type="primary" @click="openCreate" icon=Plus>新增部门</el-button>
       <span class="hint"
         >多级组织架构；删除前请先移除子部门，并将成员调离本部门（员工账号中修改所属部门）。</span
       >
@@ -19,8 +19,8 @@
       <el-table-column prop="sortOrder" label="排序" width="80" />
       <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
-          <el-button link @click="openEdit(row)">编辑</el-button>
-          <el-button link type="danger" @click="onDelete(row)">删除</el-button>
+          <el-button link @click="openEdit(row)" icon=Edit>编辑</el-button>
+          <el-button link type="danger" @click="onDelete(row)" icon=Delete>删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -32,8 +32,8 @@
         <div class="mobile-line"><span>ID</span><span>{{ row.id }}</span></div>
         <div class="mobile-line"><span>人数</span><span>{{ row.memberCount }}</span></div>
         <div class="mobile-actions">
-          <el-button size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="onDelete(row)">删除</el-button>
+          <el-button size="small" @click="openEdit(row)" icon=Edit>编辑</el-button>
+          <el-button size="small" type="danger" @click="onDelete(row)" icon=Delete>删除</el-button>
         </div>
       </div>
       <el-empty v-if="!items.length && !loading" description="暂无部门" />
@@ -54,8 +54,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
+        <el-button @click="dialog = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submit" icon=Check>保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -266,5 +266,11 @@ export default {
   .dept-form :deep(.el-form-item__content) {
     margin-left: 0 !important;
   }
+}
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+:deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
 }
 </style>

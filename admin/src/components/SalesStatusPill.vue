@@ -1,13 +1,13 @@
 <template>
-  <div class="sales-status-wrap" :class="wrapModifierClass">
+  <div class="sales-status-wrap" :class="[wrapModifierClass, clickable ? 'sales-status-wrap--clickable' : '']">
     <el-button
       class="sales-status-pill"
       :class="pillModifierClass"
       :type="meta.type"
       size="small"
       plain
-      tabindex="-1"
-      @click.prevent.stop
+      :tabindex="clickable ? 0 : -1"
+      @click="onPillClick"
     >
       <el-icon class="sales-status-pill__icon">
         <component :is="meta.icon" />
@@ -45,8 +45,14 @@ export default {
     rejectReason: {
       type: String,
       default: ''
+    },
+    /** 为 true 时可点击（例如打开审批流程），并向父组件抛出 click */
+    clickable: {
+      type: Boolean,
+      default: false
     }
   },
+  emits: ['click'],
   computed: {
     meta() {
       if (this.kind === 'order') return orderStatusDisplay(this.orderRow || {});
@@ -60,6 +66,16 @@ export default {
       if (this.kind !== 'contract') return '';
       const s = (this.status || 'draft').replace(/[^a-z0-9_]/gi, '');
       return `sales-status-pill--contract sales-status-pill--c-${s || 'draft'}`;
+    }
+  },
+  methods: {
+    onPillClick(e) {
+      if (this.clickable) {
+        this.$emit('click', e);
+        return;
+      }
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
     }
   }
 };
@@ -78,6 +94,16 @@ export default {
   pointer-events: none;
   cursor: default;
   max-width: 100%;
+}
+
+.sales-status-wrap--clickable .sales-status-pill {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.sales-status-wrap--clickable .sales-status-pill:focus-visible {
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: 2px;
 }
 
 .sales-status-pill__icon {

@@ -28,7 +28,49 @@
           <el-input-number v-model="form.errorLogRetentionDays" :min="30" :max="3650" />
         </el-form-item>
         <el-form-item>
+          <el-button type="primary" :loading="saving" @click="save" icon=Check>保存</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
+    <el-card v-loading="loading" style="margin-top: 16px">
+      <template #header>
+        <div>系统备份配置（写入服务端 .env）</div>
+      </template>
+      <el-form v-if="backupForm" :model="backupForm" label-width="180px" class="security-form">
+        <el-form-item label="启用定时备份">
+          <el-switch v-model="backupForm.backupEnabled" />
+        </el-form-item>
+        <el-form-item label="备份Cron表达式">
+          <el-input v-model="backupForm.backupCron" placeholder="例如：0 2 * * *" />
+          <span class="hint">示例：`0 2 * * *` 表示每天凌晨 2 点</span>
+        </el-form-item>
+        <el-form-item label="备份保留天数">
+          <el-input-number v-model="backupForm.backupRetentionDays" :min="1" :max="3650" />
+        </el-form-item>
+        <el-form-item label="失败告警Webhook">
+          <el-input v-model="backupForm.backupAlertWebhookUrl" placeholder="企业微信机器人 webhook，可留空" />
+        </el-form-item>
+        <el-form-item label="告警级别阈值">
+          <el-select v-model="backupForm.backupAlertLevel" style="width: 220px">
+            <el-option label="关闭（不发机器人）" value="off" />
+            <el-option label="错误及以上（推荐）" value="error" />
+            <el-option label="仅严重" value="critical" />
+          </el-select>
+          <span class="hint">当前备份失败属于 error 级别</span>
+        </el-form-item>
+        <el-form-item label="同类告警限频(分钟)">
+          <el-input-number v-model="backupForm.backupAlertDedupMinutes" :min="0" :max="1440" />
+          <span class="hint">0 表示不去重；默认 10 分钟同类告警只发一次</span>
+        </el-form-item>
+        <el-form-item label="备份加密密钥">
+          <el-input v-model="backupForm.backupEncryptionKey" show-password placeholder="建议使用高强度随机字符串" />
+        </el-form-item>
+        <el-form-item label="旧密钥(轮换过渡)">
+          <el-input v-model="backupForm.backupEncryptionKeyOld" placeholder="多个用英文逗号分隔；平时可留空" />
+        </el-form-item>
+        <el-form-item>
           <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+          <span class="hint">保存后建议重启服务使配置立即生效</span>
         </el-form-item>
       </el-form>
     </el-card>
@@ -45,7 +87,8 @@ export default {
       loading: false,
       saving: false,
       form: null,
-      bannedText: ''
+      bannedText: '',
+      backupForm: null
     };
   },
   async mounted() {
@@ -55,9 +98,20 @@ export default {
     async load() {
       this.loading = true;
       try {
-        const { settings } = await getSecuritySettings();
+        const result = await getSecuritySettings();
+        const settings = result?.settings || {};
         this.form = { ...settings };
         this.bannedText = (settings.bannedPasswords || []).join('\n');
+        this.backupForm = {
+          backupEnabled: !!result?.backupConfig?.backupEnabled,
+          backupCron: result?.backupConfig?.backupCron || '0 2 * * *',
+          backupRetentionDays: Number(result?.backupConfig?.backupRetentionDays || 30),
+          backupAlertWebhookUrl: result?.backupConfig?.backupAlertWebhookUrl || '',
+          backupAlertLevel: result?.backupConfig?.backupAlertLevel || 'error',
+          backupAlertDedupMinutes: Number(result?.backupConfig?.backupAlertDedupMinutes ?? 10),
+          backupEncryptionKey: result?.backupConfig?.backupEncryptionKey || '',
+          backupEncryptionKeyOld: result?.backupConfig?.backupEncryptionKeyOld || ''
+        };
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '加载失败'));
       } finally {
@@ -71,12 +125,24 @@ export default {
         .filter(Boolean);
       this.saving = true;
       try {
-        const { settings } = await updateSecuritySettings({
+        await updateSecuritySettings({
           ...this.form,
-          bannedPasswords
+          bannedPasswords,
+          backupConfig: { ...this.backupForm }
         });
-        this.form = { ...settings };
-        this.bannedText = (settings.bannedPasswords || []).join('\n');
+        const saved = await getSecuritySettings();
+        this.form = { ...saved.settings };
+        this.bannedText = (saved.settings.bannedPasswords || []).join('\n');
+        this.backupForm = {
+          backupEnabled: !!saved?.backupConfig?.backupEnabled,
+          backupCron: saved?.backupConfig?.backupCron || '0 2 * * *',
+          backupRetentionDays: Number(saved?.backupConfig?.backupRetentionDays || 30),
+          backupAlertWebhookUrl: saved?.backupConfig?.backupAlertWebhookUrl || '',
+          backupAlertLevel: saved?.backupConfig?.backupAlertLevel || 'error',
+          backupAlertDedupMinutes: Number(saved?.backupConfig?.backupAlertDedupMinutes ?? 10),
+          backupEncryptionKey: saved?.backupConfig?.backupEncryptionKey || '',
+          backupEncryptionKeyOld: saved?.backupConfig?.backupEncryptionKeyOld || ''
+        };
         this.$message.success('已保存');
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '保存失败'));

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { getPool } from '../db/pool.js';
 import { requireAnyPermissionPairs, requireAuth, requirePermission, requireSuperAdmin } from '../middleware/auth.js';
 import { nanoid } from 'nanoid';
+import { normalizePublicAssetUrl } from '../lib/publicBaseUrl.js';
 
 export const router = Router();
 
@@ -108,7 +109,13 @@ async function ensureDir(p) {
 router.get('/settings', canReadCompanyForReports, async (req, res) => {
   const pool = getPool();
   const [rows] = await pool.query('SELECT * FROM company_settings WHERE id=1 LIMIT 1');
-  const s = rows?.[0] || null;
+  const raw = rows?.[0] || null;
+  const s = raw
+    ? {
+      ...raw,
+      logo_url: normalizePublicAssetUrl(raw.logo_url)
+    }
+    : null;
   res.json({ settings: s });
 });
 
@@ -187,7 +194,6 @@ router.post('/settings/logo', requirePermission('company', 'manage'), upload.sin
   const ext = extFromMime(f.mimetype);
   if (!ext) return res.status(400).json({ error: 'UNSUPPORTED_TYPE' });
 
-  const base = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
   const dir = path.join(process.cwd(), 'uploads', 'company');
   await ensureDir(dir);
 
@@ -195,6 +201,6 @@ router.post('/settings/logo', requirePermission('company', 'manage'), upload.sin
   const fullPath = path.join(dir, filename);
   await fs.writeFile(fullPath, f.buffer);
 
-  res.json({ logoUrl: `${base}/uploads/company/${filename}` });
+  res.json({ logoUrl: `/uploads/company/${filename}` });
 });
 

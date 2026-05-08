@@ -4,7 +4,7 @@
       <div class="quick-top-title">快捷入口</div>
       <div class="quick-top-grid">
         <div class="quick-item" v-if="perm('reports', 'create')">
-          <el-button class="quick-btn quick-btn--green" @click="$router.push('/reports/new')">
+          <el-button class="quick-btn quick-btn--green" @click="$router.push('/reports/new')" icon=Plus>
             <el-icon><Plus /></el-icon>
             <span class="quick-btn-texts">
               <span class="quick-btn-zh">新建报告</span>
@@ -308,7 +308,7 @@
             <div class="audit-panel audit-panel--login">
               <div class="audit-panel-toolbar">
                 <span class="audit-panel-title">登录日志</span>
-                <el-button v-if="isSuperAdminUser" link type="primary" size="small" @click="$router.push('/audit/login-logs')">
+                <el-button v-if="isSuperAdminUser" link type="primary" size="small" @click="$router.push('/audit/login-logs')" icon=View>
                   查看全部
                 </el-button>
               </div>
@@ -333,7 +333,7 @@
             <div class="audit-panel audit-panel--ops">
               <div class="audit-panel-toolbar">
                 <span class="audit-panel-title">操作日志</span>
-                <el-button v-if="isSuperAdminUser" link type="primary" size="small" @click="$router.push('/audit/operations')">
+                <el-button v-if="isSuperAdminUser" link type="primary" size="small" @click="$router.push('/audit/operations')" icon=View>
                   查看全部
                 </el-button>
                 <el-button v-else link type="primary" size="small" @click="$router.push('/my-operation-logs')">我的记录</el-button>

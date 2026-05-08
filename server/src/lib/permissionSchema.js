@@ -125,6 +125,8 @@ export const PERMISSION_MODULES = [
       { key: 'contract_view', label: '查看', defaults: ROLE_DEFAULT('sales', 'finance', 'warehouse', 'sales_admin') },
       { key: 'contract_edit', label: '编辑' },
       { key: 'contract_delete', label: '删除' },
+      { key: 'contract_edit_approved', label: '编辑已审核合同' },
+      { key: 'contract_delete_approved', label: '删除已审核合同' },
       { key: 'contract_version_view', label: '版本查看', defaults: { qc: true, cs: true, chairman: true, sales: true, finance: true, warehouse: true, sales_admin: true } },
       { key: 'contract_multi_approve', label: '多人审批', defaults: { qc: true, cs: true, chairman: true, sales: true, finance: true, warehouse: true, sales_admin: true } }
     ]

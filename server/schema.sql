@@ -15,15 +15,16 @@ CREATE TABLE IF NOT EXISTS employee_categories (
   sort_order INT NOT NULL DEFAULT 0,
   default_permissions_json JSON NOT NULL,
   require_two_factor TINYINT(1) NOT NULL DEFAULT 0,
+  is_builtin TINYINT(1) NOT NULL DEFAULT 0 COMMENT '内置类别不允许删除/改 code',
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
   UNIQUE KEY uk_employee_categories_code (code)
 ) ENGINE=InnoDB;
 
-INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor) VALUES
-('品管', 'qc', 1, CAST('{"reports":{"list":true,"view":true,"create":true,"edit":true,"void":true,"activate":true,"bulkPass":true,"bulkVoid":true,"bulkActivate":true,"bulkDelete":true,"previewPrint":true,"seals":true},"qrcodes":{"list":true,"create":true,"viewDetail":true,"delete":true},"templates":{"use":true},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false}}' AS JSON), 0),
-('客服', 'cs', 2, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false}}' AS JSON), 0),
-('董事长', 'chairman', 3, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false,"export":true,"chairmanApprove":true,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":true},"stamps":{"manage":false,"view":true},"company":{"manage":false,"view":true},"audit":{"viewLogin":true,"viewOperations":true,"viewErrors":true,"exportAudit":true}}' AS JSON), 1);
+INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor, is_builtin) VALUES
+('品管', 'qc', 1, CAST('{"reports":{"list":true,"view":true,"create":true,"edit":true,"void":true,"activate":true,"bulkPass":true,"bulkVoid":true,"bulkActivate":true,"bulkDelete":true,"previewPrint":true,"seals":true},"qrcodes":{"list":true,"create":true,"viewDetail":true,"delete":true},"templates":{"use":true},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false}}' AS JSON), 0, 1),
+('客服', 'cs', 2, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false}}' AS JSON), 0, 1),
+('董事长', 'chairman', 3, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false,"export":true,"chairmanApprove":true,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":true},"stamps":{"manage":false,"view":true},"company":{"manage":false,"view":true},"audit":{"viewLogin":true,"viewOperations":true,"viewErrors":true,"exportAudit":true}}' AS JSON), 1, 1);
 
 -- 组织架构（钉钉式部门树）
 CREATE TABLE IF NOT EXISTS departments (
@@ -41,23 +42,34 @@ CREATE TABLE IF NOT EXISTS departments (
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   username VARCHAR(64) NOT NULL,
+  real_name VARCHAR(64) NOT NULL DEFAULT '',
   password_hash VARCHAR(255) NOT NULL,
   account_type ENUM('super_admin', 'employee', 'manager') NOT NULL,
   employee_category_id BIGINT UNSIGNED NULL,
   department_id BIGINT UNSIGNED NULL,
+  phone VARCHAR(32) NULL DEFAULT NULL,
   wecom_userid VARCHAR(64) NULL DEFAULT NULL COMMENT '企业微信通讯录成员UserID',
   permissions_json JSON NULL,
   totp_secret VARCHAR(64) NULL DEFAULT NULL,
   totp_enabled_at DATETIME(3) NULL DEFAULT NULL,
   is_active TINYINT(1) NOT NULL DEFAULT 1,
+  token_version INT NOT NULL DEFAULT 0 COMMENT 'JWT 版本号，停用/改密/改权限时 +1 使旧 token 立即失效',
+  force_change_password TINYINT(1) NOT NULL DEFAULT 0 COMMENT '为 1 时下次登录强制改密',
+  require_two_factor TINYINT(1) NOT NULL DEFAULT 0 COMMENT '超管个人级 2FA 开关（员工类别另有开关）',
+  password_changed_at DATETIME(3) NULL DEFAULT NULL,
   failed_login_count INT UNSIGNED NOT NULL DEFAULT 0,
   locked_until DATETIME(3) NULL DEFAULT NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  deleted_at DATETIME(3) NULL DEFAULT NULL COMMENT '软删除标记；非空表示已删除',
   PRIMARY KEY (id),
   UNIQUE KEY uk_users_username (username),
+  UNIQUE KEY uk_users_phone (phone),
+  KEY idx_users_wecom_userid (wecom_userid),
   KEY idx_users_employee_category (employee_category_id),
   KEY idx_users_department (department_id),
+  KEY idx_users_account_type_active (account_type, is_active),
+  KEY idx_users_deleted_at (deleted_at),
   CONSTRAINT fk_users_employee_category FOREIGN KEY (employee_category_id) REFERENCES employee_categories(id)
     ON DELETE SET NULL,
   CONSTRAINT fk_users_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE SET NULL

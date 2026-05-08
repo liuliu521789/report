@@ -26,11 +26,20 @@ function indexAfterEmptyParagraphs(kids, start) {
   return j;
 }
 
+function contractHeaderTableFromKid(el) {
+  if (!el) return null;
+  if (el.tagName === 'TABLE') return el;
+  if (el.tagName === 'DIV') {
+    return el.querySelector('table.contract-header-meta') || el.querySelector('table');
+  }
+  return null;
+}
+
 /** 文首空段落、标题样式等与「紧挨着的」假设不一致时，仍尝试按标题+抬头表识别 */
-function kidsLookLikeContractLayout(kids, outerDivStyle, rawHasSong) {
-  if (rawHasSong) return true;
+function kidsLookLikeContractLayout(kids, outerDivStyle, rawHasKnownBodyFont) {
+  if (rawHasKnownBodyFont) return true;
   const st = String(outerDivStyle || '');
-  if (st.includes('SimSun') || st.includes('宋体')) return true;
+  if (st.includes('SimSun') || st.includes('宋体') || st.includes('FangSong') || st.includes('仿宋')) return true;
   const ti = indexAfterEmptyParagraphs(kids, 0);
   const hi = indexAfterEmptyParagraphs(kids, ti + 1);
   const titleNode = kids[ti];
@@ -40,10 +49,11 @@ function kidsLookLikeContractLayout(kids, outerDivStyle, rawHasSong) {
     titleNode?.tagName === 'DIV' &&
     ((titleNode?.querySelectorAll?.(':scope > div')?.length || 0) >= 1 ||
       KNOWN_CONTRACT_TITLES.some((w) => normText(titleNode?.textContent).includes(w)));
+  const headerTable = contractHeaderTableFromKid(kids[hi]);
   return (
     kids.length >= 3 &&
     (titleLooksLikeClassic || titleLooksLikeLegacyRecommended) &&
-    kids[hi]?.tagName === 'TABLE'
+    !!headerTable
   );
 }
 
@@ -221,16 +231,20 @@ export function parseContractHtmlToVisual(html, base) {
   if (!wrap || wrap.children.length === 0) return null;
 
   const first = wrap.firstElementChild;
-  const rawHasSong = raw.includes('SimSun') || raw.includes('宋体');
+  const rawHasKnownBodyFont =
+    raw.includes('SimSun') ||
+    raw.includes('宋体') ||
+    raw.includes('FangSong') ||
+    raw.includes('仿宋');
   let kids;
   if (first.tagName === 'DIV') {
     const st = first.getAttribute('style') || '';
     kids = [...first.children];
-    if (!kidsLookLikeContractLayout(kids, st, rawHasSong)) return null;
+    if (!kidsLookLikeContractLayout(kids, st, rawHasKnownBodyFont)) return null;
   } else {
     /* 正文无单一外包 div（顶层多为 p + table…），与带外层 div 时子节点序列一致 */
     kids = [...wrap.children];
-    if (!kidsLookLikeContractLayout(kids, '', rawHasSong)) return null;
+    if (!kidsLookLikeContractLayout(kids, '', rawHasKnownBodyFont)) return null;
   }
   if (kids.length < 3) return null;
 
@@ -263,7 +277,8 @@ export function parseContractHtmlToVisual(html, base) {
   }
 
   let headerIdx = indexAfterEmptyParagraphs(kids, titleIdx + 1);
-  const headerTable = kids[headerIdx];
+  const headerKid = kids[headerIdx];
+  const headerTable = contractHeaderTableFromKid(headerKid);
   if (!headerTable || headerTable.tagName !== 'TABLE') return null;
 
   const leftParsed = [];

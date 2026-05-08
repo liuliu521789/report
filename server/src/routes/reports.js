@@ -8,6 +8,7 @@ import { logOperationFromReq } from '../lib/audit.js';
 import { requireAuth, requireAnyPermission, requirePermission } from '../middleware/auth.js';
 import { hasPermission } from '../lib/permissions.js';
 import { isPermissionedStaffType } from '../lib/accountTypes.js';
+import { normalizePublicAssetUrl } from '../lib/publicBaseUrl.js';
 
 export const router = Router();
 
@@ -96,10 +97,10 @@ function defaultPaperFields() {
   });
 
   const defaultColumnLabels = [
-    { zh: '检验项目', en: 'Test item' },
-    { zh: '单位', en: 'Unit' },
-    { zh: '标准值', en: 'Normal value' },
-    { zh: '检测值', en: 'Test value' }
+    { key: 'item', zh: '检验项目', en: 'Test item' },
+    { key: 'unit', zh: '单位', en: 'Unit' },
+    { key: 'standard', zh: '标准值', en: 'Normal value' },
+    { key: 'result', zh: '检测值', en: 'Test value' }
   ];
 
   const rows = [
@@ -174,7 +175,8 @@ function filledValueForField(field, { reportUid, batchNo, productName, index, da
         item: toBi(r?.item ?? ''),
         unit: toBi(r?.unit ?? ''),
         standard: toBi(r?.standard ?? ''),
-        result: { zh: result, en: result }
+        result: { zh: result, en: result },
+        basis: toBi(r?.basis ?? r?.reference ?? '')
       };
     });
     return { columnLabels, rows };
@@ -853,7 +855,7 @@ router.get('/:id/seals', requirePermission('reports', 'seals'), async (req, res)
     recheck: null
   };
   for (const r of rows || []) {
-    appliedSeals[r.sealType] = { name: r.sealName, imageUrl: r.sealImageUrl };
+    appliedSeals[r.sealType] = { name: r.sealName, imageUrl: normalizePublicAssetUrl(r.sealImageUrl) };
   }
 
   res.json({ appliedSeals });
@@ -881,8 +883,23 @@ router.post('/:id/seals', requirePermission('reports', 'seals'), async (req, res
     }
 
     for (const sealType of sealTypes) {
+      // 检查是否有svg_image_url字段
+      let hasSvgFields = false;
+      try {
+        const [columns] = await conn.query(
+          "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'company_stamps' AND COLUMN_NAME = 'svg_image_url'"
+        );
+        hasSvgFields = columns.length > 0;
+      } catch (e) {
+        // ignore
+      }
+      
+      const selectFields = hasSvgFields
+        ? `name, image_url AS imageUrl, svg_image_url AS svgImageUrl, active_image_type AS activeImageType`
+        : `name, image_url AS imageUrl, NULL AS svgImageUrl, 'original' AS activeImageType`;
+      
       const [sRows] = await conn.query(
-        `SELECT name, image_url AS imageUrl
+        `SELECT ${selectFields}
          FROM company_stamps
          WHERE seal_type=? AND is_active=1
          ORDER BY id DESC
@@ -895,6 +912,11 @@ router.post('/:id/seals', requirePermission('reports', 'seals'), async (req, res
         return res.status(400).json({ error: 'SEAL_NOT_ACTIVE', sealType });
       }
 
+      // 根据activeImageType决定使用哪个图片
+      const sealImageUrl = (stamp.activeImageType === 'svg' && stamp.svgImageUrl) 
+        ? stamp.svgImageUrl 
+        : stamp.imageUrl;
+
       await conn.query(
         `INSERT INTO report_seals (report_id, seal_type, seal_name, seal_image_url, created_by)
          VALUES (?, ?, ?, ?, ?)
@@ -903,7 +925,7 @@ router.post('/:id/seals', requirePermission('reports', 'seals'), async (req, res
            seal_image_url = VALUES(seal_image_url),
            created_by = VALUES(created_by),
            created_at = CURRENT_TIMESTAMP(3)`,
-        [id, sealType, stamp.name, stamp.imageUrl, req.user.userId]
+        [id, sealType, stamp.name, sealImageUrl, req.user.userId]
       );
     }
 

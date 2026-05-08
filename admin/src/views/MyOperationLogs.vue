@@ -11,7 +11,7 @@
         end-placeholder="结束"
         class="w-range"
       />
-      <el-button type="primary" @click="load">查询</el-button>
+      <el-button type="primary" @click="load" icon=Search>查询</el-button>
     </div>
     <p class="hint">仅展示您本人在本系统的操作记录。</p>
     <el-table v-loading="loading" :data="items" border style="margin-top: 8px" class="desktop-table">

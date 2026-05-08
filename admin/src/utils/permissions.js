@@ -41,6 +41,21 @@ export function perm(module, key) {
   return !!(p[module] && p[module][key]);
 }
 
+/**
+ * 与后端 sales.js `canAccessSalesContractWorkspace` 一致：能参与合同生成/改/审/删的账号也应看到合同列表（不仅 contract_view）。
+ */
+export function canAccessSalesContractWorkspace() {
+  if (isSuperAdmin()) return true;
+  return (
+    perm('contract_management', 'contract_view') ||
+    perm('contract_management', 'contract_generate') ||
+    perm('contract_management', 'contract_submit') ||
+    perm('contract_management', 'contract_edit') ||
+    perm('contract_management', 'contract_delete') ||
+    perm('contract_management', 'contract_review')
+  );
+}
+
 /** 编辑已有报告时按 permissions.reports.fieldEdit 控制；新建报告不限制（避免无法通过必填校验） */
 export function canEditReportFieldKey(input) {
   // Backward compatibility: allow old string signature canEditReportFieldKey('field_key')

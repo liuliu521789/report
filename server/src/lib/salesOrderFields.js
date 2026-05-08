@@ -302,6 +302,14 @@ export function legacyRowToDataJson(row) {
   return o;
 }
 
+/** 订单数量/单价/金额：与 DECIMAL(18,4) 对齐，全链路统一四位小数 */
+export function roundOrderDecimal4(n) {
+  if (n == null || n === '') return 0;
+  const x = typeof n === 'number' ? n : Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 10000) / 10000;
+}
+
 /** 数量支持「数字+单位」（如 10桶、2.5吨桶）；提取首个正数用于 DB 数值列与金额试算 */
 export function parseQuantityToLegacyNumber(raw) {
   if (raw == null || raw === '') return 0;
@@ -322,12 +330,18 @@ export function dataJsonToLegacyColumns(definitions, dataJson) {
       byMap[d.maps_to] = dj[d.field_key];
     }
   }
-  let quantity = parseQuantityToLegacyNumber(byMap.quantity);
-  let unitPrice = Number(byMap.unit_price);
+  let quantity = roundOrderDecimal4(parseQuantityToLegacyNumber(byMap.quantity));
+  let unitPrice = roundOrderDecimal4(Number(byMap.unit_price));
   if (!Number.isFinite(unitPrice)) unitPrice = 0;
   let amount = Number(byMap.amount);
-  if (!Number.isFinite(amount) || byMap.amount === undefined || byMap.amount === '') {
-    amount = Math.round(quantity * unitPrice * 10000) / 10000;
+  const amountExplicit =
+    byMap.amount !== undefined &&
+    byMap.amount !== '' &&
+    Number.isFinite(amount);
+  if (!amountExplicit) {
+    amount = roundOrderDecimal4(quantity * unitPrice);
+  } else {
+    amount = roundOrderDecimal4(amount);
   }
   return {
     product_code: String(byMap.product_code ?? '').slice(0, 128),
@@ -371,7 +385,11 @@ export function validateOrderDataInput(definitions, rawInput) {
       data[key] = String(v);
     } else if (d.field_type === 'number' || d.field_type === 'positive_number') {
       const n = Number(v);
-      data[key] = Number.isFinite(n) ? n : v;
+      if (Number.isFinite(n) && ['quantity', 'unit_price', 'amount'].includes(d.maps_to)) {
+        data[key] = roundOrderDecimal4(n);
+      } else {
+        data[key] = Number.isFinite(n) ? n : v;
+      }
     } else if (d.field_type === 'date') {
       const normalized = normalizeOrderDateInput(v);
       data[key] = normalized.ok ? normalized.value : String(v);

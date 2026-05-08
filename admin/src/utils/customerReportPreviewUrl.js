@@ -1,8 +1,9 @@
 import { getAuthToken } from '../stores/auth';
+import { absoluteApiOrigin } from './absoluteApiOrigin.js';
 
 /** 管理端打开与客户预览同结构的报告 HTML（需登录 token） */
 export function customerReportPreviewUrl(reportId, { autoPrint = false } = {}) {
-  const base = import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001';
+  const base = absoluteApiOrigin();
   const token = getAuthToken();
   const q = new URLSearchParams({
     id: String(reportId),

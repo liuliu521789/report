@@ -1,6 +1,12 @@
 import { previewFillContractTemplate } from './contractTemplateDefaults';
 import { buildContractOrderLinesHtml } from './contractOrderLinesBuild';
 
+/** 标题：方正小标宋 二号（22px） */
+export const CONTRACT_PREVIEW_TITLE_FONT =
+  'FZXiaoBiaoSong-S05,FZXiaoBiaoSong,方正小标宋简体,方正小标宋,方正小标宋_GBK,FZShuSong_GB2312,SimSun';
+/** 正文：仿宋_GB2312 三号（16px） */
+export const CONTRACT_PREVIEW_BODY_FONT = 'FangSong_GB2312,仿宋_GB2312,仿宋,FangSong';
+
 function escapeRegExp(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -10,8 +16,7 @@ function ensureSalesContractTitleBelowCompany(html, contractVars = null) {
   if (!s) return s;
   const companyName = contractVars?.COMPANY_NAME_ZH ? String(contractVars.COMPANY_NAME_ZH) : '';
   const companyKeys = [companyName, '{{COMPANY_NAME_ZH}}'].filter(Boolean);
-  const titleHtml =
-    '<span style="display:block;text-align:center;font-size:14px;letter-spacing:2px;line-height:1.6;margin-top:6px;font-family:SimSun,宋体">销售合同</span>';
+  const titleHtml = `<span style="display:block;text-align:center;font-size:22px;letter-spacing:2px;line-height:1.6;margin-top:6px;font-family:${CONTRACT_PREVIEW_TITLE_FONT}">销售合同</span>`;
   for (const key of companyKeys) {
     const escapedKey = escapeRegExp(key);
     const inlineTitleRe = new RegExp(`${escapedKey}(?:\\s|&nbsp;|　)*销售合同`, 'g');
@@ -50,27 +55,37 @@ export function finalizeContractBodyForPreview(bodyHtml, orders = [], contractVa
   return ensureSalesContractTitleBelowCompany(s, contractVars);
 }
 
-function escapeHtmlText(s) {
+export function escapeHtmlText(s) {
   return String(s || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
 
-/** A4 可印区域边距（与版心一致：页边距在 @page 上，不再叠一层 .print-wrap padding） */
-const CONTRACT_PREVIEW_PAGE_MARGIN_MM = { top: 10, right: 12, bottom: 10, left: 12 };
+/** A4 可印区域边距（企业合同常用格式：上2.54cm 下2.54cm 左3.17cm 右3.17cm） */
+const CONTRACT_PREVIEW_PAGE_MARGIN_MM = { top: 25.4, right: 25.4, bottom: 25.4, left: 31.7 };
 
 /** 打印预览弹窗：屏上模拟 A4 宽度预览；真正打印/导出为 A4 + 固定页边距 */
 export function getContractPreviewPrintWindowStyleCss() {
   const { top, right, bottom, left } = CONTRACT_PREVIEW_PAGE_MARGIN_MM;
   return `html,body{margin:0;padding:0;background:#fff;}
-body{font-family:SimSun,宋体;font-size:14px;line-height:1.7;color:#000;}
+body{font-family:${CONTRACT_PREVIEW_BODY_FONT};font-size:16px;line-height:1.5;color:#000;text-align:justify;}
+h1,h2,h3,.contract-title{font-family:${CONTRACT_PREVIEW_TITLE_FONT};font-size:22px;font-weight:normal;text-align:center;letter-spacing:2px;}
+p{text-indent:2em;margin:0.5em 0;}
+table{border-collapse:collapse;width:100%;}
+th,td{border:1px solid #000;padding:6px 8px;text-align:center;font-size:16px;font-family:${CONTRACT_PREVIEW_BODY_FONT};}
+.contract-header-meta{width:auto!important;max-width:100%;margin-left:auto!important;margin-right:auto!important;border:none!important;}
+.contract-header-meta td,.contract-header-meta th{border:none!important;text-align:left!important;vertical-align:top;}
+.party-table{page-break-inside:avoid;break-inside:avoid;font-size:14px;line-height:1.35;}
+.party-table tr{page-break-inside:avoid;break-inside:avoid;}
+.party-table td{text-align:left;font-size:14px!important;line-height:1.35!important;padding:5px 8px!important;}
+.party-table .party-col-title{text-align:center!important;font-weight:700;margin-bottom:4px;display:block;}
 /* 屏上约 A4 版心宽：210mm - 左右页边距 */
 .print-wrap{max-width:calc(210mm - ${left + right}mm);margin:0 auto;padding:${top}mm ${right}mm ${bottom}mm ${left}mm;box-sizing:content-box;}
 @media print{
-  @page{size:A4;margin:${top}mm ${right}mm ${bottom}mm ${left}mm;}
-  html,body{margin:0!important;padding:0!important;background:#fff!important;}
-  .print-wrap{max-width:none;margin:0;padding:0;box-sizing:border-box;}
+  @page{size:A4;margin:0;}
+  html,body{margin:0!important;padding:0!important;background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  .print-wrap{max-width:none;margin:0;padding:${top}mm ${right}mm ${bottom}mm ${left}mm;box-sizing:border-box;}
 }`;
 }
 
@@ -86,7 +101,17 @@ export function getContractPreviewExportStyleCss() {
 }
 div.WordSection1{page:WordSection1;}
 html,body{width:100%;margin:0;padding:0;background:#fff;}
-body{font-family:SimSun,宋体;font-size:14px;line-height:1.7;color:#000;}
+body{font-family:${CONTRACT_PREVIEW_BODY_FONT};font-size:16px;line-height:1.5;color:#000;text-align:justify;}
+h1,h2,h3,.contract-title{font-family:${CONTRACT_PREVIEW_TITLE_FONT};font-size:22px;font-weight:normal;text-align:center;letter-spacing:2px;}
+p{text-indent:2em;margin:0.5em 0;}
+table{border-collapse:collapse;width:100%;}
+th,td{border:1px solid #000;padding:6px 8px;text-align:center;font-size:16px;font-family:${CONTRACT_PREVIEW_BODY_FONT};}
+.contract-header-meta{width:auto!important;max-width:100%;margin-left:auto!important;margin-right:auto!important;border:none!important;}
+.contract-header-meta td,.contract-header-meta th{border:none!important;text-align:left!important;vertical-align:top;}
+.party-table{page-break-inside:avoid;break-inside:avoid;font-size:14px;line-height:1.35;}
+.party-table tr{page-break-inside:avoid;break-inside:avoid;}
+.party-table td{text-align:left;font-size:14px!important;line-height:1.35!important;padding:5px 8px!important;}
+.party-table .party-col-title{text-align:center!important;font-weight:700;margin-bottom:4px;display:block;}
 .print-wrap{margin:0;padding:0;box-sizing:border-box;max-width:none;}`;
 }
 
@@ -112,8 +137,62 @@ export function buildContractPreviewPrintWindowHtml(innerHtml, documentTitle = '
 }
 
 /**
+ * 在隐藏 iframe 中打印完整 HTML 文档（避免新开 about:blank 标签页）。
+ * 纸张上的日期、网址、页码来自浏览器「页眉和页脚」，须在打印对话框中关闭（Chrome/Edge：更多设置 → 取消勾选页眉和页脚）。
+ */
+export function printHtmlDocumentInHiddenIframe(fullDocumentHtml) {
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute(
+    'style',
+    'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none'
+  );
+  iframe.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument;
+  const win = doc.defaultView;
+  doc.open();
+  doc.write(fullDocumentHtml);
+  doc.close();
+
+  let cleaned = false;
+  let fallbackTimer = null;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (fallbackTimer != null) window.clearTimeout(fallbackTimer);
+    try {
+      iframe.remove();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const runPrint = () => {
+    win.addEventListener('afterprint', cleanup, { once: true });
+    fallbackTimer = window.setTimeout(cleanup, 120000);
+    try {
+      win.focus();
+      win.print();
+    } catch {
+      cleanup();
+    }
+  };
+
+  if (doc.readyState === 'complete') {
+    window.requestAnimationFrame(() => window.setTimeout(runPrint, 50));
+  } else {
+    win.addEventListener('load', () => window.setTimeout(runPrint, 50), { once: true });
+  }
+}
+
+/** 合同正文打印：版式同 buildContractPreviewPrintWindowHtml，经隐藏 iframe 调出打印对话框 */
+export function printContractPreviewFromHtml(innerHtml, documentTitle = '合同打印') {
+  printHtmlDocumentInHiddenIframe(buildContractPreviewPrintWindowHtml(innerHtml, documentTitle));
+}
+
+/**
  * 将 HTML 正文导出为 Word 可直接打开的 .doc（OLE HTML Word 容器，可用 Microsoft Word / WPS 打开）。
- * 版式与 buildContractPreviewPrintWindowHtml 打印结果一致（10mm 12mm 内边距、宋体 14px）。
+ * 版式与 buildContractPreviewPrintWindowHtml 打印结果一致（A4 页边距、正文仿宋 16px）。
  * @param {string} innerHtml 已 finalize 的正文 inner HTML
  * @param {string} filename 建议使用 .doc 后缀
  */

@@ -1,7 +1,12 @@
 import { http } from './http';
 
-export async function login(username, password) {
-  const { data } = await http.post('/api/auth/login', { username, password });
+export async function login(username, password, extra = {}) {
+  const { data } = await http.post('/api/auth/login', { username, password, ...extra });
+  return data;
+}
+
+export async function getLoginCaptcha() {
+  const { data } = await http.get('/api/auth/captcha');
   return data;
 }
 
@@ -130,8 +135,20 @@ export async function downloadErrorLogsExport() {
   URL.revokeObjectURL(url);
 }
 
-export async function listUsers() {
-  const { data } = await http.get('/api/users');
+/** 分页 / 筛选 / 搜索：{ items, total, page, pageSize } */
+export async function listUsers(params) {
+  const { data } = await http.get('/api/users', { params: params || {} });
+  return data;
+}
+
+/** 下拉用：仅 id/username/accountType/isActive/categoryNameZh，含 deleted_at IS NULL 过滤 */
+export async function listUsersLite(params) {
+  const { data } = await http.get('/api/users/lite', { params: params || {} });
+  return data;
+}
+
+export async function getUserDetail(id) {
+  const { data } = await http.get(`/api/users/${id}`);
   return data;
 }
 
@@ -142,6 +159,33 @@ export async function createUser(payload) {
 
 export async function updateUser(id, payload) {
   const { data } = await http.put(`/api/users/${id}`, payload);
+  return data;
+}
+
+export async function deleteUser(id) {
+  const { data } = await http.delete(`/api/users/${id}`);
+  return data;
+}
+
+/** 重置密码：返回 { temporaryPassword }，并强制下次登录改密 */
+export async function resetUserPassword(id, password) {
+  const payload = password ? { password } : {};
+  const { data } = await http.post(`/api/users/${id}/reset-password`, payload);
+  return data;
+}
+
+export async function forceLogoutUser(id) {
+  const { data } = await http.post(`/api/users/${id}/force-logout`);
+  return data;
+}
+
+export async function logout() {
+  const { data } = await http.post('/api/auth/logout');
+  return data;
+}
+
+export async function getPermissionSchema() {
+  const { data } = await http.get('/api/permissions/schema');
   return data;
 }
 
@@ -251,8 +295,8 @@ export async function exportReportsJson(ids) {
   URL.revokeObjectURL(url);
 }
 
-export async function createQrcode(reportIds) {
-  const { data } = await http.post('/api/qrcodes', { reportIds });
+export async function createQrcode(reportIds, force = false) {
+  const { data } = await http.post('/api/qrcodes', { reportIds, force });
   return data;
 }
 
@@ -298,6 +342,35 @@ export async function updateTemplate(id, payload) {
 
 export async function deleteTemplate(id) {
   const { data } = await http.delete(`/api/templates/${id}`);
+  return data;
+}
+
+export async function deleteTemplates(ids) {
+  const { data } = await http.delete('/api/templates', { data: { ids } });
+  return data;
+}
+
+export async function importTemplateDocx(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const { data } = await http.post('/api/templates/import-docx', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+  return data;
+}
+
+/** 批量导入 DOCX 报告模板（multipart，字段名 files；单次最多 500 个，具体以后端返回为准） */
+export async function importTemplateDocxBatch(files) {
+  const formData = new FormData();
+  const list = Array.isArray(files) ? files : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const f = list[i];
+    if (f) formData.append('files', f);
+  }
+  const { data } = await http.post('/api/templates/import-docx-batch', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 600000
+  });
   return data;
 }
 
@@ -358,6 +431,11 @@ export async function updateStamp(id, payload) {
 
 export async function bulkDeleteStamps(ids) {
   const { data } = await http.delete('/api/stamps/bulk', { data: { ids } });
+  return data;
+}
+
+export async function switchStampImage(id, imageType) {
+  const { data } = await http.post(`/api/stamps/${id}/switch-image`, { imageType });
   return data;
 }
 
@@ -532,6 +610,16 @@ export async function batchDeleteInternalModels(payload) {
   return data;
 }
 
+export async function batchEnableInternalModels(payload) {
+  const { data } = await http.post('/api/sales/internal-models/batch-enable', payload);
+  return data;
+}
+
+export async function deleteAllInternalModels(payload) {
+  const { data } = await http.post('/api/sales/internal-models/delete-all', payload);
+  return data;
+}
+
 /** 上传 Excel 批量导入内部型号（multipart，字段名 file；勿手动设 Content-Type，需带 boundary） */
 export async function importInternalModelsFromExcel(formData) {
   const { data } = await http.post('/api/sales/internal-models/import', formData);
@@ -550,6 +638,16 @@ export async function markSalesMessageRead(id) {
 
 export async function clearSalesMessages() {
   const { data } = await http.post('/api/sales/messages/clear', {}, { silentProgress: true });
+  return data;
+}
+
+export async function deleteSalesMessage(id) {
+  const { data } = await http.delete(`/api/sales/messages/${id}`, { silentProgress: true });
+  return data;
+}
+
+export async function batchDeleteSalesMessages(ids) {
+  const { data } = await http.post('/api/sales/messages/batch-delete', { ids }, { silentProgress: true });
   return data;
 }
 
@@ -661,9 +759,10 @@ export async function downloadSalesImportTemplate() {
   return res.data;
 }
 
-export async function importSalesOrdersXlsx(file) {
+export async function importSalesOrdersXlsx(file, { confirmDuplicate = false } = {}) {
   const fd = new FormData();
   fd.append('file', file);
+  if (confirmDuplicate) fd.append('confirm_duplicate_import', '1');
   const { data } = await http.post('/api/sales/orders/import/xlsx', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000
@@ -738,6 +837,18 @@ export async function submitSalesContract(id, payload) {
 
 export async function reviewSalesContract(id, payload) {
   const { data } = await http.post(`/api/sales/contracts/${id}/review`, payload);
+  return data;
+}
+
+/** 创建人撤回待审合同（退回草稿） */
+export async function withdrawSalesContractReview(id) {
+  const { data } = await http.post(`/api/sales/contracts/${id}/withdraw`);
+  return data;
+}
+
+/** 创建人催办当前审批人（站内信 + 企业微信，频率限制见服务端） */
+export async function remindSalesContractReviewer(id) {
+  const { data } = await http.post(`/api/sales/contracts/${id}/remind-reviewer`);
   return data;
 }
 
@@ -867,6 +978,31 @@ export async function getWecomTemplateSnippet(code) {
 
 export async function sendWecomNotification(payload) {
   const { data } = await http.post('/api/wecom/send', payload);
+  return data;
+}
+
+export async function downloadBackup() {
+  const token = localStorage.getItem('token');
+  const base = (import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001').replace('localhost:3003', 'localhost:3001');
+  const url = `${base}/api/sql`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: '下载失败' }));
+    throw new Error(err.error || '下载失败');
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = `backup_${new Date().toISOString().slice(0, 10)}.sql`;
+  a.click();
+  URL.revokeObjectURL(objectUrl);
+}
+
+export async function restoreBackup(sql) {
+  const { data } = await http.post('/api/sql', { sql });
   return data;
 }
 

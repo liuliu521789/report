@@ -2,7 +2,7 @@
   <div class="report-edit-root">
     <div class="toolbar">
       <div>
-        <el-button @click="$router.push('/reports')">返回</el-button>
+        <el-button @click="$router.push('/reports')" icon=Back>返回</el-button>
       </div>
       <div class="toolbar-right">
         <span class="toolbar-label">判定结论</span>
@@ -28,7 +28,7 @@
           type="primary"
           :loading="saving"
           @click="save"
-        >
+         icon=Check>
           保存报告
         </el-button>
       </div>
@@ -60,6 +60,52 @@
       title="设计模式：可拖拽调整字段与检验项目顺序，完成后点「保存报告样式」即可沉淀为模板"
     />
 
+    <div class="top-cards-row">
+      <el-card v-if="isNew" class="tpl-card tpl-card-half">
+        <template #header>
+          <div class="field-header">
+            <div>报告标题设置</div>
+          </div>
+        </template>
+        <el-form :model="reportTitleForm" label-width="180px" @submit.prevent>
+          <el-form-item label="报告名称（中文）">
+            <el-input v-model="reportTitleForm.reportTitleZh" :readonly="!canEditReportTitles" />
+          </el-form-item>
+          <el-form-item label="Report Title (English)">
+            <el-input v-model="reportTitleForm.reportTitleEn" :readonly="!canEditReportTitles" />
+          </el-form-item>
+        </el-form>
+        <div v-if="canManageCompany" class="report-title-actions">
+          <el-button v-if="!reportTitleEditMode" @click="startEditReportTitles">编辑</el-button>
+          <template v-else>
+            <el-button @click="cancelEditReportTitles">取消</el-button>
+            <el-button type="primary" :loading="reportTitleSaving" @click="saveReportTitles">保存标题</el-button>
+          </template>
+        </div>
+      </el-card>
+
+      <el-card v-if="form.templateId" class="tpl-card tpl-card-half">
+        <template #header>
+          <div class="field-header">
+            <div>模板信息</div>
+            <el-button v-if="!templateEditMode && perm('templates', 'use')" text type="primary" @click="startEditTemplate">编辑</el-button>
+            <div v-else-if="templateEditMode">
+              <el-button @click="cancelEditTemplate">取消</el-button>
+              <el-button type="primary" :loading="templateSaving" @click="saveTemplate">保存</el-button>
+            </div>
+          </div>
+        </template>
+        <el-form :model="templateForm" label-width="100px">
+          <el-form-item label="模板名称">
+            <el-input v-model="templateForm.name" :readonly="!templateEditMode" maxlength="128" show-word-limit />
+          </el-form-item>
+          <el-form-item label="模板描述">
+            <el-input v-model="templateForm.description" :readonly="!templateEditMode" maxlength="255" show-word-limit />
+          </el-form-item>
+        </el-form>
+      </el-card>
+    </div>
+
     <el-card v-if="isNew" class="tpl-card">
       <template #header>
         <div class="field-header">
@@ -78,7 +124,6 @@
           <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
         </el-select>
         <el-button type="primary" :disabled="!selectedTemplateId" @click="applyTemplate">套用模板</el-button>
-        <el-button v-if="perm('templates', 'use')" @click="openStyleManager">管理模板</el-button>
         <el-button @click="startBlank">空白报告</el-button>
         <span class="text-muted">套用模板会覆盖当前纸张内容</span>
       </div>
@@ -125,50 +170,51 @@
         <div class="report-title-en">{{ company.reportTitleEn || 'Certificate of Analysis' }}</div>
 
         <div id="formContainer" class="form-container-inner">
-          <div
-            v-for="(row, idx) in metaFields"
-            :key="row.fieldKey + '-' + idx"
-            class="form-row"
-            draggable="true"
-            @dragstart="onMetaDragStart(row)"
-            @dragover.prevent
-            @drop="onMetaDrop(row)"
-          >
-            <div class="form-label">
-              <input
-                v-model="row.fieldLabel"
-                class="label-cn"
-                type="text"
-                :readonly="!rowEditable(row)"
-                @input="syncFieldLabelEn(row)"
-              />
-              <input
-                v-model="row.fieldLabelEn"
-                class="label-en"
-                type="text"
-                placeholder="English"
-                :readonly="!rowEditable(row)"
-              />
-            </div>
-            <input
-              v-model="row.fieldValue.zh"
-              type="text"
-              class="form-input"
-              :class="{ 'is-readonly': !rowEditable(row) }"
-              placeholder="请输入"
-              :readonly="!rowEditable(row)"
-              @input="onMetaValueZh(row)"
-            />
-            <div v-if="rowEditable(row)" class="action-icons">
-              <span class="drag-icon" title="拖拽排序">
-                <el-icon><Rank /></el-icon>
-              </span>
-              <span class="edit-icon" title="编辑标签" @click="focusLabel(row)">
-                <el-icon><Edit /></el-icon>
-              </span>
-              <span class="del-icon" title="删除行" @click="deleteMetaRow(row)">
-                <el-icon><Delete /></el-icon>
-              </span>
+          <div class="form-grid">
+            <div
+              v-for="(row, idx) in metaFields"
+              :key="row.fieldKey + '-' + idx"
+              class="form-row"
+              draggable="true"
+              @dragstart="onMetaDragStart(row)"
+              @dragover.prevent
+              @drop="onMetaDrop(row)"
+            >
+              <div class="form-label">
+                <input
+                  v-model="row.fieldLabel"
+                  class="label-cn"
+                  type="text"
+                  :readonly="!rowEditable(row)"
+                  @input="syncFieldLabelEn(row)"
+                />
+                <input
+                  v-model="row.fieldLabelEn"
+                  class="label-en"
+                  type="text"
+                  placeholder="English"
+                  :readonly="!rowEditable(row)"
+                />
+              </div>
+              <div class="form-value-wrap">
+                <input
+                  v-model="row.fieldValue.zh"
+                  type="text"
+                  class="form-input"
+                  :class="{ 'is-readonly': !rowEditable(row) }"
+                  placeholder="请输入"
+                  :readonly="!rowEditable(row)"
+                  @input="onMetaValueZh(row)"
+                />
+                <div v-if="rowEditable(row)" class="action-icons">
+                  <span class="drag-icon" title="拖拽排序">
+                    <el-icon><Rank /></el-icon>
+                  </span>
+                  <span class="del-icon" title="删除行" @click="deleteMetaRow(row)">
+                    <el-icon><Delete /></el-icon>
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -256,6 +302,15 @@
                   @input="syncTableCellEn(tr.result)"
                 />
               </td>
+              <td v-if="hasInspectionBasisColumn">
+                <input
+                  v-model="tr.basis.zh"
+                  class="test-input"
+                  type="text"
+                  :readonly="!fieldEditable('inspection_table')"
+                  @input="syncTableCellEn(tr.basis)"
+                />
+              </td>
               <td v-if="fieldEditable('inspection_table')">
                 <div class="table-action">
                   <span class="drag-icon" title="拖拽排序">
@@ -268,11 +323,11 @@
               </td>
             </tr>
             <tr v-if="conclusionField && conclusionField.fieldValue">
-              <td colspan="3" class="cell-merged">
+              <td :colspan="hasInspectionBasisColumn ? 4 : 3" class="cell-merged">
                 检验结论
                 <div class="item-en">Test conclusion</div>
               </td>
-              <td class="stamp-cell">
+              <td class="stamp-cell" :colspan="fieldEditable('inspection_table') ? 2 : 1">
                 <input
                   v-model="conclusionField.fieldValue.zh"
                   type="text"
@@ -282,13 +337,8 @@
                   :readonly="!fieldEditable('test_conclusion')"
                   @input="syncFieldValueEn(conclusionField)"
                 />
-                <div
-                  v-if="getSealImage('pass')"
-                  class="cell-stamp"
-                  :style="{
-                    backgroundImage: `url('${getSealImage('pass')}')`
-                  }"
-                >
+                <div v-if="getSealImage('pass')" class="cell-stamp-wrap">
+                  <img :src="getSealImage('pass')" class="cell-stamp-img" alt="合格章" />
                   <span
                     v-if="perm('reports', 'seals')"
                     class="stamp-remove"
@@ -299,14 +349,13 @@
                   </span>
                 </div>
               </td>
-              <td v-if="fieldEditable('inspection_table')" />
             </tr>
             <tr v-if="remarksField && remarksField.fieldValue">
-              <td colspan="3" class="cell-merged">
+              <td :colspan="hasInspectionBasisColumn ? 4 : 3" class="cell-merged">
                 备注
                 <div class="item-en">Remarks</div>
               </td>
-              <td class="stamp-cell">
+              <td class="stamp-cell" :colspan="fieldEditable('inspection_table') ? 2 : 1">
                 <input
                   v-model="remarksField.fieldValue.zh"
                   type="text"
@@ -316,13 +365,8 @@
                   :readonly="!fieldEditable('remarks')"
                   @input="syncFieldValueEn(remarksField)"
                 />
-                <div
-                  v-if="getSealImage('recheck')"
-                  class="cell-stamp"
-                  :style="{
-                    backgroundImage: `url('${getSealImage('recheck')}')`
-                  }"
-                >
+                <div v-if="getSealImage('recheck')" class="cell-stamp-wrap">
+                  <img :src="getSealImage('recheck')" class="cell-stamp-img" alt="复检章" />
                   <span
                     v-if="perm('reports', 'seals')"
                     class="stamp-remove"
@@ -333,7 +377,6 @@
                   </span>
                 </div>
               </td>
-              <td v-if="fieldEditable('inspection_table')" />
             </tr>
           </tbody>
         </table>
@@ -346,13 +389,30 @@
         >
           + 添加检验项目
         </button>
+        <button
+          v-if="fieldEditable('inspection_table') && !hasInspectionBasisColumn"
+          type="button"
+          class="add-row-btn"
+          @click="toggleBasisColumn(true)"
+        >
+          + 添加单项检验依据列
+        </button>
+        <button
+          v-if="fieldEditable('inspection_table') && hasInspectionBasisColumn"
+          type="button"
+          class="add-row-btn"
+          @click="toggleBasisColumn(false)"
+        >
+          - 移除单项检验依据列
+        </button>
 
         <div class="footer-section">
           <div class="footer-item">
             <div class="footer-label">主检（签字）</div>
             <div class="footer-label-en">Inspector</div>
             <div class="stamp-item-wrap">
-              <div class="stamp-item" :style="footerStampStyle('inspector')" />
+              <img v-if="getSealImage('inspector')" :src="getSealImage('inspector')" class="stamp-item-img" alt="主检章" />
+              <div v-else class="stamp-item" />
               <span
                 v-if="perm('reports', 'seals') && getSealImage('inspector')"
                 class="stamp-remove"
@@ -367,7 +427,8 @@
             <div class="footer-label">审核（签字）</div>
             <div class="footer-label-en">Supervisor</div>
             <div class="stamp-item-wrap">
-              <div class="stamp-item" :style="footerStampStyle('supervisor')" />
+              <img v-if="getSealImage('supervisor')" :src="getSealImage('supervisor')" class="stamp-item-img" alt="审核章" />
+              <div v-else class="stamp-item" />
               <span
                 v-if="perm('reports', 'seals') && getSealImage('supervisor')"
                 class="stamp-remove"
@@ -382,7 +443,8 @@
             <div class="footer-label">部门</div>
             <div class="footer-label-en">Department</div>
             <div class="stamp-item-wrap">
-              <div class="stamp-item" :style="footerStampStyle('department_qc')" />
+              <img v-if="getSealImage('department_qc')" :src="getSealImage('department_qc')" class="stamp-item-img" alt="质检章" />
+              <div v-else class="stamp-item" />
               <span
                 v-if="perm('reports', 'seals') && getSealImage('department_qc')"
                 class="stamp-remove"
@@ -460,15 +522,15 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="tplDialog = false">取消</el-button>
-        <el-button type="primary" :loading="tplSaving" @click="saveAsTemplate">保存</el-button>
+        <el-button @click="tplDialog = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="tplSaving" @click="saveAsTemplate" icon=Check>保存</el-button>
       </template>
     </el-dialog>
 
     <el-dialog title="报告模板管理" v-model="styleManageDialog" width="760px">
       <div class="style-manage-toolbar">
         <span class="text-muted">可在此重命名/删除，修改后新建报告页可直接套用。</span>
-        <el-button text type="primary" :loading="styleManageLoading" @click="loadTemplates">刷新</el-button>
+        <el-button text type="primary" :loading="styleManageLoading" @click="loadTemplates" icon=Refresh>刷新</el-button>
       </div>
       <el-table :data="templates" border size="small" v-loading="styleManageLoading">
         <el-table-column prop="name" label="模板名称" min-width="220" />
@@ -479,12 +541,12 @@
         <el-table-column label="操作" width="180">
           <template #default="{ row }">
             <el-button link type="primary" @click="openStyleEdit(row)">修改</el-button>
-            <el-button link type="danger" :loading="styleDeletingId === row.id" @click="deleteStyle(row)">删除</el-button>
+            <el-button link type="danger" :loading="styleDeletingId === row.id" @click="deleteStyle(row)" icon=Delete>删除</el-button>
           </template>
         </el-table-column>
       </el-table>
       <template #footer>
-        <el-button @click="styleManageDialog = false">关闭</el-button>
+        <el-button @click="styleManageDialog = false" icon=Close>关闭</el-button>
       </template>
     </el-dialog>
 
@@ -498,8 +560,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="styleEditDialog = false">取消</el-button>
-        <el-button type="primary" :loading="styleEditSaving" @click="saveStyleEdit">保存</el-button>
+        <el-button @click="styleEditDialog = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="styleEditSaving" @click="saveStyleEdit" icon=Check>保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -510,6 +572,7 @@ import {
   createReport,
   createTemplate,
   getCompanySettings,
+  updateCompanySettings,
   getReport,
   applyReportSeals,
   removeReportSeal,
@@ -527,8 +590,9 @@ import { canEditReportFieldKey, perm } from '../utils/permissions';
 import { isCustomFieldKey } from '../utils/reportFieldEditDefinitions';
 
 const TABLE_KEY = 'inspection_table';
-const PROTECTED_KEYS = new Set([TABLE_KEY, 'product_name', 'batch_no', 'test_conclusion', 'remarks']);
+const PROTECTED_KEYS = new Set([TABLE_KEY, 'product_name', 'packing', 'batch_weight', 'batch_no', 'analysis_date', 'ex_mill_date', 'test_conclusion', 'remarks']);
 const FIXED_REPORT_NO = 'JL-8.8-05';
+const LEGACY_TABLE_KEYS = ['item', 'unit', 'standard', 'result', 'basis'];
 
 function svgUrl(svg) {
   return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
@@ -559,6 +623,9 @@ export default {
       tplDialog: false,
       tplSaving: false,
       tplForm: { name: '', description: '', includeValues: false },
+      templateEditMode: false,
+      templateSaving: false,
+      templateForm: { name: '', description: '' },
       styleManageDialog: false,
       styleManageLoading: false,
       styleDeletingId: null,
@@ -584,7 +651,13 @@ export default {
         fields: []
       },
       draggingMetaFieldKey: '',
-      draggingTableRowIndex: -1
+      draggingTableRowIndex: -1,
+      reportTitleForm: {
+        reportTitleZh: '',
+        reportTitleEn: ''
+      },
+      reportTitleSaving: false,
+      reportTitleEditMode: false
     };
   },
   computed: {
@@ -596,6 +669,12 @@ export default {
     },
     canSaveAsTemplate() {
       return (this.form.fields || []).length > 0;
+    },
+    canManageCompany() {
+      return perm('company', 'manage');
+    },
+    canEditReportTitles() {
+      return this.canManageCompany && this.reportTitleEditMode;
     },
     logoBlockStyle() {
       if (this.company.logoUrl) {
@@ -637,10 +716,13 @@ export default {
     },
     tableColumnLabels() {
       const t = this.inspectionTable;
-      if (!t?.fieldValue?.columnLabels || t.fieldValue.columnLabels.length !== 4) {
+      if (!t?.fieldValue?.columnLabels || t.fieldValue.columnLabels.length < 4) {
         return this.defaultColumnLabels();
       }
       return t.fieldValue.columnLabels;
+    },
+    hasInspectionBasisColumn() {
+      return (this.tableColumnLabels || []).length >= 5;
     },
     tableDataRows() {
       const t = this.inspectionTable;
@@ -668,9 +750,15 @@ export default {
       };
       this.ensurePaperShape(report);
       await this.loadAppliedSeals();
+      await this.loadTemplateInfo();
     } else {
       this.seedDefaultPaper();
       this.loadSuggestedReportNo();
+      const queryTemplateId = Number(this.$route?.query?.templateId);
+      if (Number.isFinite(queryTemplateId) && queryTemplateId > 0) {
+        this.selectedTemplateId = queryTemplateId;
+        await this.applyTemplateById(queryTemplateId, { skipConfirm: true });
+      }
     }
   },
   methods: {
@@ -686,10 +774,10 @@ export default {
     },
     defaultColumnLabels() {
       return [
-        { zh: '检验项目', en: 'Test item' },
-        { zh: '单位', en: 'Unit' },
-        { zh: '标准值', en: 'Normal value' },
-        { zh: '检测值', en: 'Test value' }
+        { key: 'item', zh: '检验项目', en: 'Test item' },
+        { key: 'unit', zh: '单位', en: 'Unit' },
+        { key: 'standard', zh: '标准值', en: 'Normal value' },
+        { key: 'result', zh: '检测值', en: 'Test value' }
       ];
     },
     defaultTableRows() {
@@ -697,7 +785,8 @@ export default {
         item: { zh: itemZh, en: itemEn },
         unit: { zh: uZh, en: uEn },
         standard: { zh: sZh, en: sEn },
-        result: { zh: '', en: '' }
+        result: { zh: '', en: '' },
+        basis: { zh: '', en: '' }
       });
       return [
         row('外观', 'Appearance', '-', '-', '透明', 'Transparent'),
@@ -759,8 +848,45 @@ export default {
           descriptionZh: settings.descriptionZh || settings.description_zh || '',
           descriptionEn: settings.descriptionEn || settings.description_en || ''
         };
+        this.reportTitleForm = {
+          reportTitleZh: this.company.reportTitleZh || '',
+          reportTitleEn: this.company.reportTitleEn || ''
+        };
       } catch (e) {
         /* ignore */
+      }
+    },
+    startEditReportTitles() {
+      if (!this.canManageCompany) return;
+      this.reportTitleEditMode = true;
+    },
+    async cancelEditReportTitles() {
+      this.reportTitleEditMode = false;
+      await this.loadCompany();
+    },
+    async saveReportTitles() {
+      if (!this.canManageCompany) return;
+      this.reportTitleSaving = true;
+      try {
+        const { settings } = await getCompanySettings();
+        const current = settings || {};
+        await updateCompanySettings({
+          companyNameZh: current.companyNameZh || current.company_name_zh || '',
+          companyNameEn: current.companyNameEn || current.company_name_en || '',
+          reportTitleZh: this.reportTitleForm.reportTitleZh,
+          reportTitleEn: this.reportTitleForm.reportTitleEn,
+          descriptionZh: current.descriptionZh ?? current.description_zh ?? null,
+          descriptionEn: current.descriptionEn ?? current.description_en ?? null,
+          logoUrl: current.logoUrl ?? current.logo_url ?? null
+        });
+        this.company.reportTitleZh = this.reportTitleForm.reportTitleZh || '';
+        this.company.reportTitleEn = this.reportTitleForm.reportTitleEn || '';
+        this.$message.success('报告标题已保存');
+        this.reportTitleEditMode = false;
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '保存失败'));
+      } finally {
+        this.reportTitleSaving = false;
       }
     },
     normalizeFieldValue(v, fieldType) {
@@ -794,14 +920,24 @@ export default {
       const rowsRaw = parsed.rows || parsed.items || parsed.tests || [];
       const colIn = parsed.columnLabels;
       const columnLabels =
-        Array.isArray(colIn) && colIn.length === 4
-          ? colIn.map((c) => ({
+        Array.isArray(colIn) && colIn.length >= 4
+          ? colIn.map((c, idx) => ({
+              key: typeof c === 'object' && c?.key ? String(c.key) : LEGACY_TABLE_KEYS[idx] || `col_${idx}`,
               zh: typeof c === 'object' ? c.zh ?? '' : String(c),
               en: typeof c === 'object' ? c.en ?? '' : ''
             }))
           : this.defaultColumnLabels();
       const rows = (rowsRaw || []).length ? this.rowsFromLegacyArray(rowsRaw) : this.defaultTableRows();
-      return { columnLabels, rows };
+      const forceBasisColumn = parsed?.hasBasisColumn === true;
+      if (forceBasisColumn && columnLabels.length < 5) {
+        columnLabels.push({ key: 'basis', zh: '单项检验依据', en: 'Inspection basis' });
+      }
+      if (columnLabels.length >= 5) {
+        rows.forEach((r) => {
+          if (!r.basis) this.$set(r, 'basis', { zh: '', en: '' });
+        });
+      }
+      return { columnLabels, rows, hasBasisColumn: columnLabels.length >= 5 };
     },
     rowsFromLegacyArray(arr) {
       const toBi = (val) => {
@@ -815,7 +951,8 @@ export default {
         item: toBi(r.item ?? r.name ?? ''),
         unit: toBi(r.unit ?? r.unitName ?? ''),
         standard: toBi(r.standard ?? r.spec ?? ''),
-        result: toBi(r.result ?? r.value ?? '')
+        result: toBi(r.result ?? r.value ?? ''),
+        basis: toBi(r.basis ?? r.reference ?? '')
       }));
     },
     ensurePaperShape(report) {
@@ -928,12 +1065,31 @@ export default {
       if (!this.fieldEditable('inspection_table')) return;
       const t = this.inspectionTable;
       if (!t?.fieldValue?.rows) return;
-      t.fieldValue.rows.push({
+      const row = {
         item: { zh: '新项目', en: 'New Item' },
         unit: { zh: '', en: '' },
         standard: { zh: '', en: '' },
         result: { zh: '', en: '' }
-      });
+      };
+      if (this.hasInspectionBasisColumn) row.basis = { zh: '', en: '' };
+      t.fieldValue.rows.push(row);
+    },
+    toggleBasisColumn(enable) {
+      if (!this.fieldEditable('inspection_table')) return;
+      const t = this.inspectionTable;
+      if (!t?.fieldValue) return;
+      const cols = Array.isArray(t.fieldValue.columnLabels) ? t.fieldValue.columnLabels : this.defaultColumnLabels();
+      const hasBasis = cols.length >= 5;
+      if (enable && !hasBasis) {
+        cols.push({ key: 'basis', zh: '单项检验依据', en: 'Inspection basis' });
+        (t.fieldValue.rows || []).forEach((r) => {
+          if (!r.basis) this.$set(r, 'basis', { zh: '', en: '' });
+        });
+      } else if (!enable && hasBasis) {
+        cols.splice(4);
+      }
+      this.$set(t.fieldValue, 'columnLabels', cols);
+      this.$set(t.fieldValue, 'hasBasisColumn', cols.length >= 5);
     },
     removeTableRow(ri) {
       if (!this.fieldEditable('inspection_table')) return;
@@ -985,7 +1141,15 @@ export default {
       });
     },
     getSealImage(sealType) {
-      return this.appliedSeals?.[sealType]?.imageUrl || '';
+      const url = this.appliedSeals?.[sealType]?.imageUrl || '';
+      if (!url) return '';
+      // Convert absolute URL to relative path for proxy
+      try {
+        const u = new URL(url);
+        return u.pathname;
+      } catch {
+        return url;
+      }
     },
     hasSeal(sealType) {
       return !!this.getSealImage(sealType);
@@ -993,9 +1157,10 @@ export default {
     footerStampStyle(slot) {
       const imageUrl = this.getSealImage(slot);
       if (!imageUrl) return {};
+      const isSvg = imageUrl.toLowerCase().endsWith('.svg');
       return {
         backgroundImage: `url("${imageUrl}")`,
-        backgroundSize: 'contain',
+        backgroundSize: isSvg ? '100% 100%' : 'contain',
         backgroundRepeat: 'no-repeat',
         backgroundPosition: 'center'
       };
@@ -1113,6 +1278,49 @@ export default {
       this.styleManageDialog = true;
       this.loadTemplates();
     },
+    async loadTemplateInfo() {
+      if (!this.form.templateId) return;
+      try {
+        const { template } = await getTemplate(this.form.templateId);
+        this.templateForm = {
+          name: template.name || '',
+          description: template.description || ''
+        };
+      } catch (e) {
+        // ignore
+      }
+    },
+    startEditTemplate() {
+      this.templateEditMode = true;
+    },
+    cancelEditTemplate() {
+      this.templateEditMode = false;
+      this.loadTemplateInfo();
+    },
+    async saveTemplate() {
+      if (!this.form.templateId) return;
+      const name = String(this.templateForm.name || '').trim();
+      if (!name) {
+        this.$message.warning('请输入模板名称');
+        return;
+      }
+      this.templateSaving = true;
+      try {
+        const { template } = await getTemplate(this.form.templateId);
+        await updateTemplate(this.form.templateId, {
+          name,
+          description: String(this.templateForm.description || '').trim() || null,
+          fields: template.fields || []
+        });
+        this.$message.success('模板已更新');
+        this.templateEditMode = false;
+        await this.loadTemplates();
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '保存模板失败'));
+      } finally {
+        this.templateSaving = false;
+      }
+    },
     openStyleEdit(row) {
       this.styleEditForm = {
         id: row.id,
@@ -1163,11 +1371,14 @@ export default {
         this.styleDeletingId = null;
       }
     },
-    async applyTemplate() {
-      if (!this.selectedTemplateId) return;
-      const ok = await this.$confirm('套用模板会覆盖当前字段设计，确认继续？', '提示', { type: 'warning' }).catch(() => false);
-      if (!ok) return;
-      const { template } = await getTemplate(this.selectedTemplateId);
+    async applyTemplateById(templateId, { skipConfirm = false } = {}) {
+      const targetId = Number(templateId);
+      if (!Number.isFinite(targetId) || targetId <= 0) return;
+      if (!skipConfirm) {
+        const ok = await this.$confirm('套用模板会覆盖当前字段设计，确认继续？', '提示', { type: 'warning' }).catch(() => false);
+        if (!ok) return;
+      }
+      const { template } = await getTemplate(targetId);
       this.form.templateId = template.id;
       this.form.fields = (template.fields || []).map((f) => ({
         fieldKey: f.fieldKey,
@@ -1178,7 +1389,15 @@ export default {
         sortOrder: f.sortOrder || 0
       }));
       this.ensurePaperShape(null);
+      this.templateForm = {
+        name: template.name || '',
+        description: template.description || ''
+      };
       this.$message.success('已套用模板');
+    },
+    async applyTemplate() {
+      if (!this.selectedTemplateId) return;
+      await this.applyTemplateById(this.selectedTemplateId);
     },
     async startBlank() {
       this.selectedTemplateId = null;
@@ -1307,58 +1526,98 @@ export default {
 
 <style scoped>
 .report-edit-root {
-  padding-bottom: 24px;
+  padding-bottom: 32px;
+  background: #f0f2f5;
+  min-height: 100vh;
 }
+
+/* 顶部工具栏 */
 .toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  padding: 16px 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 .toolbar-right {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px;
 }
 .toolbar-label {
-  font-size: 13px;
+  font-size: 14px;
   color: #606266;
+  font-weight: 500;
 }
 .conclusion-select {
   width: 120px;
 }
 .top-alert {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  border-radius: 8px;
 }
+
+/* 卡片样式 */
 .tpl-card {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.tpl-card :deep(.el-card__header) {
+  padding: 16px 20px;
+  border-bottom: 1px solid #ebeef5;
+  background: #fafbfc;
+}
+.tpl-card :deep(.el-card__body) {
+  padding: 20px;
 }
 .field-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
 }
 .create-row {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
   flex-wrap: wrap;
+}
+.report-title-actions {
+  text-align: right;
+  margin-top: 16px;
+}
+.top-cards-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.tpl-card-half {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
 }
 .style-manage-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 .text-muted {
   color: #909399;
   font-size: 13px;
 }
 
+/* 报告纸张区域 */
 .paper-wrap {
-  background-color: #f5f5f5;
-  padding: 20px;
+  background: #f0f2f5;
+  padding: 24px;
   overflow: auto;
 }
 
@@ -1368,33 +1627,35 @@ export default {
   background: #fff;
   margin: 0 auto;
   padding: 30mm 20mm 20mm;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   position: relative;
   box-sizing: border-box;
   font-family: 'Microsoft YaHei', 'SimSun', sans-serif;
+  border-radius: 4px;
 }
 
+/* Logo和描述 */
 .header-logo {
   position: absolute;
   top: 20mm;
   left: 20mm;
-  width: 60px;
-  height: 60px;
+  width: 64px;
+  height: 64px;
 }
 .header-logo.has-img {
-  width: 72px;
-  height: 72px;
+  width: 76px;
+  height: 76px;
 }
 
 .header-desc {
   position: absolute;
   top: 20mm;
   left: 20mm;
-  margin-top: 68px;
+  margin-top: 72px;
   max-width: 140px;
   font-size: 11px;
   color: #333;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 .header-desc-en {
   font-size: 10px;
@@ -1402,18 +1663,19 @@ export default {
   margin-top: 4px;
 }
 
+/* 报告编号 */
 .header-doc-no {
   text-align: right;
   font-size: 14px;
   color: #333;
-  margin-bottom: 30px;
+  margin-bottom: 32px;
 }
 .doc-no-row {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 .doc-no-row:last-child {
   margin-bottom: 0;
@@ -1431,9 +1693,11 @@ export default {
   min-width: 160px;
   outline: none;
   background: transparent;
+  padding: 4px 0;
+  transition: border-color 0.2s;
 }
 .doc-no-input:focus {
-  border-bottom: 2px solid #1890ff;
+  border-bottom: 2px solid #409eff;
 }
 .doc-no-input.is-readonly,
 .form-input.is-readonly,
@@ -1450,85 +1714,125 @@ export default {
   border-bottom-width: 1px;
 }
 
+/* 公司名称和报告标题 */
 .company-name {
   text-align: center;
-  font-size: 20px;
+  font-size: 22px;
   color: #333;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  font-weight: 500;
 }
 .report-title {
   text-align: center;
   font-size: 36px;
   font-weight: bold;
   color: #222;
-  margin: 0 0 15px;
+  margin: 0 0 12px;
+  letter-spacing: 2px;
 }
 .report-title-en {
   text-align: center;
   font-size: 20px;
   color: #333;
-  margin-bottom: 30px;
+  margin-bottom: 32px;
   font-style: italic;
 }
 
+/* 字段信息网格布局 */
+.form-container-inner {
+  margin-bottom: 24px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px 24px;
+  width: 100%;
+  box-sizing: border-box;
+}
 .form-row {
   display: flex;
-  margin-bottom: 15px;
   align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fafbfc;
+  border-radius: 6px;
+  border: 1px solid #ebeef5;
+  transition: all 0.2s;
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+}
+.form-row:hover {
+  border-color: #c0c4cc;
+  background: #fff;
 }
 .form-label {
-  width: 130px;
-  font-size: 16px;
+  width: 100px;
+  font-size: 14px;
   color: #333;
   text-align: right;
   padding-right: 8px;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 .label-cn {
   display: block;
   width: 100%;
   border: none;
-  font-size: 16px;
+  font-size: 14px;
   color: #333;
   text-align: right;
   background: transparent;
   outline: none;
+  font-weight: 500;
 }
 .label-en {
   display: block;
   width: 100%;
   border: none;
-  font-size: 13px;
-  color: #666;
+  font-size: 11px;
+  color: #909399;
   text-align: right;
   background: transparent;
   outline: none;
-  margin-top: 4px;
+  margin-top: 2px;
+}
+.form-value-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .form-input {
   flex: 1;
   height: 32px;
   border: none;
-  border-bottom: 1px solid #333;
-  font-size: 16px;
-  padding: 0 5px;
+  border-bottom: 1px solid #dcdfe6;
+  font-size: 14px;
+  padding: 0 4px;
   outline: none;
   background: transparent;
+  transition: border-color 0.2s;
+  min-width: 0;
 }
 .form-input:focus {
-  border-bottom: 2px solid #1890ff;
+  border-bottom: 2px solid #409eff;
 }
 .action-icons {
   display: flex;
-  gap: 6px;
-  margin-left: 8px;
+  gap: 4px;
   align-items: center;
+  flex-shrink: 0;
 }
 .edit-icon,
 .del-icon,
 .drag-icon {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   cursor: pointer;
   flex-shrink: 0;
   user-select: none;
@@ -1536,72 +1840,127 @@ export default {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
+  transition: all 0.2s;
 }
 .edit-icon :deep(.el-icon),
 .del-icon :deep(.el-icon),
 .drag-icon :deep(.el-icon) {
-  font-size: 16px;
+  font-size: 14px;
 }
 .drag-icon {
   color: #909399;
 }
+.drag-icon:hover {
+  background: #e6e8eb;
+}
 .edit-icon {
-  color: #1890ff;
+  color: #409eff;
+}
+.edit-icon:hover {
+  background: #ecf5ff;
 }
 .del-icon {
-  color: #ff4444;
+  color: #f56c6c;
 }
-.edit-icon:hover,
 .del-icon:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-.add-row-btn {
-  margin: 0 0 25px 135px;
-  padding: 5px 12px;
-  background: #1890ff;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
+  background: #fef0f0;
 }
 
+/* 添加按钮 */
+.add-row-btn {
+  margin: 0 0 24px 0;
+  padding: 8px 16px;
+  background: #409eff;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.add-row-btn:hover {
+  background: #66b1ff;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3);
+}
+
+/* 检验参数表格 */
 .test-table {
   width: 100%;
-  border-collapse: collapse;
-  margin-top: 20px;
-  border: 1px solid #333;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin-top: 24px;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 .test-table th,
 .test-table td {
-  border: 1px solid #333;
-  padding: 8px 6px;
+  border-right: 1px solid #dcdfe6;
+  border-bottom: 1px solid #dcdfe6;
+  padding: 14px 12px;
   text-align: center;
   font-size: 14px;
   vertical-align: middle;
+  transition: background-color 0.2s;
 }
 .test-table th {
-  background-color: #fafafa;
-  font-weight: bold;
+  background: linear-gradient(180deg, #f8f9fb 0%, #f2f3f5 100%);
+  font-weight: 600;
+  color: #303133;
+  position: relative;
+  border-top: none;
+  border-left: none;
+}
+.test-table td {
+  border-top: none;
+  border-left: none;
+}
+.test-table tr:first-child th {
+  border-top: none;
+}
+.test-table tr:first-child th:first-child {
+  border-left: none;
+}
+.test-table tr:nth-child(even) td {
+  background-color: #fafbfc;
+}
+.test-table tr:hover td {
+  background-color: #ecf5ff;
+  transition: background-color 0.15s ease;
+}
+.test-table .cell-merged {
+  background: linear-gradient(180deg, #f8f9fb 0%, #f2f3f5 100%);
+  font-weight: 600;
+  color: #303133;
 }
 .th-title-cn {
   width: 100%;
   border: none;
   text-align: center;
-  font-size: 15px;
-  font-weight: bold;
+  font-size: 14px;
+  font-weight: 600;
   background: transparent;
   outline: none;
+  color: #303133;
+  padding: 4px 0;
+}
+.th-title-cn:focus {
+  color: #409eff;
 }
 .th-title-en {
   width: 100%;
   border: none;
   text-align: center;
-  font-size: 12px;
-  color: #666;
+  font-size: 11px;
+  color: #909399;
   background: transparent;
   outline: none;
   margin-top: 4px;
+  padding: 2px 0;
 }
 .cell-plain {
   width: 100%;
@@ -1610,10 +1969,17 @@ export default {
   font-size: 14px;
   outline: none;
   background: transparent;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+.cell-plain:focus {
+  background: #ecf5ff;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
 }
 .cell-en {
-  font-size: 12px;
-  color: #666;
+  font-size: 11px;
+  color: #909399;
   margin-top: 4px;
 }
 .test-input {
@@ -1621,82 +1987,142 @@ export default {
   border: none;
   outline: none;
   text-align: center;
-  font-size: 15px;
+  font-size: 14px;
   background: transparent;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+.test-input:focus {
+  background: #ecf5ff;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
 }
 .cell-merged {
   text-align: center;
   font-weight: 600;
+  color: #303133;
 }
 .item-en {
-  font-size: 12px;
-  color: #666;
+  font-size: 11px;
+  color: #909399;
   margin-top: 4px;
   font-weight: normal;
 }
 .conclusion-input,
 .remark-input {
-  width: 90%;
-  height: 36px;
+  width: 85%;
+  height: 44px;
   border: none;
-  border-bottom: 1px solid #333;
+  border-bottom: 2px solid #dcdfe6;
   font-size: 18px;
   text-align: center;
   outline: none;
   background: transparent;
-  color: #c00;
+  color: #f56c6c;
   font-weight: bold;
+  transition: all 0.3s;
+  padding: 0 8px;
+  border-radius: 4px;
+}
+.conclusion-input:hover,
+.remark-input:hover {
+  border-bottom-color: #c0c4cc;
+}
+.conclusion-input:focus,
+.remark-input:focus {
+  border-bottom: 2px solid #409eff;
+  background: #fafbfc;
 }
 .stamp-cell {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.cell-stamp {
+.cell-stamp-wrap {
   position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 78px;
-  height: 78px;
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-  opacity: 0.92;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cell-stamp-img {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+  opacity: 0.9;
+}
+.cell-stamp-img[src$=".svg"] {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
 }
 .table-action {
   display: flex;
   justify-content: center;
   align-items: center;
+  gap: 12px;
+}
+.table-action .drag-icon,
+.table-action .del-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.table-action .drag-icon {
+  color: #909399;
+  background: #f5f7fa;
+}
+.table-action .drag-icon:hover {
+  background: #e6e8eb;
+  color: #606266;
+}
+.table-action .del-icon {
+  color: #f56c6c;
+  background: #fef0f0;
+}
+.table-action .del-icon:hover {
+  background: #fde2e2;
+  color: #f56c6c;
 }
 
+/* 盖章工具栏 */
 .seal-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin: 20px 0 8px;
-  padding: 10px;
+  gap: 12px;
+  margin: 24px 0 12px;
+  padding: 16px;
   background: #f9fafc;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid #ebeef5;
 }
 
+/* 签字盖章区域 */
 .footer-section {
   display: flex;
   justify-content: space-around;
-  margin-top: 20px;
+  margin-top: 32px;
   text-align: center;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 .footer-item {
   text-align: center;
 }
 .footer-label {
   font-size: 16px;
-  margin-bottom: 5px;
+  margin-bottom: 4px;
+  font-weight: 500;
+  color: #303133;
 }
 .footer-label-en {
-  font-size: 14px;
-  color: #666;
+  font-size: 13px;
+  color: #909399;
   margin-bottom: 16px;
 }
 .stamp-item {
@@ -1707,6 +2133,18 @@ export default {
   background-repeat: no-repeat;
   background-position: center;
 }
+.stamp-item-img {
+  width: 100px;
+  height: 100px;
+  margin: 0 auto;
+  object-fit: contain;
+  display: block;
+}
+.stamp-item-img[src$=".svg"] {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
 .stamp-item-wrap {
   width: 100px;
   margin: 0 auto;
@@ -1716,18 +2154,23 @@ export default {
   position: absolute;
   right: -8px;
   top: -8px;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.7);
   color: #fff;
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
   text-align: center;
   cursor: pointer;
   user-select: none;
+  transition: all 0.2s;
+}
+.stamp-remove:hover {
+  background: rgba(0, 0, 0, 0.9);
 }
 
+/* 打印样式 */
 @media print {
   .toolbar,
   .top-alert,
@@ -1746,56 +2189,107 @@ export default {
   .report-container {
     box-shadow: none;
   }
+  .stamp-cell {
+    position: relative;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+  .cell-stamp-wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .cell-stamp-img {
+    width: 80px;
+    height: 80px;
+    object-fit: contain;
+    opacity: 0.9;
+  }
+  .cell-stamp-img[src$=".svg"] {
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+  }
 }
 
+/* 响应式布局 */
 @media (max-width: 992px) {
+  .report-edit-root {
+    padding-bottom: 16px;
+  }
   .toolbar {
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: 12px;
+    padding: 12px;
   }
   .toolbar-right {
     width: 100%;
+    justify-content: flex-start;
   }
   .toolbar-right .el-button {
-    flex: 1 1 calc(50% - 8px);
+    flex: 1;
   }
   .conclusion-select {
     width: 100%;
-    margin-right: 0;
   }
   .paper-wrap {
-    padding: 10px;
+    padding: 12px;
   }
   .report-container {
-    min-width: 780px;
-    width: 780px;
+    min-width: auto;
+    width: 100%;
     min-height: auto;
-    padding: 18mm 12mm 12mm;
+    padding: 16mm 10mm 10mm;
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .form-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .form-label {
+    width: 100%;
+    text-align: left;
+    padding-right: 0;
+  }
+  .label-cn,
+  .label-en {
+    text-align: left;
+  }
+  .form-value-wrap {
+    width: 100%;
   }
   .edit-icon,
   .del-icon,
   .drag-icon {
     width: 28px;
     height: 28px;
-    border-radius: 8px;
+    border-radius: 6px;
   }
   .edit-icon :deep(.el-icon),
   .del-icon :deep(.el-icon),
   .drag-icon :deep(.el-icon) {
-    font-size: 18px;
+    font-size: 16px;
   }
   .add-row-btn {
-    min-height: 36px;
-    padding: 8px 14px;
+    width: 100%;
+    justify-content: center;
+    padding: 12px;
   }
   .seal-toolbar {
     gap: 10px;
     padding: 12px;
   }
   .seal-toolbar .el-button {
-    min-height: 36px;
-    min-width: 90px;
+    flex: 1;
+    min-width: 80px;
   }
   .stamp-remove {
     width: 24px;
@@ -1804,6 +2298,10 @@ export default {
     font-size: 14px;
     right: -10px;
     top: -10px;
+  }
+  .footer-section {
+    flex-direction: column;
+    gap: 20px;
   }
 }
 </style>

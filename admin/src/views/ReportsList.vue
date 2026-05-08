@@ -1,39 +1,43 @@
 <template>
   <div class="reports-list">
-    <el-card class="report-title-card">
-      <template #header>
-        <div class="field-header">
-          <div>报告标题设置</div>
-        </div>
-      </template>
-      <el-form :model="reportTitleForm" label-width="180px" @submit.prevent>
-        <el-form-item label="报告名称（中文）">
-          <el-input v-model="reportTitleForm.reportTitleZh" :readonly="!canEditReportTitles" />
-        </el-form-item>
-        <el-form-item label="Report Title (English)">
-          <el-input v-model="reportTitleForm.reportTitleEn" :readonly="!canEditReportTitles" />
-        </el-form-item>
-      </el-form>
-      <div v-if="canManageCompany" class="report-title-actions">
-        <el-button v-if="!reportTitleEditMode" @click="startEditReportTitles">编辑</el-button>
-        <template v-else>
-          <el-button @click="cancelEditReportTitles">取消</el-button>
-          <el-button type="primary" :loading="reportTitleSaving" @click="saveReportTitles">保存标题</el-button>
-        </template>
-      </div>
-    </el-card>
 
-    <div class="toolbar">
-      <div class="left">
-        <el-input v-model="q" placeholder="报告ID/报告编号/产品名称" clearable class="field-q" @keyup.enter="onSearch" />
-        <el-input v-model="batchNo" placeholder="批次" clearable class="field-batch" @keyup.enter="onSearch" />
-        <el-select v-model="status" placeholder="状态" clearable class="field-status" @change="onSearch">
-          <el-option label="有效" value="active" />
-          <el-option label="作废" value="void" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
+    <el-card class="toolbar-card" shadow="never">
+      <div class="toolbar">
+        <div class="left">
+          <el-input v-model="q" placeholder="报告ID/报告编号/产品名称" clearable class="field-q" @keyup.enter="onSearch" />
+          <el-input v-model="batchNo" placeholder="批次" clearable class="field-batch" @keyup.enter="onSearch" />
+          <el-select v-model="status" placeholder="状态" clearable class="field-status" @change="onSearch">
+            <el-option label="有效" value="active" />
+            <el-option label="作废" value="void" />
+          </el-select>
+          <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
+          <el-button :icon="Refresh" @click="onReset">重置</el-button>
+        </div>
+        <div class="right">
+          <span class="selected-tip">已选 {{ selected.length }} 条</span>
+          <el-divider direction="vertical" />
+          <el-button
+            v-if="perm('templates', 'use') && perm('reports', 'create')"
+            type="info"
+            :icon="Brush"
+            size="small"
+            plain
+            @click="$router.push('/reports/designer')"
+          >
+            设计报告
+          </el-button>
+          <el-button
+            v-if="perm('reports', 'create')"
+            type="primary"
+            :icon="Plus"
+            size="small"
+            @click="$router.push('/reports/new')"
+          >
+            新建报告
+          </el-button>
+        </div>
       </div>
-      <div class="right">
+      <div class="batch-actions">
         <el-button
           v-if="perm('reports', 'export')"
           type="info"
@@ -78,25 +82,6 @@
           @click="onBulkDelete"
         >批量删除</el-button>
         <el-button
-          v-if="perm('templates', 'use') && perm('reports', 'create')"
-          type="info"
-          :icon="Brush"
-          size="small"
-          plain
-          @click="$router.push('/reports/designer')"
-        >
-          设计报告
-        </el-button>
-        <el-button
-          v-if="perm('reports', 'create')"
-          type="primary"
-          :icon="Plus"
-          size="small"
-          @click="$router.push('/reports/new')"
-        >
-          新建报告
-        </el-button>
-        <el-button
           v-if="perm('qrcodes', 'create')"
           type="success"
           :icon="Promotion"
@@ -108,10 +93,10 @@
           生成二维码（合并）
         </el-button>
       </div>
-    </div>
+    </el-card>
 
     <div class="table-wrap">
-      <el-table :data="items" border @selection-change="selected = $event">
+      <el-table :data="items" border stripe @selection-change="selected = $event">
       <el-table-column type="selection" width="48" />
       <el-table-column prop="reportUid" label="报告ID" width="140" />
       <el-table-column prop="reportNo" label="报告编号" width="120" />
@@ -132,10 +117,10 @@
       </el-table-column>
       <el-table-column label="操作" width="360">
         <template #default="{ row }">
-          <el-button v-if="perm('reports', 'previewPrint')" type="info" plain size="small" @click="onPreview(row)">
+          <el-button v-if="perm('reports', 'previewPrint')" type="info" plain size="small" :icon="View" @click="onPreview(row)">
             预览
           </el-button>
-          <el-button v-if="perm('reports', 'previewPrint')" type="primary" plain size="small" @click="onPrint(row)">
+          <el-button v-if="perm('reports', 'previewPrint')" type="primary" plain size="small" :icon="Printer" @click="onPrint(row)">
             打印
           </el-button>
           <el-button
@@ -143,6 +128,7 @@
             type="success"
             plain
             size="small"
+            :icon="Edit"
             @click="$router.push(`/reports/${row.id}`)"
           >
             {{ perm('reports', 'edit') ? '编辑' : '查看' }}
@@ -152,6 +138,7 @@
             type="warning"
             plain
             size="small"
+            :icon="Warning"
             @click="onVoid(row)"
           >
             作废
@@ -161,6 +148,7 @@
             type="success"
             plain
             size="small"
+            :icon="RefreshRight"
             @click="onActivate(row)"
           >
             恢复有效
@@ -189,8 +177,8 @@
         </div>
 
         <div class="qr-actions-row">
-          <el-button type="primary" plain @click="onViewQrContent">查看二维码内容</el-button>
-          <el-button @click="downloadQr">下载二维码图片</el-button>
+          <el-button type="primary" plain :icon="View" @click="onViewQrContent">查看二维码内容</el-button>
+          <el-button :icon="Download" @click="downloadQr">下载二维码图片</el-button>
         </div>
       </div>
     </el-dialog>
@@ -212,32 +200,23 @@
         />
       </div>
       <template #footer>
-        <el-button @click="previewDialog = false">关闭</el-button>
-        <el-button type="primary" :disabled="!previewUrl" @click="printPreview">打印</el-button>
+        <el-button :icon="Close" @click="previewDialog = false">关闭</el-button>
+        <el-button type="primary" :disabled="!previewUrl" :icon="Printer" @click="printPreview">打印</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script>
-import {
-  activateReport,
-  createQrcode,
-  exportReportsJson,
-  getCompanySettings,
-  listReports,
-  updateCompanySettings,
-  voidReport
-} from '../api';
+import { activateReport, createQrcode, exportReportsJson, listReports, voidReport } from '../api';
 import { bulkActivateReports, bulkDeleteReports, bulkPassReports, bulkVoidReports } from '../api';
-import { Brush, Check, Delete, Download, Plus, Promotion, RefreshRight, Search, Warning } from '@element-plus/icons-vue';
+import { Brush, Check, Close, Delete, Download, Plus, Promotion, Printer, RefreshRight, Search, View, Warning } from '@element-plus/icons-vue';
 import { perm } from '../utils/permissions';
 import { getAuthToken } from '../stores/auth';
 import { customerReportPreviewUrl } from '../utils/customerReportPreviewUrl';
 
 export default {
   name: 'ReportsList',
-  components: { Brush, Check, Delete, Download, Plus, Promotion, RefreshRight, Search, Warning },
   data() {
     return {
       q: '',
@@ -254,87 +233,37 @@ export default {
       previewDialog: false,
       previewLoading: false,
       previewUrl: '',
-      /** 弹窗内「打印」用；iframe 跨域时不能调用 contentWindow.print() */
-      previewReportId: null,
-      reportTitleForm: {
-        reportTitleZh: '',
-        reportTitleEn: ''
-      },
-      reportTitleSaving: false,
-      reportTitleEditMode: false
+      previewReportId: null
     };
   },
   computed: {
-    canManageCompany() {
-      return this.perm('company', 'manage');
-    },
-    canEditReportTitles() {
-      return this.canManageCompany && this.reportTitleEditMode;
-    },
     canBulkPass() {
       return (
-        this.perm('reports', 'bulkPass') ||
-        this.perm('reports', 'edit') ||
-        this.perm('reports', 'chairmanApprove')
+        perm('reports', 'bulkPass') ||
+        perm('reports', 'edit') ||
+        perm('reports', 'chairmanApprove')
       );
     },
     canBulkVoid() {
-      return this.perm('reports', 'bulkVoid') || this.perm('reports', 'void');
+      return perm('reports', 'bulkVoid') || perm('reports', 'void');
     },
     canBulkActivate() {
-      return this.perm('reports', 'bulkActivate') || this.perm('reports', 'activate');
+      return perm('reports', 'bulkActivate') || perm('reports', 'activate');
     },
     canBulkDelete() {
-      return this.perm('reports', 'bulkDelete') || this.perm('reports', 'void');
+      return perm('reports', 'bulkDelete') || perm('reports', 'void');
     }
   },
   mounted() {
     this.load();
-    this.loadReportTitles();
   },
   methods: {
     perm,
-    async loadReportTitles() {
-      try {
-        const { settings } = await getCompanySettings();
-        if (!settings) return;
-        this.reportTitleForm = {
-          reportTitleZh: settings.reportTitleZh || settings.report_title_zh || '',
-          reportTitleEn: settings.reportTitleEn || settings.report_title_en || ''
-        };
-      } catch (_) {
-        // ignore
-      }
-    },
-    startEditReportTitles() {
-      if (!this.canManageCompany) return;
-      this.reportTitleEditMode = true;
-    },
-    async cancelEditReportTitles() {
-      this.reportTitleEditMode = false;
-      await this.loadReportTitles();
-    },
-    async saveReportTitles() {
-      this.reportTitleSaving = true;
-      try {
-        const { settings } = await getCompanySettings();
-        const current = settings || {};
-        await updateCompanySettings({
-          companyNameZh: current.companyNameZh || current.company_name_zh || '',
-          companyNameEn: current.companyNameEn || current.company_name_en || '',
-          reportTitleZh: this.reportTitleForm.reportTitleZh,
-          reportTitleEn: this.reportTitleForm.reportTitleEn,
-          descriptionZh: current.descriptionZh ?? current.description_zh ?? null,
-          descriptionEn: current.descriptionEn ?? current.description_en ?? null,
-          logoUrl: current.logoUrl ?? current.logo_url ?? null
-        });
-        this.$message.success('报告标题已保存');
-        this.reportTitleEditMode = false;
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '保存失败'));
-      } finally {
-        this.reportTitleSaving = false;
-      }
+    onReset() {
+      this.q = '';
+      this.batchNo = '';
+      this.status = '';
+      this.onSearch();
     },
     async load() {
       const { items, total } = await listReports({
@@ -394,7 +323,38 @@ export default {
       this.qrLoading = true;
       try {
         const ids = this.selected.map((r) => r.id);
-        const res = await createQrcode(ids);
+        let res;
+        try {
+          res = await createQrcode(ids);
+        } catch (e) {
+          const d = e?.response?.data;
+          if (d?.error === 'REPORT_ALREADY_BOUND' && Array.isArray(d?.already_bound)) {
+            const lines = d.already_bound
+              .slice(0, 10)
+              .map((r) => `• ${r.product_name || '未知产品'}（报告编号：${r.report_no || '无'}，批号：${r.batch_no || '无'}）`)
+              .join('<br>');
+            const more = d.already_bound.length > 10 ? `<br>… 另有 ${d.already_bound.length - 10} 条` : '';
+            
+            try {
+              await this.$confirm(
+                `<div style="text-align:left;">检测到 ${d.already_bound.length} 个报告已关联二维码：<br>${lines}${more}<br><br>是否强制继续操作？（将重新生成二维码）</div>`,
+                '重复提醒',
+                {
+                  type: 'warning',
+                  confirmButtonText: '强制继续',
+                  cancelButtonText: '取消',
+                  dangerouslyUseHTMLString: true
+                }
+              );
+              res = await createQrcode(ids, true);
+            } catch {
+              this.qrLoading = false;
+              return;
+            }
+          } else {
+            throw e;
+          }
+        }
         this.qrResult = res;
         this.qrDialog = true;
       } catch (e) {
@@ -509,29 +469,38 @@ export default {
 </script>
 
 <style scoped>
-.report-title-card {
+.toolbar-card {
   margin-bottom: 12px;
-}
-.field-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.report-title-actions {
-  text-align: right;
 }
 .toolbar {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 12px;
   gap: 10px;
+  margin-bottom: 10px;
 }
 .left,
 .right {
   display: flex;
   align-items: center;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 6px;
+}
+.selected-tip {
+  font-size: 13px;
+  color: #475569;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 2px 10px;
+  line-height: 22px;
+}
+.batch-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed #e5e7eb;
 }
 .right .el-button {
   flex: 0 0 auto;
@@ -566,9 +535,18 @@ export default {
 .table-wrap {
   width: 100%;
   overflow-x: auto;
+  border-radius: 10px;
 }
 .table-wrap :deep(.el-table) {
   min-width: 980px;
+}
+.table-wrap :deep(.el-table th.el-table__cell) {
+  background: #f8fafc;
+  color: #334155;
+}
+.table-wrap :deep(.el-table td.el-table__cell) {
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 .pagination-wrap {
   margin-top: 12px;
@@ -639,13 +617,6 @@ export default {
 }
 
 @media (max-width: 992px) {
-  .report-title-actions {
-    text-align: left;
-  }
-  .report-title-actions .el-button {
-    width: 100%;
-    min-height: 38px;
-  }
   .toolbar {
     flex-direction: column;
     align-items: stretch;
@@ -654,8 +625,12 @@ export default {
   .right {
     width: 100%;
   }
-  .right {
+  .right,
+  .batch-actions {
     flex-wrap: wrap;
+  }
+  .selected-tip {
+    width: fit-content;
   }
   .field-q,
   .field-batch,
@@ -663,13 +638,20 @@ export default {
     width: 100%;
   }
   .left .el-button,
-  .right .el-button {
+  .right .el-button,
+  .batch-actions .el-button {
     flex: 1 1 calc(50% - 8px);
     min-width: 120px;
   }
   .pagination-wrap {
     justify-content: center;
   }
+}
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+:deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
 }
 </style>
 

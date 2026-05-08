@@ -12,7 +12,7 @@ const PLACEHOLDER_KEYS = [
 ];
 
 const ORDER_LINES_TABLE_STYLE_MARK =
-  'width:100%;border-collapse:collapse;border:1px solid #000;font-family:SimSun,宋体;font-size:12px;line-height:1.35';
+  'width:100%;border-collapse:collapse;border:1px solid #000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35';
 
 /** 旧模板在表格外仍有「总金额」段落时，与表内合计重复，生成后去掉紧跟订单明细表后的该段 */
 function stripLegacyOrderTotalParagraph(html) {
@@ -33,7 +33,7 @@ function ensureSalesContractTitleBelowCompany(html, vars = {}) {
   let s = String(html ?? '');
   const companyKeys = [vars.COMPANY_NAME_ZH, '{{COMPANY_NAME_ZH}}'].filter(Boolean);
   const titleHtml =
-    '<span style="display:block;text-align:center;font-size:14px;letter-spacing:2px;line-height:1.6;margin-top:6px;font-family:SimSun,宋体">销售合同</span>';
+    '<span style="display:block;text-align:center;font-size:22px;letter-spacing:2px;line-height:1.6;margin-top:6px;font-family:FZXiaoBiaoSong-S05,FZXiaoBiaoSong,方正小标宋简体,方正小标宋,方正小标宋_GBK,FZShuSong_GB2312,SimSun">销售合同</span>';
   if (!s) return s;
   for (const key of companyKeys) {
     const escapedKey = escapeRegExp(String(key));
@@ -99,4 +99,50 @@ export function shanghaiYmdCompact(d = new Date()) {
   const day = parts.find((p) => p.type === 'day')?.value;
   if (y && mo && day) return `${y}${mo}${day}`;
   return new Date().toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+/**
+ * 合同编号：当前年份(4) + 月日各两位 + 当日流水两位（上海时区），共 10 位数字。
+ * 须在事务内调用；返回后请在本连接 commit/rollback 之后调用 {@link releaseShanghaiContractNoLock}。
+ * @param {import('mysql2/promise').PoolConnection} conn
+ * @returns {Promise<{ contractNo: string, lockKey: string }>}
+ */
+export async function reserveNextShanghaiContractNo(conn) {
+  const prefix = shanghaiYmdCompact();
+  const lockKey = `sales_cn_${prefix}`.slice(0, 64);
+  const [[lockRow]] = await conn.query('SELECT GET_LOCK(?, 20) AS got', [lockKey]);
+  if (!lockRow || Number(lockRow.got) !== 1) {
+    const e = new Error('CONTRACT_NO_LOCK_FAILED');
+    e.code = 'CONTRACT_NO_LOCK_FAILED';
+    throw e;
+  }
+  try {
+    const [rows] = await conn.query(
+      `SELECT COALESCE(MAX(CAST(RIGHT(contract_no, 2) AS UNSIGNED)), 0) AS m
+       FROM sales_contracts
+       WHERE CHAR_LENGTH(contract_no) = 10
+         AND contract_no REGEXP '^[0-9]{10}$'
+         AND LEFT(contract_no, 8) = ?`,
+      [prefix]
+    );
+    const next = (Number(rows[0]?.m) || 0) + 1;
+    if (next > 99) {
+      await conn.query('SELECT RELEASE_LOCK(?)', [lockKey]);
+      const e = new Error('CONTRACT_NO_DAY_LIMIT');
+      e.code = 'CONTRACT_NO_DAY_LIMIT';
+      throw e;
+    }
+    const contractNo = `${prefix}${String(next).padStart(2, '0')}`;
+    return { contractNo, lockKey };
+  } catch (e) {
+    if (e && e.code === 'CONTRACT_NO_DAY_LIMIT') throw e;
+    await conn.query('SELECT RELEASE_LOCK(?)', [lockKey]);
+    throw e;
+  }
+}
+
+/** 与 {@link reserveNextShanghaiContractNo} 配对，在事务结束释放连接前调用 */
+export async function releaseShanghaiContractNoLock(conn, lockKey) {
+  if (!lockKey) return;
+  await conn.query('SELECT RELEASE_LOCK(?)', [lockKey]);
 }

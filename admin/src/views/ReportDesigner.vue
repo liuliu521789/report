@@ -1,12 +1,12 @@
 <template>
   <div class="designer-page">
     <div class="designer-toolbar">
-      <el-button @click="$router.push('/reports')">返回报告管理</el-button>
+      <el-button @click="$router.push('/reports')" icon=Back>返回报告管理</el-button>
       <div class="toolbar-right">
-        <el-button @click="openSaveStyleDialog">保存为报告样式</el-button>
+        <el-button @click="openSaveStyleDialog" icon=Check>保存为报告样式</el-button>
         <el-button @click="openStyleManager">报告样式管理</el-button>
         <el-button @click="clearCanvas">清空画布</el-button>
-        <el-button type="primary" @click="saveToLocal">保存样式（本地）</el-button>
+        <el-button type="primary" @click="saveToLocal" icon=Check>保存样式（本地）</el-button>
       </div>
     </div>
 
@@ -41,7 +41,7 @@
             class="visually-hidden"
             @change="onImageLibraryFile"
           />
-          <el-button class="tool-btn" size="small" type="primary" plain @click="openImageLibraryPicker">
+          <el-button class="tool-btn" size="small" type="primary" plain @click="openImageLibraryPicker" icon=Upload>
             批量上传到库
           </el-button>
           <div v-if="imageLibrary.length" class="image-lib-grid">
@@ -202,13 +202,13 @@
             拖拽列边界调列宽、行边界调行高；表头下沿调表头高度。表格右侧/下侧「+」可增列/增行。
           </div>
           <div class="table-editor-grid">
-            <el-button size="small" @click="addTableColumn">新增列</el-button>
-            <el-button size="small" @click="addTableRow">新增行</el-button>
-            <el-button size="small" @click="removeTableColumn">删除列</el-button>
-            <el-button size="small" @click="removeTableRow">删除行</el-button>
+            <el-button size="small" @click="addTableColumn" icon=Plus>新增列</el-button>
+            <el-button size="small" @click="addTableRow" icon=Plus>新增行</el-button>
+            <el-button size="small" @click="removeTableColumn" icon=Delete>删除列</el-button>
+            <el-button size="small" @click="removeTableRow" icon=Delete>删除行</el-button>
             <el-button size="small" @click="mergeCellRight">合并（向右）</el-button>
             <el-button size="small" @click="mergeCellDown">合并（向下）</el-button>
-            <el-button size="small" @click="splitCell">取消合并</el-button>
+            <el-button size="small" @click="splitCell" icon=Close>取消合并</el-button>
           </div>
           <div class="tips">
             <template v-if="selectedTableHeaderCol != null">
@@ -442,15 +442,15 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="styleSaveDialog = false">取消</el-button>
-        <el-button type="primary" :loading="styleSaveLoading" @click="submitSaveStyle">保存</el-button>
+        <el-button @click="styleSaveDialog = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="styleSaveLoading" @click="submitSaveStyle" icon=Check>保存</el-button>
       </template>
     </el-dialog>
 
     <el-dialog title="报告样式管理" v-model="styleManageDialog" width="760px">
       <div class="style-manage-toolbar">
         <span class="tips">报告样式与报告模板是独立能力；这里仅管理设计器样式。</span>
-        <el-button text type="primary" :loading="styleManageLoading" @click="loadReportStyles">刷新</el-button>
+        <el-button text type="primary" :loading="styleManageLoading" @click="loadReportStyles" icon=Refresh>刷新</el-button>
       </div>
       <el-table :data="reportStyles" border size="small" v-loading="styleManageLoading">
         <el-table-column prop="name" label="样式名称" min-width="220" />
@@ -462,12 +462,12 @@
           <template #default="{ row }">
             <el-button link type="primary" @click="applyReportStyle(row)">套用</el-button>
             <el-button link type="primary" @click="editReportStyle(row)">修改</el-button>
-            <el-button link type="danger" :loading="styleDeleteId === row.id" @click="removeReportStyle(row)">删除</el-button>
+            <el-button link type="danger" :loading="styleDeleteId === row.id" @click="removeReportStyle(row)" icon=Delete>删除</el-button>
           </template>
         </el-table-column>
       </el-table>
       <template #footer>
-        <el-button @click="styleManageDialog = false">关闭</el-button>
+        <el-button @click="styleManageDialog = false" icon=Close>关闭</el-button>
       </template>
     </el-dialog>
   </div>

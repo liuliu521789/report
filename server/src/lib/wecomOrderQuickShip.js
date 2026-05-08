@@ -53,7 +53,7 @@ export async function performWecomQuickShip(poolConn, orderId) {
   }
 
   await pool.query(
-    `UPDATE sales_orders SET status = 'shipped', shipped_at = NOW(3), shipped_by = NULL, shipping_instruction = NULL, updated_by = NULL WHERE id = ?`,
+    `UPDATE sales_orders SET status = 'shipped', shipped_at = NOW(3), shipped_by = NULL, shipping_instruction = NULL, updated_by = NULL, row_version = row_version + 1 WHERE id = ?`,
     [id]
   );
   await pool.query(

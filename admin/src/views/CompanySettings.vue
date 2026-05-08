@@ -27,7 +27,7 @@
               :on-success="onUploadSuccess"
               :on-error="onUploadError"
             >
-              <el-button size="small" type="primary">上传logo图片</el-button>
+              <el-button size="small" type="primary" icon=Upload>上传logo图片</el-button>
             </el-upload>
             <span class="upload-tip">建议使用透明底 PNG，展示效果更好。</span>
           </div>
@@ -62,7 +62,7 @@
       </el-form>
 
       <div v-if="canManageCompany" class="actions">
-        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+        <el-button type="primary" :loading="saving" @click="save" icon=Check>保存</el-button>
       </div>
     </el-card>
 
@@ -129,18 +129,67 @@
           </el-select>
         </el-form-item>
       </el-form>
-      <div class="actions">
-        <el-button type="primary" :loading="quickRoleSaving" @click="saveQuickRoles">保存绑定</el-button>
+<div class="actions">
+        <el-button type="primary" :loading="quickRoleSaving" @click="saveQuickRoles" icon=Check>保存</el-button>
+      </div>
+    </el-card>
+
+    <el-card v-if="isSuperAdminUser" class="backup-card" shadow="never">
+      <template #header>
+        <div class="field-header">
+          <div>数据备份（仅超级管理员）</div>
+        </div>
+      </template>
+      <p class="backup-hint">
+        点击下方按钮，将下载当前数据库的完整 SQL 备份文件。建议定期备份，或在执行重要操作前备份。
+      </p>
+      <p class="backup-hint backup-hint-warning">
+        注意：从 SQL 文件恢复仅恢复数据库数据，不会恢复 uploads 中的图片/附件文件（如公司章图片、公司 logo）。
+      </p>
+<div class="actions">
+        <el-button type="warning" :loading="backingUp" icon="Download" @click="onBackup">下载 SQL 备份</el-button>
+        <el-button icon="Upload" @click="restoreDialog = true">从 SQL 文件恢复</el-button>
       </div>
     </el-card>
   </div>
+
+  <el-dialog title="从 SQL 文件恢复" v-model="restoreDialog" width="600px" :close-on-click-modal="false">
+    <el-alert type="danger" :closable="false" show-icon style="margin-bottom: 16px">
+      恢复将覆盖当前所有数据，建议先下载备份后再操作。
+    </el-alert>
+    <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 16px">
+      仅恢复数据库，不恢复 uploads 文件；若需要恢复公司章/logo 等图片，请使用「备份管理」中的完整恢复。
+    </el-alert>
+    <el-upload
+      ref="restoreUploadRef"
+      :auto-upload="false"
+      :limit="1"
+      accept=".sql"
+      :on-change="onRestoreFileChange"
+    >
+      <template #trigger>
+        <el-button icon="Upload">选择 .sql 文件</el-button>
+      </template>
+      <template #tip>
+        <div class="el-upload__tip">仅支持 .sql 文件，请确保文件由本系统备份生成</div>
+      </template>
+    </el-upload>
+    <div v-if="restoreSql" style="margin-top: 12px">
+      <el-input type="textarea" :rows="6" :value="restoreSql" readonly placeholder="已加载文件内容（只读）" />
+    </div>
+    <template #footer>
+      <el-button @click="restoreDialog = false">取消</el-button>
+      <el-button type="danger" :loading="restoreLoading" :disabled="!restoreSql" @click="onRestore">确认恢复</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script>
 import { mapState } from 'pinia';
-import { getCompanySettings, getQuickRoleUsers, listUsers, updateCompanySettings, updateQuickRoleUsers } from '../api';
+import { getCompanySettings, getQuickRoleUsers, listUsersLite, updateCompanySettings, updateQuickRoleUsers, downloadBackup, restoreBackup } from '../api';
 import { useAuthStore } from '../stores/auth';
 import { isSuperAdmin, perm } from '../utils/permissions';
+import { absoluteApiOrigin } from '../utils/absoluteApiOrigin.js';
 
 export default {
   name: 'CompanySettings',
@@ -164,7 +213,11 @@ export default {
         warehouseUserId: null
       },
       employeeOptions: [],
-      quickRoleSaving: false
+      quickRoleSaving: false,
+      backingUp: false,
+      restoreDialog: false,
+      restoreSql: '',
+      restoreLoading: false
     };
   },
   computed: {
@@ -176,8 +229,7 @@ export default {
       return perm('company', 'manage');
     },
     uploadAction() {
-      const base = import.meta.env.VITE_APP_API_BASE_URL || 'http://localhost:3001';
-      return `${base}/api/company/settings/logo`;
+      return `${absoluteApiOrigin()}/api/company/settings/logo`;
     },
     uploadHeaders() {
       return this.token ? { Authorization: `Bearer ${this.token}` } : {};
@@ -195,11 +247,11 @@ export default {
     async loadQuickRoleSection() {
       if (!this.isSuperAdminUser) return;
       try {
-        const [usersRes, qr] = await Promise.all([listUsers(), getQuickRoleUsers()]);
-        const items = usersRes?.items || [];
-        this.employeeOptions = items.filter(
-          (x) => x.accountType === 'employee' && (x.isActive === true || Number(x.isActive) === 1)
-        );
+        const [usersRes, qr] = await Promise.all([
+          listUsersLite({ accountType: 'employee', activeOnly: 1 }),
+          getQuickRoleUsers()
+        ]);
+        this.employeeOptions = usersRes?.items || [];
         this.quickRoles = {
           salesUserId: qr?.salesUserId ?? null,
           financeUserId: qr?.financeUserId ?? null,
@@ -217,6 +269,7 @@ export default {
           financeUserId: this.quickRoles.financeUserId,
           warehouseUserId: this.quickRoles.warehouseUserId
         });
+        await this.loadQuickRoleSection();
         this.$message.success('快捷角色绑定已保存');
       } catch (e) {
         const err = e?.response?.data?.error;
@@ -282,6 +335,44 @@ export default {
       } finally {
         this.saving = false;
       }
+    },
+    async onBackup() {
+      this.backingUp = true;
+      try {
+        await downloadBackup();
+        this.$message.success('备份下载完成');
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '备份失败'));
+      } finally {
+        this.backingUp = false;
+      }
+    },
+    onRestoreFileChange(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        this.restoreSql = e.target.result;
+      };
+      reader.readAsText(file.raw);
+    },
+    async onRestore() {
+      if (!this.restoreSql) return;
+      try {
+        await this.$confirm('数据将被完全覆盖，确定要恢复吗？', '危险操作', { type: 'error' });
+      } catch {
+        return;
+      }
+      this.restoreLoading = true;
+      try {
+        await restoreBackup(this.restoreSql);
+        this.$message.success('数据恢复完成（仅数据库）');
+        this.restoreDialog = false;
+        this.restoreSql = '';
+      } catch (e) {
+        const msg = e?.response?.data?.error || this.$apiUserMsg(e, '恢复失败');
+        this.$message.error(msg);
+      } finally {
+        this.restoreLoading = false;
+      }
     }
   }
 };
@@ -296,11 +387,26 @@ export default {
   margin-top: 16px;
 }
 
+.backup-card {
+  margin-top: 16px;
+}
+
 .quick-role-hint {
   font-size: 13px;
   color: #64748b;
   line-height: 1.5;
   margin: 0 0 16px;
+}
+
+.backup-hint {
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.backup-hint-warning {
+  color: #b45309;
 }
 
 .w-full-select {

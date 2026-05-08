@@ -18,17 +18,17 @@
         @change="onFiles"
       />
       <div class="toolbar">
-        <el-button type="primary" :loading="uploading" @click="openPicker">批量上传</el-button>
+        <el-button type="primary" :loading="uploading" @click="openPicker" icon=Upload>批量上传</el-button>
         <el-button
           type="danger"
           plain
           :disabled="!selectedIds.length || deleting"
           :loading="deleting"
           @click="batchDelete"
-        >
+         icon=Delete>
           批量删除（{{ selectedIds.length }}）
         </el-button>
-        <el-button text type="primary" :loading="loading" @click="reload">刷新</el-button>
+        <el-button text type="primary" :loading="loading" @click="reload" icon=Refresh>刷新</el-button>
         <span class="meta">
           共 {{ items.length }} / {{ maxTotal }} 张 · 单次最多 {{ maxBatch }} 张 · 单张 &lt; 4MB
         </span>

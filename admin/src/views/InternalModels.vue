@@ -6,7 +6,7 @@
         <el-input
           v-model="searchQuery"
           placeholder="搜索编码 / 名称"
-          style="width: 280px"
+          style="width: 240px"
           clearable
           @keyup.enter="loadData"
           @clear="loadData"
@@ -18,7 +18,7 @@
         <el-select
           v-model="statusFilter"
           placeholder="状态"
-          style="width: 120px"
+          style="width: 100px"
           clearable
           @change="loadData"
         >
@@ -26,7 +26,7 @@
           <el-option label="启用" value="active" />
           <el-option label="停用" value="inactive" />
         </el-select>
-        <el-button v-if="hasCreatePerm" type="primary" @click="openCreateDialog">
+        <el-button v-if="hasCreatePerm" type="primary" @click="openCreateDialog" icon=Plus>
           新增内部型号
         </el-button>
         <el-upload
@@ -36,23 +36,40 @@
           :http-request="handleImportExcel"
           :disabled="importing"
         >
-          <el-button type="success" :loading="importing">上传表格导入</el-button>
+          <el-button type="success" :loading="importing" icon=Upload>上传表格导入</el-button>
         </el-upload>
         <el-button
           v-if="multipleSelection.length > 0 && hasEditPerm"
+          type="success"
+          @click="batchEnable"
+        >
+          批量启用 ({{ multipleSelection.length }})
+        </el-button>
+        <el-button
+          v-if="multipleSelection.length > 0 && hasEditPerm"
+          icon="Delete"
           type="danger"
           @click="batchDelete"
         >
           批量删除 ({{ multipleSelection.length }})
         </el-button>
         <el-button
+          v-if="hasEditPerm"
+          type="danger"
+          plain
+          @click="deleteAllByFilter"
+         icon=Delete>
+          删除所有（按筛选）
+        </el-button>
+        <el-button
           v-if="multipleSelection.length > 0"
+          icon="Download"
           type="warning"
           @click="exportSelected"
         >
           导出选中
         </el-button>
-        <el-button @click="loadData">刷新</el-button>
+        <el-button @click="loadData" icon=Refresh>刷新</el-button>
       </div>
     </div>
 
@@ -60,17 +77,19 @@
       class="import-hint"
       type="info"
       :closable="false"
-      description="表格说明：两列表头为「名称」「英文代码」时，按表头列自动识别；英文代码写入内部编码，名称写入名称列。也支持无表头时前两列依次为名称、英文代码。首行表头会自动跳过。"
+      description="表格说明：两列表头为「名称」「英文代码」时，按表头列自动识别；英文代码写入内部编码，名称写入名称列。支持一格多编码（如 BP301P/NL301P），会在同一条记录中单行展示。也支持无表头时前两列依次为名称、英文代码。"
     />
 
     <el-table
       v-loading="loading"
       :data="modelList"
       border
+      stripe
       style="width: 100%"
       :default-sort="{ prop: 'internal_code', order: 'ascending' }"
       row-key="id"
       @selection-change="handleSelectionChange"
+      @row-dblclick="handleRowDblClick"
     >
       <el-table-column v-if="hasEditPerm" type="selection" width="48" />
       <el-table-column prop="internal_code" label="内部编码" width="140" sortable />
@@ -100,12 +119,23 @@
             type="primary"
             size="small"
             @click="openEditDialog(row)"
-          >
+           icon=Edit>
             编辑
+          </el-button>
+          <el-button
+            v-if="hasEditPerm"
+            link
+            type="danger"
+            size="small"
+            @click="deleteSingle(row)"
+           icon=Delete>
+            删除
           </el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <el-empty v-if="!loading && !modelList.length" description="暂无内部型号数据" />
 
     <div class="pagination-bar">
       <el-pagination
@@ -158,8 +188,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitForm">保存</el-button>
+        <el-button @click="dialogVisible = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitForm" icon=Check>保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -171,6 +201,8 @@ import {
   createSalesInternalModel,
   patchSalesInternalModel,
   batchDeleteInternalModels,
+  batchEnableInternalModels,
+  deleteAllInternalModels,
   importInternalModelsFromExcel
 } from '../api';
 import { perm } from '../utils/permissions';
@@ -228,7 +260,10 @@ export default {
   },
   watch: {
     searchQuery(val) {
-      if (!val) this.loadData();
+      if (!val) {
+        this.currentPage = 1;
+        this.loadData();
+      }
     }
   },
   mounted() {
@@ -248,7 +283,7 @@ export default {
         const res = await listSalesInternalModels(params);
         this.modelList = (res.items || []).map(item => ({
           ...item,
-          is_active: !!item.is_active
+          is_active: item.is_active ? 1 : 0
         }));
         this.total = res.pagination?.total || 0;
       } catch (e) {
@@ -266,6 +301,11 @@ export default {
     handlePageChange(page) {
       this.currentPage = page;
       this.loadData();
+    },
+    handleRowDblClick(row) {
+      if (this.hasEditPerm) {
+        this.openEditDialog(row);
+      }
     },
     openCreateDialog() {
       this.dialogMode = 'create';
@@ -415,6 +455,78 @@ export default {
       a.download = `内部型号导出_${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
+    },
+    async batchEnable() {
+      if (!this.hasEditPerm || !this.multipleSelection.length) return;
+      const ids = this.multipleSelection.map((r) => r.id);
+      try {
+        await this.$confirm(`确定启用选中的 ${ids.length} 条内部型号？`, '确认启用', {
+          type: 'success',
+          confirmButtonText: '启用',
+          cancelButtonText: '取消'
+        });
+      } catch {
+        return;
+      }
+      try {
+        const res = await batchEnableInternalModels({ ids });
+        for (const row of this.multipleSelection) {
+          const target = this.modelList.find((m) => m.id === row.id);
+          if (target) target.is_active = 1;
+        }
+        this.$message.success(`批量启用完成：命中 ${res?.matched ?? ids.length} 条，实际变更 ${res?.changed ?? 0} 条`);
+        this.multipleSelection = [];
+      } catch (e) {
+        this.$message.error(this.apiUserMsg(e, '批量启用失败'));
+        this.loadData();
+      }
+    },
+    async deleteAllByFilter() {
+      if (!this.hasEditPerm) return;
+      const q = this.searchQuery || '';
+      const status = this.statusFilter || '';
+      const desc = `当前筛选：关键词「${q || '无'}」，状态「${status || '全部'}」`;
+      try {
+        await this.$confirm(
+          `确定删除所有符合条件的数据？\n${desc}\n此操作不可恢复。`,
+          '确认删除全部',
+          {
+            type: 'warning',
+            confirmButtonText: '删除全部',
+            cancelButtonText: '取消'
+          }
+        );
+      } catch {
+        return;
+      }
+      try {
+        const res = await deleteAllInternalModels({ q, status });
+        this.$message.success(`已删除 ${res?.deleted ?? 0} 条`);
+        this.multipleSelection = [];
+        this.currentPage = 1;
+        this.loadData();
+      } catch (e) {
+        this.$message.error(this.apiUserMsg(e, '删除全部失败'));
+      }
+    },
+    async deleteSingle(row) {
+      if (!this.hasEditPerm) return;
+      try {
+        await this.$confirm(`确定删除内部型号「${row.name}」？此操作不可恢复。`, '确认删除', {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消'
+        });
+      } catch {
+        return;
+      }
+      try {
+        await batchDeleteInternalModels({ ids: [row.id] });
+        this.$message.success('已删除');
+        this.loadData();
+      } catch (e) {
+        this.$message.error(this.apiUserMsg(e, '删除失败'));
+      }
     }
   }
 };
@@ -429,6 +541,8 @@ export default {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 .page-header h2 {
   margin: 0;
@@ -438,6 +552,10 @@ export default {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex-wrap: wrap;
+}
+.toolbar .el-input {
+  max-width: 220px;
 }
 .pagination-bar {
   margin-top: 20px;
@@ -446,5 +564,14 @@ export default {
 }
 .import-hint {
   margin-bottom: 16px;
+}
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+:deep(.el-table__row:hover) {
+  background-color: #f5f7fa;
+}
+:deep(.el-button + .el-button) {
+  margin-left: 4px;
 }
 </style>
