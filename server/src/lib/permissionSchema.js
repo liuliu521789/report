@@ -13,7 +13,16 @@
 /** @typedef {{ key:string, label:string, items: PermissionItem[] }} PermissionModule */
 
 /** roles：内置类别角色代码（与 employee_categories.code 对齐） */
-export const KNOWN_ROLE_CODES = ['qc', 'cs', 'chairman', 'sales', 'finance', 'warehouse', 'sales_admin'];
+export const KNOWN_ROLE_CODES = [
+  'qc',
+  'cs',
+  'chairman',
+  'sales',
+  'documentary',
+  'finance',
+  'warehouse',
+  'sales_admin'
+];
 
 const ROLE_DEFAULT = (...rolesOn) => {
   const m = {};
@@ -99,61 +108,96 @@ export const PERMISSION_MODULES = [
     key: 'order_management',
     label: '订单管理',
     items: [
-      { key: 'order_input', label: '录入', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
-      { key: 'order_query', label: '查询', defaults: ROLE_DEFAULT('sales', 'finance', 'warehouse', 'sales_admin') },
-      { key: 'order_query_all', label: '查全部', defaults: ROLE_DEFAULT('sales', 'finance', 'warehouse', 'sales_admin') },
-      { key: 'order_edit', label: '编辑', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
-      { key: 'order_submit', label: '提交财务', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
-      { key: 'order_withdraw', label: '撤回审核', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
+      { key: 'order_input', label: '录入', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
+      { key: 'order_query', label: '查询', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'sales_admin') },
+      { key: 'order_query_all', label: '查全部', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'sales_admin') },
+      { key: 'order_edit', label: '编辑', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
+      { key: 'order_submit', label: '提交财务', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
+      { key: 'order_withdraw', label: '撤回审核', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
       { key: 'order_status_finance', label: '财务审核', defaults: ROLE_DEFAULT('finance', 'sales_admin') },
+      { key: 'order_status_qc', label: '品管审核', defaults: ROLE_DEFAULT('qc', 'sales_admin') },
       { key: 'order_status_warehouse', label: '仓库流程', defaults: ROLE_DEFAULT('warehouse', 'sales_admin') },
       { key: 'order_ship', label: '发货', defaults: ROLE_DEFAULT('warehouse', 'sales_admin') },
-      { key: 'order_view_status_logs', label: '状态日志', defaults: ROLE_DEFAULT('sales', 'finance', 'warehouse', 'sales_admin') },
-      { key: 'order_cancel', label: '取消', defaults: ROLE_DEFAULT('sales', 'finance', 'sales_admin') },
-      { key: 'order_delete', label: '删除', defaults: ROLE_DEFAULT('sales', 'finance', 'sales_admin') },
-      { key: 'order_field_config', label: '字段配置', defaults: ROLE_DEFAULT('sales_admin') }
+      { key: 'order_view_status_logs', label: '状态日志', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'sales_admin') },
+      { key: 'order_cancel', label: '取消', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'sales_admin') },
+      { key: 'order_delete', label: '删除', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'sales_admin') },
+      { key: 'order_field_config', label: '字段配置', defaults: ROLE_DEFAULT('documentary', 'sales_admin') }
     ]
   },
   {
     key: 'contract_management',
     label: '合同管理',
     items: [
-      { key: 'template_manage', label: '模板维护', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
-      { key: 'contract_generate', label: '生成', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
-      { key: 'contract_submit', label: '提交审核', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
+      { key: 'template_manage', label: '模板维护', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
+      { key: 'contract_generate', label: '生成', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
+      { key: 'contract_submit', label: '提交审核', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
       { key: 'contract_review', label: '审核', defaults: ROLE_DEFAULT('finance', 'sales_admin') },
-      { key: 'contract_view', label: '查看', defaults: ROLE_DEFAULT('sales', 'finance', 'warehouse', 'sales_admin') },
+      { key: 'contract_view', label: '查看', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
       { key: 'contract_edit', label: '编辑' },
       { key: 'contract_delete', label: '删除' },
       { key: 'contract_edit_approved', label: '编辑已审核合同' },
       { key: 'contract_delete_approved', label: '删除已审核合同' },
-      { key: 'contract_version_view', label: '版本查看', defaults: { qc: true, cs: true, chairman: true, sales: true, finance: true, warehouse: true, sales_admin: true } },
-      { key: 'contract_multi_approve', label: '多人审批', defaults: { qc: true, cs: true, chairman: true, sales: true, finance: true, warehouse: true, sales_admin: true } }
+      {
+        key: 'contract_version_view',
+        label: '版本查看',
+        defaults: {
+          qc: true,
+          cs: true,
+          chairman: true,
+          sales: true,
+          documentary: true,
+          finance: true,
+          warehouse: true,
+          sales_admin: true
+        }
+      },
+      {
+        key: 'contract_multi_approve',
+        label: '多人审批',
+        defaults: {
+          qc: true,
+          cs: true,
+          chairman: true,
+          sales: true,
+          documentary: true,
+          finance: true,
+          warehouse: true,
+          sales_admin: true
+        }
+      }
     ]
   },
   {
     key: 'process_management',
     label: '流程',
     items: [
-      { key: 'view_flow', label: '查看流程', defaults: ROLE_DEFAULT('sales', 'finance', 'warehouse', 'sales_admin') }
+      { key: 'view_flow', label: '查看流程', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') }
     ]
   },
   {
     key: 'data_management',
     label: '数据导出',
     items: [
-      { key: 'data_export', label: '导出', defaults: ROLE_DEFAULT('finance', 'sales_admin') },
-      { key: 'data_export_all', label: '全量导出', defaults: ROLE_DEFAULT('sales_admin') }
+      { key: 'data_export', label: '导出', defaults: ROLE_DEFAULT('finance', 'documentary', 'sales_admin') },
+      { key: 'data_export_all', label: '全量导出', defaults: ROLE_DEFAULT('documentary', 'sales_admin') }
     ]
   },
   {
     key: 'customer_management',
     label: '客户管理',
     items: [
-      { key: 'view', label: '查看', defaults: ROLE_DEFAULT('sales', 'finance', 'warehouse', 'sales_admin') },
-      { key: 'create', label: '新建', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
-      { key: 'edit', label: '编辑', defaults: ROLE_DEFAULT('sales', 'sales_admin') },
-      { key: 'disable', label: '停用', defaults: ROLE_DEFAULT('sales', 'sales_admin') }
+      { key: 'view', label: '查看', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
+      { key: 'create', label: '新建', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
+      { key: 'edit', label: '编辑', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
+      { key: 'disable', label: '停用', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') }
+    ]
+  },
+  {
+    key: 'qc_yearbooks',
+    label: '年度品质管控台账',
+    items: [
+      { key: 'view', label: '查看数据', defaults: ROLE_DEFAULT('qc', 'chairman', 'sales_admin') },
+      { key: 'upload', label: '维护（年份与台账记录的增删改）', defaults: ROLE_DEFAULT('qc', 'sales_admin') }
     ]
   }
 ];
@@ -185,7 +229,7 @@ export function emptyPermissions() {
   return out;
 }
 
-/** 按内置 role code 取默认权限（qc / cs / chairman / sales / finance / warehouse / sales_admin） */
+/** 按内置 role code 取默认权限（qc / cs / chairman / sales / documentary / finance / warehouse / sales_admin） */
 export function defaultPermissionsForRole(roleCode) {
   const out = emptyPermissions();
   const code = String(roleCode || '').toLowerCase();

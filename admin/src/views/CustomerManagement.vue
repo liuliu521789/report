@@ -3,22 +3,36 @@
     <div class="page-header">
       <h2>客户管理</h2>
       <div class="toolbar">
+        <el-tabs v-model="activeSource" type="card" class="source-tabs" @tab-change="onSourceTabChange">
+          <el-tab-pane label="康铭" name="kangming" />
+          <el-tab-pane label="物源" name="wuyuan" />
+        </el-tabs>
         <el-input
           v-model="searchQuery"
-          placeholder="搜索客户编码 / 名称 / 联系人"
-          style="width: 320px"
+          class="search-input-with-btn"
+          placeholder="搜索客户编码 / 全称 / 简称"
           clearable
-          @keyup.enter="loadData"
-          @clear="loadData"
+          @keyup.enter="runSearch"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
+          </template>
+          <template #append>
+            <el-button type="primary" @click="runSearch">搜索</el-button>
           </template>
         </el-input>
         <el-button v-if="hasCreatePerm" type="primary" @click="openCreateDialog" icon=Plus>
           新增客户
         </el-button>
         <el-button @click="loadData" icon=Refresh>刷新</el-button>
+        <el-button
+          v-if="hasEditPerm"
+          type="warning"
+          :loading="importing"
+          @click="openImportDialog"
+        >
+          上传 Excel 同步
+        </el-button>
 
         <!-- 批量操作按钮 - 选中后显示 -->
         <el-button
@@ -30,17 +44,22 @@
           删除 ({{ multipleSelection.length }})
         </el-button>
         <el-button
-          v-if="multipleSelection.length > 0"
+          v-if="canExport && multipleSelection.length > 0"
           icon="Download"
           type="success"
+          :loading="exporting"
+          :disabled="exporting"
           @click="exportSelected"
         >
           导出选中
         </el-button>
         <el-button
-          v-if="multipleSelection.length === 0"
+          v-if="canExport && multipleSelection.length === 0"
+          :loading="exporting"
+          :disabled="exporting"
           @click="exportAll"
-         icon=Download>
+          icon="Download"
+        >
           导出全部
         </el-button>
       </div>
@@ -59,8 +78,8 @@
     >
       <el-table-column type="selection" width="55" />
       <el-table-column prop="customer_code" label="客户编码" width="140" sortable />
-      <el-table-column prop="customer_name" label="客户名称" min-width="180" sortable />
-      <el-table-column prop="contact_name" label="联系人" width="120" />
+      <el-table-column prop="customer_name" label="客户全称" min-width="200" sortable />
+      <el-table-column prop="contact_name" label="客户简称" width="130" />
       <el-table-column prop="phone" label="电话" width="130" />
       <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
       <el-table-column label="状态" width="100" align="center">
@@ -157,11 +176,11 @@
         <el-form-item v-else label="客户编码">
           <span class="code-hint">保存后由系统自动生成（WY + 8位随机大写字母数字）</span>
         </el-form-item>
-        <el-form-item label="客户名称" prop="customer_name">
-          <el-input v-model="formData.customer_name" placeholder="完整客户名称" maxlength="256" />
+        <el-form-item label="客户全称" prop="customer_name">
+          <el-input v-model="formData.customer_name" placeholder="工商注册或对外使用的完整名称" maxlength="256" />
         </el-form-item>
-        <el-form-item label="联系人" prop="contact_name">
-          <el-input v-model="formData.contact_name" placeholder="可选" maxlength="128" />
+        <el-form-item label="客户简称" prop="contact_name">
+          <el-input v-model="formData.contact_name" placeholder="对内常用简称" maxlength="128" />
         </el-form-item>
         <el-form-item label="电话" prop="phone">
           <el-input v-model="formData.phone" placeholder="可选联系电话" maxlength="64" />
@@ -185,8 +204,8 @@
       <div v-if="currentStats" class="stats-content">
         <el-descriptions :column="1" border>
           <el-descriptions-item label="客户编码">{{ currentStats.customer_code }}</el-descriptions-item>
-          <el-descriptions-item label="客户名称">{{ currentStats.customer_name }}</el-descriptions-item>
-          <el-descriptions-item v-if="currentStats.contact_name" label="联系人">{{ currentStats.contact_name }}</el-descriptions-item>
+          <el-descriptions-item label="客户全称">{{ currentStats.customer_name }}</el-descriptions-item>
+          <el-descriptions-item label="客户简称">{{ currentStats.contact_name || '—' }}</el-descriptions-item>
           <el-descriptions-item v-if="currentStats.phone" label="电话">{{ currentStats.phone }}</el-descriptions-item>
           <el-descriptions-item v-if="currentStats.address" label="地址">{{ currentStats.address }}</el-descriptions-item>
           <el-descriptions-item label="状态">
@@ -225,30 +244,78 @@
         <el-button v-if="hasEditPerm" type="primary" @click="editFromStats" icon=Edit>编辑</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="importDialogVisible"
+      title="上传客户目录表"
+      width="520px"
+      destroy-on-close
+      @close="resetImportDialog"
+    >
+      <p class="import-dialog-meta">
+        当前分组：<strong>{{ activeSourceLabel }}</strong>，将读取您所选文件中工作表「<strong>{{ activeSheetName }}</strong>」。
+      </p>
+      <el-alert type="info" :closable="false" show-icon class="import-alert">
+        <template #default>
+          <div>
+            表内需含「客户名称」「简称」列。同名客户将更新简称；表中有而库中无的将新增；
+            库中有而表中无的：若无订单且无合同将删除，否则将停用。
+          </div>
+        </template>
+      </el-alert>
+      <el-upload
+        ref="importUploadRef"
+        class="import-upload"
+        drag
+        :auto-upload="false"
+        accept=".xlsx,.xls"
+        :limit="1"
+        :on-exceed="onImportExceed"
+        :on-change="onImportFileChange"
+        :on-remove="onImportFileRemove"
+      >
+        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+        <div class="el-upload__text">将文件拖到此处，或<em>点击选择</em></div>
+        <template #tip>
+          <div class="el-upload__tip">支持 .xlsx / .xls，单个文件不超过 8MB。</div>
+        </template>
+      </el-upload>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="importing" :disabled="!importFile" @click="submitCustomerImport">
+          开始同步
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script>
-import { 
-  listSalesCustomers, 
-  createSalesCustomer, 
-  updateSalesCustomer, 
-  toggleCustomerStatus, 
+import {
+  listSalesCustomers,
+  createSalesCustomer,
+  updateSalesCustomer,
+  toggleCustomerStatus,
   getCustomerStats,
-  batchDeleteCustomers
+  batchDeleteCustomers,
+  exportCustomers,
+  importSalesCustomersExcel
 } from '../api';
-import { perm } from '../utils/permissions';
-import { Search } from '@element-plus/icons-vue';
+import { perm, isSuperAdmin } from '../utils/permissions';
+import { Search, UploadFilled } from '@element-plus/icons-vue';
 
 export default {
   name: 'CustomerManagement',
   components: {
-    Search
+    Search,
+    UploadFilled
   },
   data() {
     return {
       loading: false,
       exporting: false,
+      importing: false,
+      activeSource: 'kangming',
       customerList: [],
       searchQuery: '',
       currentPage: 1,
@@ -256,6 +323,8 @@ export default {
       total: 0,
       dialogVisible: false,
       statsDialogVisible: false,
+      importDialogVisible: false,
+      importFile: null,
       dialogMode: 'create',
       saving: false,
       currentStats: null,
@@ -270,8 +339,12 @@ export default {
       },
       formRules: {
         customer_name: [
-          { required: true, message: '请输入客户名称', trigger: 'blur' },
-          { min: 1, max: 256, message: '名称长度1-256字符', trigger: 'blur' }
+          { required: true, message: '请输入客户全称', trigger: 'blur' },
+          { min: 1, max: 256, message: '全称长度 1–256 字符', trigger: 'blur' }
+        ],
+        contact_name: [
+          { required: true, message: '请输入客户简称', trigger: 'blur' },
+          { min: 1, max: 128, message: '简称长度 1–128 字符', trigger: 'blur' }
         ]
       }
     };
@@ -294,6 +367,19 @@ export default {
     },
     hasDeletePerm() {
       return perm('customer_management', 'edit') || perm('customer_management', 'disable');
+    },
+    canExport() {
+      return (
+        isSuperAdmin() ||
+        perm('data_management', 'data_export') ||
+        perm('data_management', 'data_export_all')
+      );
+    },
+    activeSourceLabel() {
+      return this.activeSource === 'kangming' ? '康铭' : '物源';
+    },
+    activeSheetName() {
+      return this.activeSource === 'kangming' ? '康铭' : '物源';
     }
   },
   watch: {
@@ -315,7 +401,8 @@ export default {
         const params = {
           q: this.searchQuery || undefined,
           page: this.currentPage,
-          pageSize: this.pageSize
+          pageSize: this.pageSize,
+          customer_group: this.activeSource
         };
         const res = await listSalesCustomers(params);
         this.customerList = res.items || [];
@@ -336,11 +423,68 @@ export default {
       this.currentPage = page;
       this.loadData();
     },
+    runSearch() {
+      this.currentPage = 1;
+      this.loadData();
+    },
+    onSourceTabChange() {
+      this.currentPage = 1;
+      this.multipleSelection = [];
+      this.loadData();
+    },
     handleRowDblClick(row) {
       if (this.hasViewPerm) {
         this.viewStats(row);
       } else if (this.hasEditPerm) {
         this.openEditDialog(row);
+      }
+    },
+    openImportDialog() {
+      if (!this.hasEditPerm) return;
+      this.importDialogVisible = true;
+    },
+    resetImportDialog() {
+      this.importFile = null;
+      this.$nextTick(() => {
+        this.$refs.importUploadRef?.clearFiles?.();
+      });
+    },
+    onImportExceed() {
+      this.$message.warning('仅可选择一个文件');
+    },
+    onImportFileChange(uploadFile) {
+      this.importFile = uploadFile.raw || null;
+    },
+    onImportFileRemove() {
+      this.importFile = null;
+    },
+    async submitCustomerImport() {
+      if (!this.hasEditPerm || !this.importFile) {
+        if (!this.importFile) this.$message.warning('请先选择 Excel 文件');
+        return;
+      }
+      const fd = new FormData();
+      fd.append('file', this.importFile);
+      fd.append('customer_group', this.activeSource);
+      this.importing = true;
+      try {
+        const res = await importSalesCustomersExcel(fd);
+        const d = res && typeof res.data === 'object' && res.data !== null ? res.data : res;
+        const parts = [
+          `新增 ${d.inserted ?? 0}`,
+          `更新 ${d.updated ?? 0}`,
+          `删除 ${d.deleted ?? 0}`,
+          `停用 ${d.deactivated ?? 0}`
+        ];
+        if ((d.skippedDup ?? 0) > 0) parts.push(`跳过重复行 ${d.skippedDup}`);
+        this.$message.success(`同步完成：${parts.join('，')}`);
+        this.importDialogVisible = false;
+        this.importFile = null;
+        await this.loadData();
+      } catch (e) {
+        this.$message.error(this.apiUserMsg(e, '同步失败'));
+      } finally {
+        this.importing = false;
       }
     },
     openCreateDialog() {
@@ -387,7 +531,14 @@ export default {
         let res;
         if (this.dialogMode === 'create') {
           const { customer_name, contact_name, phone, address } = this.formData;
-          res = await createSalesCustomer({ customer_name, contact_name, phone, address });
+          const payload = {
+            customer_name,
+            contact_name,
+            phone,
+            address,
+            customer_group: this.activeSource
+          };
+          res = await createSalesCustomer(payload);
         } else {
           const { customer_name, contact_name, phone, address } = this.formData;
           res = await updateSalesCustomer(this.editingId, { customer_name, contact_name, phone, address });
@@ -444,17 +595,64 @@ export default {
         }
       }).catch(() => {});
     },
-    exportSelected() {
-      if (this.multipleSelection.length === 0) return;
-      const ids = this.multipleSelection.map(item => item.id);
-      this.$message.info(`正在导出 ${ids.length} 个选中客户...（后端导出功能待完善）`);
-      // TODO: 调用 export API
-      console.log('Export selected customers:', ids);
+    async exportBlobErrorMessage(err, fallback) {
+      const data = err?.response?.data;
+      if (data instanceof Blob) {
+        try {
+          const text = await data.text();
+          const j = JSON.parse(text);
+          return j.message || j.data?.error || j.error || fallback;
+        } catch {
+          return fallback;
+        }
+      }
+      return (
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        fallback
+      );
     },
-    exportAll() {
-      this.$message.info('正在导出全部客户...（后端导出功能待完善）');
-      // TODO: 调用 export API
-      console.log('Export all customers');
+    triggerDownload(blob, filename) {
+      const url = URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+    async exportSelected() {
+      if (!this.canExport || this.multipleSelection.length === 0) return;
+      const ids = this.multipleSelection.map((item) => item.id);
+      this.exporting = true;
+      try {
+        const blob = await exportCustomers({ ids: ids.join(',') });
+        this.triggerDownload(blob, `sales-customers-selected-${Date.now()}.xlsx`);
+        this.$message.success(`已导出 ${ids.length} 条客户`);
+      } catch (e) {
+        const msg = await this.exportBlobErrorMessage(e, '导出失败');
+        this.$message.error(msg);
+      } finally {
+        this.exporting = false;
+      }
+    },
+    async exportAll() {
+      if (!this.canExport) return;
+      this.exporting = true;
+      try {
+        const params = {};
+        const q = (this.searchQuery || '').trim();
+        if (q) params.q = q;
+        params.customer_group = this.activeSource;
+        const blob = await exportCustomers(params);
+        this.triggerDownload(blob, `sales-customers-${Date.now()}.xlsx`);
+        this.$message.success('导出完成');
+      } catch (e) {
+        const msg = await this.exportBlobErrorMessage(e, '导出失败');
+        this.$message.error(msg);
+      } finally {
+        this.exporting = false;
+      }
     },
     async viewStats(row) {
       try {
@@ -493,7 +691,8 @@ export default {
       });
     },
     apiUserMsg(e, defaultMsg) {
-      return e?.response?.data?.error || e?.message || defaultMsg || '操作失败';
+      const d = e?.response?.data;
+      return d?.message || d?.error || e?.message || defaultMsg || '操作失败';
     }
   }
 };
@@ -521,8 +720,28 @@ export default {
   align-items: center;
   flex-wrap: wrap;
 }
-.toolbar .el-input {
-  max-width: 280px;
+.source-tabs {
+  flex: 0 0 auto;
+}
+.source-tabs :deep(.el-tabs__header) {
+  margin-bottom: 0;
+}
+.source-tabs :deep(.el-tabs__item) {
+  height: 36px;
+  line-height: 36px;
+  padding: 0 16px;
+}
+.toolbar .search-input-with-btn {
+  width: 360px;
+  max-width: 100%;
+}
+.toolbar .search-input-with-btn :deep(.el-input-group__append) {
+  padding: 0;
+  background: transparent;
+}
+.toolbar .search-input-with-btn :deep(.el-input-group__append .el-button) {
+  margin: 0;
+  border-radius: 0 4px 4px 0;
 }
 .pagination-bar {
   margin-top: 20px;
@@ -553,5 +772,20 @@ export default {
 }
 :deep(.el-descriptions__label) {
   width: 100px;
+}
+.import-dialog-meta {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #606266;
+  line-height: 1.6;
+}
+.import-alert {
+  margin-bottom: 16px;
+}
+.import-upload {
+  width: 100%;
+}
+.import-upload :deep(.el-upload-dragger) {
+  width: 100%;
 }
 </style>

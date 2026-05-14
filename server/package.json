@@ -13,10 +13,13 @@
     "ensure-sales-schema": "node scripts/ensure-sales-schema.mjs",
     "reset-password": "node scripts/reset-user-password.mjs",
     "list-users": "node scripts/list-users.mjs",
+    "backfill-contract-audit-user-labels": "node scripts/backfill-contract-audit-user-labels.mjs",
     "add-super-admin": "node scripts/add-super-admin.mjs",
     "backup-verify": "node scripts/backup-verify.mjs",
     "backup-verify-cron": "node scripts/backup-verify-cron.mjs",
-    "restore-dry-run": "node scripts/restore-dry-run.mjs"
+    "restore-dry-run": "node scripts/restore-dry-run.mjs",
+    "migrate:wecom-notify-jobs": "node scripts/migrate-wecom-notify-jobs.mjs",
+    "migrate:wecom-042": "node scripts/migrate-wecom-042-secrets-callback.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",

@@ -33,11 +33,18 @@ async function notifyShipStakeholders(pool, row) {
 }
 
 /**
- * 企业微信一键发货：仅允许 已审核 → 已发货；shipped_by/updated_by 置空（非登录操作）。
+ * 企业微信一键发货：仅允许 待发货 → 已发货。
+ * OAuth 识别到操作人时写入 shipped_by / updated_by；关闭 OAuth 调试时为 NULL。
+ * @param {{ actorUserId?: number|null }} [opts]
  * @returns {Promise<{ ok: true, orderId: number } | { ok: false, code: string, message: string }>}
  */
-export async function performWecomQuickShip(poolConn, orderId) {
+export async function performWecomQuickShip(poolConn, orderId, opts = {}) {
   const pool = poolConn || getPool();
+  const rawActor = opts.actorUserId;
+  const actorUserId =
+    rawActor != null && Number.isFinite(Number(rawActor)) && Number(rawActor) > 0
+      ? Math.floor(Number(rawActor))
+      : null;
   const id = Number(orderId);
   if (!Number.isFinite(id) || id <= 0) {
     return { ok: false, code: 'BAD_ID', message: '无效的订单' };
@@ -53,13 +60,15 @@ export async function performWecomQuickShip(poolConn, orderId) {
   }
 
   await pool.query(
-    `UPDATE sales_orders SET status = 'shipped', shipped_at = NOW(3), shipped_by = NULL, shipping_instruction = NULL, updated_by = NULL, row_version = row_version + 1 WHERE id = ?`,
-    [id]
+    `UPDATE sales_orders SET status = 'shipped', shipped_at = NOW(3), shipped_by = ?, shipping_instruction = NULL, updated_by = ?, row_version = row_version + 1 WHERE id = ?`,
+    [actorUserId, actorUserId, id]
   );
+  const remark =
+    actorUserId != null ? '企业微信「完成发货」（OAuth 已识别发货人）' : '企业微信「完成发货」（未绑定 OAuth）';
   await pool.query(
     `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-     VALUES (?, 'approved', 'shipped', NULL, ?)`,
-    [id, '企业微信「完成发货」']
+     VALUES (?, 'approved', 'shipped', ?, ?)`,
+    [id, actorUserId, remark]
   );
   try {
     await notifyShipStakeholders(pool, row);

@@ -92,8 +92,10 @@ npm run dev
 
 ## 接口文档
 
-- OpenAPI 文件：`docs/openapi.yaml`
-- 若后端已启用 Swagger 路由，可在浏览器访问对应文档入口（以实际配置为准）。
+- **Markdown 索引与扩展模块**：根目录 [`API.md`](API.md)（销售、企业微信、备份等）
+- **OpenAPI**：[`docs/openapi.yaml`](docs/openapi.yaml)
+- **Swagger UI**：在 `server/.env` 设置 `ENABLE_API_DOCS=true` 后启动后端，浏览器访问 `http://localhost:<PORT>/api-docs`（生产环境请关闭）
+- **架构与运维**：[`TECHNICAL.md`](TECHNICAL.md)
 
 ## 目录结构
 

@@ -109,14 +109,8 @@ router.delete('/:id', async (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
 
   const pool = getPool();
-  const [qc] = await pool.query(
-    'SELECT code, IFNULL(is_builtin, 0) AS is_builtin FROM employee_categories WHERE id=?',
-    [id]
-  );
-  if (!qc?.[0]) return res.status(404).json({ error: 'NOT_FOUND' });
-  if (Number(qc[0].is_builtin) === 1) {
-    return res.status(400).json({ error: 'CANNOT_DELETE_BUILTIN' });
-  }
+  const [existRows] = await pool.query('SELECT id FROM employee_categories WHERE id=? LIMIT 1', [id]);
+  if (!existRows?.[0]) return res.status(404).json({ error: 'NOT_FOUND' });
 
   const [useRows] = await pool.query(
     'SELECT COUNT(*) AS c FROM users WHERE employee_category_id = ? AND deleted_at IS NULL',

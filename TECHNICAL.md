@@ -78,25 +78,49 @@ flowchart LR
 
 ## 5. 后端 API 与路由一览
 
-入口：`server/src/index.js`，全局 `express.json({ limit: '5mb' })`、`cors()`。
+入口：`server/src/index.js`，全局 `express.json({ limit: '5mb' })`、`cors()`；企业微信回调路径单独挂载 **`express.text`** 解析 XML（见同文件内 `/api/wecom/callback`）。
+
+### 5.1 响应形态说明（对接必读）
+
+历史接口多数直接返回 **业务 JSON**（如 `{ token, user }`、`{ items, total }`、`{ error: 'FORBIDDEN' }`），**并非**统一的 `{ code, message, data }` 信封。前端 Axios 的 `response.data` 即为该对象。新增模块建议逐步向统一格式收敛；详见根目录 [`API.md`](API.md)「全局约定」。
+
+### 5.2 挂载路径索引
 
 | 挂载路径 | 路由文件 | 职责摘要 |
 |----------|----------|----------|
-| `/api/health` | `routes/health.js` | 健康检查 |
-| `/api/auth` | `routes/auth.js` | 登录、令牌、密码策略相关 |
+| `/api/health` | `routes/health.js` | 健康检查（含 DB latency、版本、内存等） |
+| `/api/auth` | `routes/auth.js` | 登录、验证码、TOTP、会话、`bootstrap-admin`、`impersonate`、`logout` 等 |
 | `/api/reports` | `routes/reports.js` | 报告 CRUD、状态、批量、印章应用等 |
 | `/api/qrcodes` | `routes/qrcodes.js` | 二维码与报告绑定 |
 | `/api/stamps` | `routes/stamps.js` | 公司印章资源 |
 | `/api/templates` | `routes/templates.js` | 报告模板与字段 |
 | `/api/company` | `routes/company.js` | 公司设置 |
 | `/api/employee-categories` | `routes/employeeCategories.js` | 员工类别及默认权限 |
-| `/api/users` | `routes/users.js` | 用户管理 |
-| `/api/translate` | `routes/translate.js` | 翻译代理（依赖环境开关与外部服务） |
-| `/api/security` | `routes/securitySettings.js` | 系统安全策略（密码长度、登录锁定等） |
-| `/api/audit` | `routes/auditLogs.js` | 登录/操作/错误日志查询 |
-| `/`（及 `/api/public/*` 等） | `routes/public.js` | 扫码跳转、公开报告 HTML、兼容旧路径 |
+| `/api/departments` | `routes/departments.js` | 部门树（合同/组织架构）；读写多为超管 |
+| `/api/users` | `routes/users.js` | 用户 CRUD、分页、`/lite`、重置密码、强制下线 |
+| `/api/permissions` | `routes/permissions.js` | **`GET /schema`**：权限勾选面板元数据 |
+| `/api/translate` | `routes/translate.js` | 翻译代理（LibreTranslate） |
+| `/api/security` | `routes/securitySettings.js` | 系统安全策略 |
+| `/api/audit` | `routes/auditLogs.js` | 登录/操作/错误日志；批量删除与导出 |
+| `/api/backups`、`/api/sql` | `routes/backup.js` | **超管**：备份列表、执行、恢复、下载、SQL 导出/导入等 |
+| `/api/dashboard` | `routes/dashboard.js` | 仪表盘汇总（报告趋势、饼图、超管额外卡片） |
+| `/api/report-image-library` | `routes/reportImageLibrary.js` | **超管**：报告配图库批量上传/删除 |
+| `/api/report-styles` | `routes/reportStyles.js` | 报告样式 JSON（读需报告权限；写需 create/edit） |
+| `/api/sales` | `routes/sales.js` + `routes/sales/ordersRouter.js` | 销售域：合同模板/合同生命周期、订单与客户、站内信、企业微信通知联动等 |
+| `/api/sales/v2` | `routes/sales/v2.js` | 预留占位，当前统一返回 `501 NOT_IMPLEMENTED_SALES_V2` |
+| `/api/sales-domain` | `routes/sales/index.js` | 实验性域拆分（customers/contracts/internal-models 子路由） |
+| `/api/wecom` | `routes/wecom.js` | 管理端：企业微信配置、模板、收件人、手动发送、通知任务重试等 |
+| `/api/wecom/callback` | `routes/wecomCallback.js` | **无 JWT**：企业微信「接收消息」URL 验证与回调 |
+| `/api/support-contact` | `routes/supportContact.js` | 技术支持微信号配置（读登录即可；写超管） |
+| `/uploads` | `index.js` 静态 | 上传文件 |
+| `/vendor/jspdf`、`/vendor/html2canvas` | `index.js` 静态 | 公开页 PDF 导出依赖 |
+| `/`（及 `/api/public/*`、`/qr/*` 等） | `routes/public.js` | 扫码跳转、公开报告 HTML/JSON/PDF |
 
-根路径 `GET /` 返回纯文本标识 `qc-report-server`。未捕获异常经统一错误处理；5xx 时异步写入 `error_logs`（见 `lib/audit.js`）。
+根路径 `GET /` 返回纯文本 `qc-report-server`。未捕获异常经统一错误处理；5xx 时异步写入 `error_logs`（见 `lib/audit.js`）。
+
+### 5.3 代码分层（后端）
+
+质检核心路由多在 **`routes/*.js`** 内直接访问 `getPool()` 与 SQL；销售订单等较重逻辑已抽到 **`services/`**（如 `salesOrderCrudService.js`、`salesOrderFlowService.js`）与 **`lib/`** 工具库，新增业务建议保持 **路由薄、校验（Zod）→ service → SQL** 的习惯。
 
 ---
 
@@ -168,20 +192,26 @@ flowchart LR
 
 | 变量 | 含义 |
 |------|------|
-| `PORT` | HTTP 端口，默认 `3001` |
+| `PORT` | HTTP 端口，默认 `3001`（**勿与 admin Vite 默认 3000 冲突**；否则进程拒绝启动，除非 `ALLOW_API_ON_ADMIN_DEV_PORT=true`） |
+| `LISTEN_HOST` | 默认 `0.0.0.0` |
 | `MYSQL_*` | 数据库连接 |
 | `JWT_SECRET` | JWT 签名密钥 |
-| `PUBLIC_BASE_URL` | 对外基础 URL（二维码、链接一致性） |
+| `PUBLIC_BASE_URL` | 对外基础 URL（二维码、企业微信网页入口一致性） |
+| `ADMIN_PUBLIC_URL` | 管理后台浏览器访问根（与 API 不同域时用于企微公开页「打开订单管理」等链接） |
+| `ALLOW_BOOTSTRAP` | `bootstrap-admin`：库空时匿名初始化超管；远程调用需 `true`，否则仅本机 loopback |
 | `LIBRETRANSLATE_URL` / `LIBRETRANSLATE_ENABLED` | 可选翻译服务 |
-| `ENABLE_API_DOCS` | 设为 `true` 时暴露 Swagger UI（`/api-docs`）与原始规范（`/openapi.yaml`），生产按需关闭 |
+| `ENABLE_API_DOCS` | `true` 时挂载 Swagger UI（`/api-docs`）与 **`GET /openapi.yaml`**；生产须关闭 |
+| `WECOM_NOTIFY_WORKER_*`、`APP_ENCRYPTION_KEY` | 企业微信异步通知与凭据加密（见 §11.7） |
+| `BACKUP_*` | 定时备份、加密、告警（见 `routes/backup.js`） |
 
 启动：`npm i` → 配置 `.env` → `npm run dev`（`node --watch`）或 `npm start`。
 
 ### 10.2 管理端（`admin/.env.example`）
 
-- `VITE_APP_API_BASE_URL`：API 根；开发时与 Vite 代理目标一致即可。
+- `VITE_APP_API_BASE_URL`：API 根 URL；Vite 据此计算 **`server.proxy['/api']` 的目标**（见 `admin/vite.config.js` + `src/utils/apiBaseNormalize.js`）。
+- `VITE_ADMIN_DEV_PORT`：可选，默认 `3000`。**禁止与 API 端口相同**，否则构建配置会抛错。
 
-启动：`npm i` → `npm run dev`（端口 3000）；生产：`npm run build`，将 `dist/` 置于静态服务器并由反向代理转发 `/api` 等到后端。
+启动：`npm i` → `npm run dev`（端口 3000）；生产：`npm run build`，将 `dist/` 置于静态服务器并由反向代理转发 `/api`、`/uploads` 等到后端。
 
 ---
 
@@ -246,14 +276,22 @@ flowchart LR
 4. **反代**：确保 `/qr/:token`、`/api/public/*`、静态 vendor 路径正确转发。
 5. **启动命令**：生产使用 PM2 / systemd / Docker + `NODE_ENV=production npm start`。
 
+### 11.7 企业微信敏感配置加密（可选）
+
+- 环境变量 **`APP_ENCRYPTION_KEY`**：32 字节随机密钥的 **Base64**（例如 `openssl rand -base64 32` 生成一行写入 `server/.env`）。
+- 设置后，保存「企业微信绑定」时 **`corp_secret`、`receive_token`、`encoding_aes_key`** 会以 **`enc:v1:`** 前缀的 AES-256-GCM 密文写入 MySQL；读取与回调验签、发消息时在内存中解密。
+- 未设置该变量时行为与旧版一致（明文落库）；历史明文记录在解密逻辑中仍按原文使用，可在下次保存各字段时自动改为密文。
+- 需执行 **`server/migrations/042_wecom_secrets_wide_and_callback_events.sql`**（或依赖启动时的 `ensureWecomSecretsWideAndCallbackEvents`）将 `wecom_config` 相关列加宽至 `VARCHAR(2048)`。
+- **密钥轮换**：更新 `APP_ENCRYPTION_KEY` 前须先用旧密钥将三项凭据在后台重新保存一遍（或脚本解密再加密），否则无法解密库内 `enc:v1:` 数据。
+
 ---
 
 ## 12. 文档与代码索引
 
 | 主题 | 位置 |
 |------|------|
-| 接口说明与变更记录（Markdown） | 根目录 [`API.md`](API.md) |
-| OpenAPI 3.0 规范与类型定义 | [`docs/openapi.yaml`](docs/openapi.yaml)；挂载见 `server/src/setupApiDocs.js` |
+| 接口说明与变更记录（Markdown） | 根目录 [`API.md`](API.md)（含销售/企微等扩展模块索引） |
+| OpenAPI 3.0 规范（质检核心为主） | [`docs/openapi.yaml`](docs/openapi.yaml)；挂载见 `server/src/setupApiDocs.js`；**销售/仪表盘等见 API.md 对照源码** |
 | HTTP 入口与中间件 | `server/src/index.js` |
 | JWT 与权限中间件 | `server/src/middleware/auth.js` |
 | 权限常量与默认矩阵 | `server/src/lib/permissions.js` |
@@ -298,4 +336,5 @@ flowchart LR
 
 ---
 
-*文档版本：2026-04-14 更新，已落地版本 Diff + 多级审批基础框架（migration + 权限）。运行 migration 后即可扩展 API 和 UI 组件。*
+*文档版本：2026-05-11 更新：补齐路由索引（销售、企微、备份、仪表盘等）、本地环境变量与端口约定、后端分层说明。*  
+*历史：2026-04-14 起记录合同版本 Diff + 多级审批 migration 与权限扩展。*

@@ -769,6 +769,30 @@ export default {
         this.templatesLoading = false;
       }
     },
+    /**
+     * 将已保存的 HTML 同步到左侧可视化模型；失败则切到源码编辑，避免「可视化仍是空表单却保存了库里旧 HTML」。
+     * @returns {boolean} 是否成功解析为可视化
+     */
+    syncTemplateBodyToVisualState(html) {
+      const h = String(html || '');
+      const base = createDefaultVisual();
+      const TPL_OUTER_WRAP =
+        '<div style="font-family:SimSun,宋体;line-height:1.8;font-size:14px;color:#000">';
+      let parsed = parseContractHtmlToVisual(h, base);
+      if (!parsed) {
+        parsed = parseContractHtmlToVisual(`${TPL_OUTER_WRAP}${h}</div>`, base);
+      }
+      if (parsed) {
+        this.visual = parsed;
+        this.editMode = 'visual';
+        this.form.body_html = this.visualToBodyHtml();
+        return true;
+      }
+      this.visual = createDefaultVisual();
+      this.editMode = 'raw';
+      this.form.body_html = h;
+      return false;
+    },
     async loadOne() {
       if (!this.numericId) {
         this.$message.error('无效模板');
@@ -778,7 +802,13 @@ export default {
       try {
         const d = await getContractTemplate(this.numericId);
         const t = d.template;
-        this.form = { name: t.name || '', body_html: t.body_html || '' };
+        this.form = { name: t.name || '', body_html: '' };
+        const ok = this.syncTemplateBodyToVisualState(t.body_html || '');
+        if (!ok) {
+          this.$message.warning(
+            '当前模板正文无法拆成可视化表单，已切换到源码编辑；请直接修改 HTML 后保存。'
+          );
+        }
       } catch {
         this.$message.error('加载失败');
         this.goBack();
@@ -793,6 +823,12 @@ export default {
           this.form.body_html = t.body_html || '';
           if (!this.form.name?.trim() && t.name) {
             this.form.name = `${t.name}（副本）`;
+          }
+          if (this.editMode === 'visual') {
+            const ok = this.syncTemplateBodyToVisualState(this.form.body_html);
+            if (!ok) {
+              this.$message.warning('套用后的正文无法拆成可视化表单，已切换到源码编辑。');
+            }
           }
         };
         if ((this.form.body_html || '').trim()) {
@@ -1108,6 +1144,9 @@ export default {
             this.goBack();
           }
         } else {
+          if (this.editMode === 'visual') {
+            this.form.body_html = this.visualToBodyHtml();
+          }
           await updateContractTemplate(this.numericId, {
             name: this.form.name.trim(),
             body_html: this.form.body_html

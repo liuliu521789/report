@@ -1,0 +1,470 @@
+P1：架构级改造，建议下一阶段执行
+4. 增加企业微信通知任务表 outbox
+目标
+业务接口不直接调用企业微信，而是写通知任务，异步发送。
+当前问题
+业务接口里直接?await tryNotify...。例如订单提交财务审核后同步发送企业微信。?
+财务审核通过后也同步通知仓库。?
+新增文件
+server/migrations/034_wecom_notify_outbox.sql
+server/src/lib/wecomNotifyOutbox.js
+server/src/workers/wecomNotifyWorker.js
+如果项目不想引入 worker 目录，也可以放：
+server/src/lib/wecomNotifyWorker.js
+数据库表设计
+新增表：
+CREATE TABLE IF NOT EXISTS wecom_notify_jobs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_type VARCHAR(64) NOT NULL,
+  template_code VARCHAR(64) NOT NULL,
+  to_user TEXT NOT NULL,
+  variables_json JSON NOT NULL,
+  biz_type VARCHAR(64) NULL,
+  biz_id BIGINT UNSIGNED NULL,
+  status ENUM('pending','sending','sent','failed','dead') NOT NULL DEFAULT 'pending',
+  retry_count INT NOT NULL DEFAULT 0,
+  max_retries INT NOT NULL DEFAULT 5,
+  next_retry_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  last_error TEXT NULL,
+  wecom_response_json JSON NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  sent_at DATETIME(3) NULL,
+  PRIMARY KEY (id),
+  KEY idx_wecom_jobs_status_next (status, next_retry_at),
+  KEY idx_wecom_jobs_biz (biz_type, biz_id)
+) ENGINE=InnoDB;
+新增函数
+在?server/src/lib/wecomNotifyOutbox.js?中实现：
+export async function enqueueWecomNotify(pool, {
+  eventType,
+  templateCode,
+  toUser,
+  variables,
+  bizType,
+  bizId
+}) {}
+要求：
+
+校验?templateCode?非空。
+
+
+校验?toUser?非空。
+
+
+variables?存 JSON。
+
+
+返回 job id。
+
+修改业务调用方式
+当前这类调用：
+await sendWecomTemplateMessage(pool, {
+  templateCode,
+  variables,
+  toUser
+});
+改成：
+await enqueueWecomNotify(pool, {
+  eventType: 'sales_order_submit_finance',
+  templateCode,
+  toUser,
+  variables,
+  bizType: 'sales_order',
+  bizId: orderId
+});
+worker 逻辑
+worker 每隔 5 秒拉取：
+SELECT * FROM wecom_notify_jobs
+WHERE status IN ('pending','failed')
+  AND next_retry_at <= NOW(3)
+ORDER BY id ASC
+LIMIT 20
+发送前更新为?sending。
+发送成功：
+status = sent
+sent_at = NOW(3)
+wecom_response_json = 企业微信响应
+发送失败：
+
+retry_count + 1
+
+
+如果未超过?max_retries，status 回到?failed
+
+
+next_retry_at?按退避策略递增
+
+
+超过次数改?dead
+
+退避策略：
+第 1 次：1 分钟
+第 2 次：5 分钟
+第 3 次：30 分钟
+第 4 次：2 小时
+第 5 次：6 小时
+验收标准
+
+业务操作成功不再依赖企业微信接口是否可用。
+
+
+企业微信失败后会自动重试。
+
+
+数据库能查到每条通知的状态。
+
+
+发送失败原因可见。
+
+5. 增加企业微信发送记录查询接口和后台页面
+目标
+管理员能看到企业微信消息是否发送成功。
+新增接口
+GET /api/wecom/jobs
+POST /api/wecom/jobs/:id/retry
+修改文件
+server/src/routes/wecom.js
+admin/src/views/WecomNotifications.vue
+admin/src/api/index.js
+接口要求
+GET /api/wecom/jobs?支持筛选：
+status
+templateCode
+bizType
+bizId
+date range
+返回：
+{
+  items: [],
+  total: 0
+}
+POST /api/wecom/jobs/:id/retry：
+
+仅允许?failed?或?dead?状态重试。
+
+
+设置?status='pending'。
+
+
+设置?next_retry_at=NOW(3)。
+
+
+retry_count?是否清零可配置，建议不清零但允许再次投递。
+
+前端页面要求
+在现有企业微信通知页面增加一个 tab：
+发送记录
+表格字段：
+ID
+业务类型
+业务ID
+模板代码
+接收人
+状态
+重试次数
+最后错误
+创建时间
+发送时间
+操作：重试
+验收标准
+
+管理员能看到企业微信发送成功/失败记录。
+
+
+失败任务可手动重试。
+
+
+不展示敏感 token 或 secret。
+
+
+6. Secret 类字段加密存储
+目标
+避免企业微信应用 Secret、回调 Token、EncodingAESKey 明文落库。
+当前问题
+wecom_config?表直接保存：
+corp_secret
+receive_token
+encoding_aes_key
+这些字段当前是普通字符串字段。?
+修改文件
+server/src/lib/secretCrypto.js
+server/src/routes/wecom.js
+server/src/lib/wecomNotify.js
+server/src/routes/wecomCallback.js
+server/.env.example
+TECHNICAL.md
+新增环境变量
+APP_ENCRYPTION_KEY=base64-32-byte-key
+新增工具
+export function encryptSecret(plain) {}
+export function decryptSecret(ciphertext) {}
+建议格式：
+enc:v1:<ivBase64>:<tagBase64>:<cipherBase64>
+使用：
+AES-256-GCM
+兼容要求
+读取时：
+
+如果字段以?enc:v1:?开头，解密。
+
+
+如果不是，按旧明文读取，并在下次保存时写成密文。
+
+写入时：
+
+corpSecret
+
+
+receiveToken
+
+
+encodingAesKey
+
+全部加密后存储。
+验收标准
+
+保存企业微信配置后，数据库中不出现原始 secret。
+
+
+读取配置后发送企业微信仍正常。
+
+
+回调验签仍正常。
+
+
+后台仍只显示?secretConfigured?和?encodingAesKeyConfigured，不回显原文。当前接口已采用不回显 secret 的设计，可以保留。?
+
+
+7. 模板变量 schema 化
+目标
+避免模板变量写错导致企业微信消息不可用。
+当前问题
+模板变量是自由替换，applyWecomTemplate()?会用 variables 替换?{{变量名}}。?
+后台只是用 sample 变量做预览，不强制校验模板是否包含必要变量。?
+修改文件
+server/src/lib/wecomTemplateSchemas.js
+server/src/routes/wecom.js
+admin/src/views/WecomNotifications.vue
+新增 schema
+export const WECOM_TEMPLATE_VARIABLE_SCHEMAS = {
+  sales_order_submit_finance: {
+    allowed: ['detail', 'orderNo', 'count', 'fromUser'],
+    requiredInBody: ['detail']
+  },
+  sales_order_withdraw_finance: {
+    allowed: ['detail', 'orderNo', 'count', 'fromUser'],
+    requiredInBody: ['detail']
+  },
+  sales_order_approved_warehouse: {
+    allowed: ['detail', 'orderNo', 'count', 'fromUser', 'shipConfirmUrl', 'shipUrl'],
+    requiredInBody: ['detail'],
+    requiredInUrl: ['shipConfirmUrl']
+  },
+  sales_order_rejected_sales: {
+    allowed: ['detail', 'orderNo', 'count', 'fromUser'],
+    requiredInBody: ['detail']
+  },
+  sales_contract_submit_reviewer: {
+    allowed: ['detail', 'contractNo', 'customerName', 'fromUser'],
+    requiredInBody: ['detail']
+  },
+  sales_contract_review_result: {
+    allowed: ['detail', 'contractNo', 'customerName', 'fromUser', 'statusLabel', 'contractReviewStatus', 'reviewComment'],
+    requiredInBody: ['detail']
+  }
+};
+保存模板时校验
+如果模板 code 是系统模板：
+
+body_template 必须包含 requiredInBody。
+
+
+url_template 必须包含 requiredInUrl。
+
+
+出现未知变量时返回 warning 或 400。
+
+前端要求
+模板编辑页面显示：
+当前模板可用变量：
+detail、orderNo、count、fromUser...
+保存前提示缺少必填变量。
+验收标准
+
+仓库发货模板?sales_order_approved_warehouse?的链接地址不包含?{{shipConfirmUrl}}?时不能保存。
+
+
+模板里写错变量名时能提示。
+
+
+自定义模板可以继续使用自由变量，但系统模板严格校验。
+
+
+P2：后续增强
+8. 一键发货绑定具体操作人
+目标
+知道是谁在企业微信里点击了“完成发货”。
+当前问题
+企业微信发货 token 只包含?purpose?和?orderId。?
+执行发货时?shipped_by、updated_by、状态日志 actor_id 都是?NULL。?
+推荐方案
+优先方案：
+企业微信 OAuth 获取当前访问者 UserID
+流程：
+确认页打开
+  -> 如果没有 code，跳转企业微信 OAuth
+  -> 获取 wecom_userid
+  -> 根据 users.wecom_userid 找系统用户
+  -> 发货时写 shipped_by = user.id
+备选方案
+如果短期不做 OAuth：
+
+每个接收人生成独立 token。
+
+
+token 中带?wecomUserid。
+
+
+发货时记录 token 中的 wecomUserid。
+
+
+如果能匹配系统用户，则写?shipped_by。
+
+验收标准
+
+发货状态日志能看到具体操作人。
+
+
+订单?shipped_by?不再是 NULL。
+
+
+无法识别身份时至少记录 IP、UA、wecomUserid/token jti。
+
+
+9. 回调 POST 事件入库
+目标
+企业微信回调不仅验证通道，还能存储事件供后续分析或扩展。
+当前问题
+POST 回调只验签、解密，debug 时打印 XML，然后返回空串。?
+新增表
+CREATE TABLE IF NOT EXISTS wecom_callback_events (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  msg_type VARCHAR(64) NULL,
+  event_type VARCHAR(128) NULL,
+  from_user VARCHAR(128) NULL,
+  raw_xml MEDIUMTEXT NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_wecom_callback_created (created_at),
+  KEY idx_wecom_callback_event (event_type)
+) ENGINE=InnoDB;
+修改要求
+
+解密 innerXml 后解析基础字段：
+
+
+MsgType
+
+
+Event
+
+
+FromUserName
+
+
+写入事件表。
+
+
+回调仍必须快速返回 200 空串。
+
+验收标准
+
+企业微信 POST 推送事件能入库。
+
+
+回调响应不超过 1 秒。
+
+
+解析失败也不影响返回 200。
+
+
+10. 手动发送权限进一步收紧
+目标
+避免普通?wecom.send?权限用户直接构造任意?toUser?发消息。
+当前问题
+POST /api/wecom/send?支持直接传?toUser，也支持?recipientId。?
+修改要求
+
+wecom.manage?可以直接传?toUser。
+
+
+wecom.send?只能传?recipientId。
+
+
+如果非 manage 用户传了?toUser，返回 403。
+
+验收标准
+
+管理员可以直接输入 UserID。
+
+
+普通发送员只能选择已有通知对象。
+
+
+所有手动发送都有审计日志。
+
+
+建议实施顺序
+第一批：小改动，低风险
+1. wecomApi.js 增加 timeout
+2. 一键发货 GET 改 POST
+3. 缩短 wecomShipToken 有效期
+4. 企业微信配置/模板/手动发送加审计
+5. 手动发送权限收紧
+第二批：可靠性改造
+6. 新增 wecom_notify_jobs 表
+7. 新增 enqueueWecomNotify()
+8. 新增 worker
+9. 业务 tryNotify... 改为写 outbox
+10. 新增发送记录查询和手动重试
+第三批：安全和可维护性增强
+11. Secret 加密存储
+12. 模板变量 schema 化
+13. 企业微信 OAuth 识别点击人
+14. 回调 POST 事件入库
+
+给 AI 的执行提示词模板
+如果要让 AI 直接开始改代码，可以这样下指令：
+请先实现 P0-1：给企业微信 API 调用增加 5 秒 timeout。
+
+要求：
+1. 修改 server/src/lib/wecomApi.js。
+2. 新增 fetchJsonWithTimeout helper。
+3. fetchWecomAccessToken 和 wecomSendMessage 都改用该 helper。
+4. 超时错误 code 为 WECOM_TIMEOUT。
+5. 网络错误 code 为 WECOM_NETWORK_ERROR。
+6. 保持现有 WECOM_TOKEN_ERROR 和 WECOM_SEND_ERROR 行为。
+7. 更新或新增测试。
+8. 运行 server 测试。
+然后第二个任务：
+请实现 P0-2：企业微信一键发货由 GET 改为 POST。
+
+要求：
+1. GET /api/public/wecom-order-ship-confirm 保留，只展示确认页。
+2. 确认页按钮改为 POST form。
+3. POST /api/public/wecom-order-ship 才执行 performWecomQuickShip。
+4. GET /api/public/wecom-order-ship 不再修改订单，只提示从确认页点击按钮。
+5. wecomShipToken 有效期从 30d 改成 7d。
+6. 保留订单状态必须是 approved 才能发货的校验。
+7. 增加测试或至少手动验证关键路径。
+再第三个任务：
+请实现 P0-3：企业微信配置、模板、手动发送增加审计日志。
+
+要求：
+1. 修改 server/src/routes/wecom.js。
+2. 对配置保存、接收人增删改、模板增删改、手动发送写 operation log。
+3. 日志 module 统一为 企业微信。
+4. 日志 detail 必须脱敏，不能包含 corpSecret、receiveToken、encodingAesKey、access_token。
+5. 手动发送记录 templateCode、recipientId 或 toUser 数量，不记录完整消息正文。
+6. 添加测试或手动验证。

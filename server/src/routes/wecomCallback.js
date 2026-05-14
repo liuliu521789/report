@@ -11,6 +11,7 @@ import {
   extractEncryptFromXml,
   verifyUrlAndDecryptEcho
 } from '../lib/wecomWorkCrypt.js';
+import { decryptSecret } from '../lib/secretCrypto.js';
 
 export const router = Router();
 
@@ -50,16 +51,56 @@ function queryParamFromOriginalUrl(originalUrl, name) {
   return '';
 }
 
+function parseWecomInnerXmlFields(innerXml) {
+  const xml = String(innerXml || '');
+  const pick = (tag) => {
+    const cdata = xml.match(new RegExp(`<${tag}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>`, 'i'));
+    if (cdata) return cdata[1].trim();
+    const plain = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i'));
+    return plain ? plain[1].trim() : null;
+  };
+  return {
+    msgType: pick('MsgType'),
+    eventType: pick('Event') || pick('InfoType'),
+    fromUser: pick('FromUserName')
+  };
+}
+
+async function insertWecomCallbackEventBestEffort(pool, innerXml) {
+  try {
+    const p = parseWecomInnerXmlFields(innerXml);
+    const raw = String(innerXml || '');
+    await pool.query(
+      `INSERT INTO wecom_callback_events (msg_type, event_type, from_user, raw_xml) VALUES (?, ?, ?, ?)`,
+      [p.msgType, p.eventType, p.fromUser, raw.slice(0, 16_000_000)]
+    );
+  } catch {
+    /* 入库失败不影响企业微信回调 200 */
+  }
+}
+
 async function loadReceiveConfigFromDb(pool) {
   const [rows] = await pool.query(
     `SELECT corp_id AS corpId, receive_token AS receiveToken, encoding_aes_key AS encodingAesKey
      FROM wecom_config WHERE id=1 LIMIT 1`
   );
   const r = rows?.[0] || {};
+  let receiveToken = String(r.receiveToken || '').trim();
+  let encodingAesKey = String(r.encodingAesKey || '').trim();
+  try {
+    receiveToken = receiveToken ? decryptSecret(receiveToken) : '';
+  } catch {
+    receiveToken = '';
+  }
+  try {
+    encodingAesKey = encodingAesKey ? decryptSecret(encodingAesKey) : '';
+  } catch {
+    encodingAesKey = '';
+  }
   return {
     corpId: String(r.corpId || '').trim(),
-    receiveToken: String(r.receiveToken || '').trim(),
-    encodingAesKey: String(r.encodingAesKey || '').trim()
+    receiveToken,
+    encodingAesKey
   };
 }
 
@@ -223,6 +264,10 @@ router.post('/', async (req, res) => {
       // eslint-disable-next-line no-console
       console.log('[wecom callback POST xml]', innerXml?.slice?.(0, 2000));
     }
+
+    setImmediate(() => {
+      insertWecomCallbackEventBestEffort(pool, innerXml).catch(() => {});
+    });
 
     return res.status(200).type('text/plain').send('');
   } catch (e) {

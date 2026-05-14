@@ -4,7 +4,11 @@ info:
   description: |
     Node.js + Express 后端接口规范。需登录接口使用 JWT Bearer。
     公开扫码与客户报告接口无需 Bearer（见 Public 分组）。
-  version: 0.1.0
+
+    本文件覆盖质检核心业务的大部分路径；**仪表盘、部门、备份、报告配图库/样式、
+    销售域、企业微信管理 API** 等请同时查阅仓库根目录 `API.md`（§15 起）并对照
+    `server/src/routes/` 源码。
+  version: 0.3.0
   license:
     name: Proprietary
 

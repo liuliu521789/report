@@ -1,0 +1,31 @@
+-- 「成品」工作表：与 Excel 列一致的结构化行（物源年度品质管控）
+
+CREATE TABLE IF NOT EXISTS qc_yearbook_finished_product_rows (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  year_id BIGINT UNSIGNED NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  product_model VARCHAR(128) NOT NULL DEFAULT '',
+  product_batch_no VARCHAR(64) NOT NULL DEFAULT '',
+  barrel_count DECIMAL(14, 4) NULL,
+  initial_batch_kg DECIMAL(14, 4) NULL,
+  inspection_batch_kg DECIMAL(14, 4) NULL,
+  appearance VARCHAR(64) NULL,
+  color_fe_co VARCHAR(32) NULL,
+  solid_content_pct DECIMAL(10, 4) NULL,
+  viscosity_s_25c DECIMAL(12, 4) NULL,
+  acid_value_mgkoh_g DECIMAL(12, 4) NULL,
+  tolerance_g_ml DECIMAL(14, 6) NULL,
+  nco_content_pct DECIMAL(10, 4) NULL,
+  inspection_conclusion VARCHAR(64) NULL,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_qc_yearbook_fp_year (year_id),
+  KEY idx_qc_yearbook_fp_year_sort (year_id, sort_order, id),
+  KEY idx_qc_yearbook_fp_model_batch (year_id, product_model(32), product_batch_no(16)),
+  CONSTRAINT fk_qc_yearbook_fp_year FOREIGN KEY (year_id) REFERENCES qc_yearbook_years(id) ON DELETE CASCADE,
+  CONSTRAINT fk_qc_yearbook_fp_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_qc_yearbook_fp_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

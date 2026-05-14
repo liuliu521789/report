@@ -8,7 +8,7 @@
 
 | 内容 | 位置 | 说明 |
 |------|------|------|
-| **OpenAPI 3.0 规范** | [`docs/openapi.yaml`](docs/openapi.yaml) | 每个操作的 **方法、URL、请求体 schema、查询参数、响应结构、示例**；可导入 Postman / Insomnia / 代码生成器 |
+| **OpenAPI 3.0 规范** | [`docs/openapi.yaml`](docs/openapi.yaml) | 覆盖 **健康检查、认证、报告、二维码、印章、模板、公司、翻译、安全、审计、员工类别、用户、公开接口** 等；**仪表盘 / 备份 / 销售 / 企业微信** 等扩展接口以本文 **§15 起** 与源码为准 |
 | **Swagger UI** | 启动服务且 `ENABLE_API_DOCS=true` 时访问 **`/api-docs`** | 互动式文档：在线调试、persist 授权信息 |
 | **原始规范** | **`GET /openapi.yaml`** | 供 CI、网关、或 [Swagger Editor](https://editor.swagger.io/) 拉取 |
 | **本文** | `API.md` | 全局约定、**典型 JSON 示例**、错误码速查、按模块表格索引、**变更记录** |
@@ -235,10 +235,11 @@
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
-| 2025-03-26 | 0.2.0 | 新增 `docs/openapi.yaml`；服务端可选 `ENABLE_API_DOCS` + `/api-docs`、`/openapi.yaml`；API.md 增补参数约定、JSON 示例与本变更表 |
+| 2026-05-11 | 0.3.0 | 增补仪表盘、权限 schema、部门、备份、报告配图库/样式、技术支持、**销售域**、**企业微信** API 索引；修正健康检查与审计日志权限/导出说明；认证章节补充验证码/TOTP/登出/模拟登录/`ALLOW_BOOTSTRAP`；明确扁平 JSON 响应约定 |
+| 2025-03-26 | 0.2.0 | 新增 `docs/openapi.yaml`；服务端可选 `ENABLE_API_DOCS` + `/api-docs`、`GET /openapi.yaml`；API.md 增补参数约定、JSON 示例与本变更表 |
 | （以往） | 0.1.0 | 初始 Markdown 接口说明（按路由手写） |
 
-后续每次变更 API（路径、字段、状态码、权限）时，请**同时**更新：`docs/openapi.yaml`、必要时更新本文示例与上表一行记录。
+后续每次变更 API（路径、字段、状态码、权限）时，请**同时**更新：`docs/openapi.yaml`（若属于 OpenAPI 覆盖范围）、**本文对应章节**与本表一行记录。
 
 ---
 
@@ -256,6 +257,7 @@
 - 全局 JSON body 大小上限约 **5MB**（`express.json`）。
 - 成功时 HTTP 状态多为 `200`；创建资源常为 `201`。
 - 错误时多为 JSON：`{ "error": "ERROR_CODE" }`，部分接口附带 `message`、`details` 等字段。
+- **信封约定**：当前主干接口为 **扁平 JSON**（非统一的 `{ code, message, data }`）。Axios 侧通常使用 `const { data } = await http.get(...)`，其中 `data` 即为上述对象。若后续新模块统一信封，需在 OpenAPI 与本文同步说明。
 
 ### 1.3 常见 HTTP 状态与 `error` 代码
 
@@ -282,7 +284,23 @@
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
-| GET | `/api/health` | 否 | 响应：`{ "ok": true, "ts": <毫秒时间戳> }` |
+| GET | `/api/health` | 否 | 用于存活与简单监控（含 DB ping） |
+
+典型响应 `200`（字段随版本略有增减，以 `server/src/routes/health.js` 为准）：
+
+```json
+{
+  "ok": true,
+  "ts": 1710000000000,
+  "version": "x.y.z",
+  "uptime": 12345,
+  "env": "development",
+  "memory": { "rss": "128MB" },
+  "db": { "status": "connected", "latencyMs": 3 }
+}
+```
+
+数据库不可用时 `ok` 为 `false`，`db.status` 为 `error` 并含简短 `message`。若延迟过高可能附带 `warnings`（如 `high_db_latency`）。
 
 ---
 
@@ -290,15 +308,21 @@
 
 | 方法 | 路径 | 认证 | 权限 | 请求体 / 说明 | 成功响应摘要 |
 |------|------|------|------|----------------|--------------|
-| POST | `/api/auth/login` | 否 | — | `{ "username": string, "password": string }` | `{ token, idleTimeoutMinutes, user: { id, username, accountType, employeeCategoryId, permissions } }` |
+| GET | `/api/auth/captcha` | 否 | — | — | 图形验证码载荷（登录限流场景使用，结构见 `routes/auth.js`） |
+| POST | `/api/auth/login` | 否 | — | `{ "username": string, "password": string, ... }` | `{ token, idleTimeoutMinutes, user }`（可能进入 TOTP 待验证流程，见源码） |
+| POST | `/api/auth/totp/provision` | 否 | — | `{ pendingToken }` | TOTP 绑定二维码 / secret |
+| POST | `/api/auth/totp/activate` | 否 | — | `{ pendingToken, code }` | 激活双因素 |
+| POST | `/api/auth/totp/verify-login` | 否 | — | `{ pendingToken, code }` | 二次验证完成后签发正式会话 |
 | GET | `/api/auth/me` | 是 | — | — | `{ user, idleTimeoutMinutes, confirmSensitiveOperations }` |
-| POST | `/api/auth/change-password` | 是 | — | `{ "oldPassword": string, "newPassword": string }` | `{ ok: true }` |
-| POST | `/api/auth/bootstrap-admin` | 条件 | — | `{ "username": string, "password": string }` | `{ ok: true, id }` |
+| POST | `/api/auth/change-password` | 是 | — | `{ oldPassword, newPassword }` | `{ ok: true }` |
+| POST | `/api/auth/logout` | 是 | — | — | `{ ok: true }`（无效化 token 版本） |
+| POST | `/api/auth/impersonate` | 是 | **超管** | `{ userId }` | 与登录成功类似：签发 **目标员工/经理** 权限的 `token` |
+| POST | `/api/auth/bootstrap-admin` | 条件 | — | `{ username, password }` | `{ ok: true, id }` |
 
 **`bootstrap-admin`**：
 
-- 若 `users` 表 **记录数为 0**：无需登录，用于初始化首个超级管理员。
-- 若已有用户：需 **已登录的超管**，否则先走 `requireAuth` + `requireSuperAdmin`。
+- 若 `users` 表 **记录数为 0**：可匿名调用，但须 **`ALLOW_BOOTSTRAP=true`**（环境变量）**或** 请求来源为本机 loopback（`127.0.0.1` / `::1`）；否则 `403` + `BOOTSTRAP_DISABLED`。
+- 若已有用户：需 **已登录的超管**。
 
 **登录相关错误**：
 
@@ -497,14 +521,32 @@
 |------|------|------|----------|------|
 | GET | `/api/audit/my-operations` | **非超管**；超管访问 `403` | `limit`、`offset`、`module`、`from`、`to` | `{ items, total }`（仅当前用户） |
 
-以下在 `router.use(requireSuperAdmin)` 之后，**仅超管**：
+**登录日志 `GET /api/audit/login`**：超管 **或** 具备权限 **`audit:viewLogin`** 的员工。
 
-| 方法 | 路径 | 查询参数 | 响应 |
-|------|------|----------|------|
-| GET | `/api/audit/login` | `username`、`success`（`1`/`0`）、`from`、`to`、`limit`、`offset` | `{ items, total }` |
-| GET | `/api/audit/operations` | `username`、`userId`、`module`、`from`、`to`、`limit`、`offset` | `{ items, total }` |
-| GET | `/api/audit/errors` | `module`、`from`、`to`、`limit`、`offset` | `{ items, total }`（会先清理过期错误日志） |
-| GET | `/api/audit/errors/export` | — | 附件 JSON，**最多 5000 条** |
+**操作日志 `GET /api/audit/operations`**：超管 **或** **`audit:viewOperations`**。
+
+**错误日志 `GET /api/audit/errors`**：超管 **或** **`audit:viewErrors`**。
+
+**批量导出（登录 / 操作 / 错误）**：超管 **或** **`audit:exportAudit`**；请求体 `{ ids: number[] }`（1–1000）。
+
+**仅超管**：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| DELETE | `/api/audit/login/bulk` | Body：`{ ids }`，批量删除登录日志 |
+| DELETE | `/api/audit/operations/bulk` | Body：`{ ids }`，批量删除操作日志 |
+| DELETE | `/api/audit/errors/bulk` | Body：`{ ids }`，批量删除错误日志 |
+| GET | `/api/audit/errors/export` | 无 Body；附件 JSON，**最多 5000 条**（全量导出） |
+
+**导出（按 ID 列表）**：
+
+| 方法 | 路径 | Body |
+|------|------|------|
+| POST | `/api/audit/login/export` | `{ ids }` → `login-logs.json` |
+| POST | `/api/audit/operations/export` | `{ ids }` → `operation-logs.json` |
+| POST | `/api/audit/errors/export` | `{ ids }` → `error-logs.json` |
+
+列表类接口查询参数：`limit`（默认 50，最大 200）、`offset`、`from`、`to` 等，见 `routes/auditLogs.js`。
 
 ---
 
@@ -527,15 +569,189 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/users` | `{ items }`（含解析后的 `permissions`） |
-| POST | `/api/users` | Body：`username`、`password`、`accountType`、`employeeCategoryId?`、`permissions?`；员工必须带类别；密码走安全策略 |
-| PUT | `/api/users/:id` | 部分更新：`accountType`、`employeeCategoryId`、`permissions`、`isActive`、`password`；禁止禁用自己、最后一个超管降级等 |
+| GET | `/api/users` | 分页：`page`、`pageSize`（默认 20，最大 200）、`keyword`、`accountType`、`isActive`、`categoryId`、`departmentId` → `{ items, total, page, pageSize }` |
+| GET | `/api/users/lite` | 下拉用最小字段；`activeOnly`、`accountType` → `{ items }` |
+| GET | `/api/users/:id` | `{ item }`（含解析后的 `permissions`） |
+| POST | `/api/users` | 创建：`loginId`/`username`、`realName`、`password`、`accountType`、`employeeCategoryId`（员工/经理必填）、`departmentId`、`phone`、`wecomUserId`、`permissions` 等 → `201`：`{ id, loginId }` |
+| PUT | `/api/users/:id` | 部分更新（含 `loginId`、`realName`、`departmentId`、`wecomUserId`、`requireTwoFactor` 等） |
+| DELETE | `/api/users/:id` | 软删除 |
+| POST | `/api/users/:id/reset-password` | 可选 Body：`{ password }`；返回 `{ ok, temporaryPassword? }` |
+| POST | `/api/users/:id/force-logout` | 抬升 `token_version`，踢下线 |
 
 错误示例：`409`：`USERNAME_EXISTS`；`400`：`LAST_SUPER_ADMIN`、`CANNOT_DISABLE_SELF`、`BAD_REQUEST` 等。
 
 ---
 
-## 15. 静态与其它
+## 15. 仪表盘 (`/api/dashboard`)
+
+**全局**：`requireAuth`。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/dashboard/summary` | 今日/季度报告数、按周结论趋势、环形图口径；**超管**额外包含「约在线用户数」「24h 错误日志数」等字段（见 `routes/dashboard.js`） |
+
+---
+
+## 16. 权限 Schema (`/api/permissions`)
+
+**全局**：`requireAuth`（任意登录用户可读元数据）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/permissions/schema` | `{ items }`：前端勾选面板用的模块/键定义（`lib/permissionSchema.js`） |
+
+---
+
+## 17. 部门 (`/api/departments`)
+
+| 方法 | 路径 | 认证与权限 | 说明 |
+|------|------|------------|------|
+| GET | `/api/departments/tree` | 登录 + **`contract_management:contract_submit`** 或超管 | `{ tree }` 嵌套结构 |
+| GET | `/api/departments/flat` | 超管 | 扁平列表 |
+| POST | `/api/departments` | 超管 | 新建 |
+| PUT | `/api/departments/:id` | 超管 | 更新 |
+| DELETE | `/api/departments/:id` | 超管 | 删除（含子节点校验等，见源码） |
+
+---
+
+## 18. 备份与 SQL 工具 (`/api/backups`、`/api/sql`)
+
+**仅挂载在以下路径上的路由要求超管**：`/api/backups`、`/api/sql`（见 `routes/backup.js`）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/backups` | `{ backups }` |
+| POST | `/api/backups/run` | 手动触发备份 |
+| GET | `/api/backups/jobs` | 任务历史 |
+| POST | `/api/backups/reencrypt` | 轮换备份加密密钥 |
+| POST | `/api/backups/verify` | Body：`{ backupId }` 可恢复性校验 |
+| POST | `/api/backups/restore/:id` | 从备份 ID 恢复 |
+| DELETE | `/api/backups/:id` | 删除备份包 |
+| GET | `/api/backups/download/:id` | 下载附件 |
+| GET | `/api/sql` | 导出全库 SQL（大文件，慎用） |
+| POST | `/api/sql` | Body：`{ sql }` 分段执行（维护用，风险高） |
+
+环境与定时策略：`BACKUP_*`、`server/scheduler` 等见 `TECHNICAL.md` 与 `server/.env.example`。
+
+---
+
+## 19. 报告配图库 (`/api/report-image-library`)
+
+**全局**：`requireAuth` + **超管**。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/report-image-library` | `{ items, maxTotal, maxBatch }` |
+| POST | `/api/report-image-library/batch` | `multipart/form-data`，字段 **`files`**（多文件，类型/大小限制见路由） |
+| DELETE | `/api/report-image-library/batch` | Body：待删除的 id 列表（见 `reportImageLibrary.js`） |
+
+---
+
+## 20. 报告样式 (`/api/report-styles`)
+
+**全局**：`requireAuth`。
+
+| 方法 | 路径 | 权限 | 说明 |
+|------|------|------|------|
+| GET | `/api/report-styles` | `reports:create` **或** `edit` **或** `view` | 列表 |
+| GET | `/api/report-styles/:id` | 同上 | `{ style }`（含 `elements` JSON） |
+| POST | `/api/report-styles` | `reports:create` | Body：`name`、`description?`、`elements` |
+| PUT | `/api/report-styles/:id` | `reports:edit` | 同上 |
+| DELETE | `/api/report-styles/:id` | `reports:edit` | 删除 |
+
+---
+
+## 21. 技术支持联系方式 (`/api/support-contact`)
+
+**全局**：`requireAuth`。
+
+| 方法 | 路径 | 权限 | 说明 |
+|------|------|------|------|
+| GET | `/api/support-contact` | 任意登录 | `{ engineerWechatId }` |
+| PUT | `/api/support-contact` | **超管** | 更新工程师微信号 |
+
+---
+
+## 22. 销售域 (`/api/sales`)
+
+**全局**：`requireAuth`。权限以 `server/src/lib/permissions.js` 中 **`order_management`**、**`contract_management`** 等为准；合同可见性含创建人、部门子树、财务审核人等规则（见 `routes/sales/salesShared.js`）。
+
+### 22.1 合同模板与合同正文
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/sales/contract-templates` | 列表 |
+| GET | `/api/sales/contract-templates/:id` | 详情 |
+| POST | `/api/sales/contract-templates` | 新建 |
+| PATCH | `/api/sales/contract-templates/:id` | 更新 |
+| DELETE | `/api/sales/contract-templates/:id` | 删除 |
+| POST | `/api/sales/contracts/generate` | 由模板生成合同 |
+| POST | `/api/sales/contracts/upload-document` | `multipart` 上传正文文档 |
+| GET | `/api/sales/contracts` | 列表/筛选 |
+| GET | `/api/sales/contracts/:id` | 详情 |
+| GET | `/api/sales/contracts/:id/document` | 下载文档 |
+| POST | `/api/sales/contracts/:id/replace-document` | 替换文档 |
+| PATCH | `/api/sales/contracts/:id` | 更新元数据/正文等 |
+| DELETE | `/api/sales/contracts/:id` | 删除 |
+| POST | `/api/sales/contracts/bulk-delete` | 批量删除 |
+| POST | `/api/sales/contracts/:id/submit` | 提交审批 |
+| POST | `/api/sales/contracts/:id/withdraw` | 撤回 |
+| POST | `/api/sales/contracts/:id/review` | 审核（单审核人模型） |
+| POST | `/api/sales/contracts/:id/remind-reviewer` | 提醒审核人 |
+| GET | `/api/sales/contracts/:id/versions` | 版本列表 |
+| POST | `/api/sales/contracts/:id/versions` | 新版本 |
+| GET | `/api/sales/contracts/:id/versions/:v1/:v2/diff` | 版本 Diff |
+| POST | `/api/sales/contracts/:id/approval-flow` | 配置多级审批流 |
+| GET | `/api/sales/contracts/:id/approval-flow` | 读取审批流 |
+| POST | `/api/sales/contracts/:id/approve-step/:stepId` | 审批某一步 |
+
+### 22.2 订单、客户、站内信、导入导出（`ordersRouter` 挂载在 `/api/sales` 下）
+
+前缀均为 **`/api/sales`**。高频端点示例：
+
+- **设置**：`GET|PATCH /settings`
+- **自定义字段**：`GET|POST /order-fields`、`PATCH|DELETE /order-fields/:id`
+- **客户**：`GET|POST /customers`、`PATCH /customers/:id`、`PATCH /customers/:id/status`、`GET /customers/:id/stats`、`POST /customers/bulk-delete`
+- **内部型号**：`GET|POST /internal-models`、`PATCH /internal-models/:id`、`POST /internal-models/import`、`POST .../batch-delete`、`batch-enable`、`delete-all`
+- **站内信**：`GET /messages`、`POST /messages/clear`、`POST /messages/:id/read`、`DELETE /messages/:id`、`POST /messages/batch-delete`
+- **订单**：`GET|POST /orders`、`PATCH /orders/:id`、`DELETE /orders/:id`、`POST .../submit`、`withdraw`、`finance-review`、`ship`、`complete`、`cancel`、批量接口、`GET /orders/export/xlsx`、`GET /orders/template/xlsx`、`POST /orders/import/xlsx`
+- **绑定与质检码**：`GET /qrcodes/bind-candidates`、`PATCH /orders/:id/qc-qrcode`、`POST /orders/:id/bind-contract`
+- **日志与用户清单**：`GET /orders/:id/status-logs`、`edit-logs`、`GET /process/order-logs`、`GET /finance-reviewers`、`GET /sales-users`
+- **客户合同列表**：`GET /customers/:customerId/contracts`
+
+完整列表以 `server/src/routes/sales/ordersRouter.js` 为准。
+
+---
+
+## 23. 企业微信（管理 API：`/api/wecom`）
+
+**全局**：`requireAuth`；具体 handler 上区分「可配置」与「可发消息」等（见 `routes/wecom.js`）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/wecom/meta` | 元信息 |
+| GET、PUT | `/api/wecom/config` | 读写企业绑定（Secret 等可能为 `enc:v1:` 密文存储） |
+| GET、POST、PUT、DELETE | `/api/wecom/recipients`、`/recipients/:id` | 收件人 |
+| GET、POST、PUT、DELETE | `/api/wecom/templates`、`/templates/:id` | 消息模板 |
+| GET | `/api/wecom/templates/code/:code/snippet` | 按 code 取片段 |
+| POST | `/api/wecom/send` | 手动发送 |
+| GET | `/api/wecom/jobs` | 异步通知任务列表 |
+| POST | `/api/wecom/jobs/:id/retry` | 重试失败任务 |
+
+回调 URL（企业微信后台填写）：**`{PUBLIC_BASE_URL}/api/wecom/callback`**（**GET** 验证 **POST** 收消息；无 JWT）。服务端异步投递见 `lib/wecomNotifyWorker.js`（可用 `WECOM_NOTIFY_WORKER_DISABLED` 关闭）。
+
+---
+
+## 24. 其它销售路由占位
+
+| 前缀 | 说明 |
+|------|------|
+| `GET/POST/... /api/sales/v2/*` | 当前统一 **`501`** + `NOT_IMPLEMENTED_SALES_V2` |
+| `/api/sales-domain/*` | 实验性子域路由（customers / contracts / internal-models），与主 `/api/sales` 并行存在 |
+
+---
+
+## 25. 静态与其它
 
 | 路径 | 说明 |
 |------|------|
@@ -545,11 +761,11 @@
 
 ---
 
-## 16. 与前端联调
+## 26. 与前端联调
 
 - 管理端开发：Vite 将 `/api`、`/uploads`、`/miniprogram` 代理到后端（`admin/vite.config.js`）。
 - 生产环境：保证公开扫码 URL、PDF 打开页、`/uploads` 资源 **同源或可访问**，否则客户页图片与导出可能失败。
 
 ---
 
-*机器可读规范：`docs/openapi.yaml`。文档由 `server/src/routes/*.js` 与 `server/src/index.js` 对照维护；若代码变更请同步更新 OpenAPI 与上文章节「变更记录」。*
+*机器可读规范：`docs/openapi.yaml`（启用 `ENABLE_API_DOCS` 时亦可 `GET /openapi.yaml`）。扩展模块以本文 §15 起与 `server/src/routes/*.js`、`server/src/index.js` 为准；变更时请同步 OpenAPI（若适用）、本文与「变更记录」。*

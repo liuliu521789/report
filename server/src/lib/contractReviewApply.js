@@ -1,31 +1,13 @@
-import { buildContractOrdersNotifyBody } from './salesOrderNotifyBody.js';
+import {
+  buildContractOrdersNotifyBody,
+  buildContractReviewerNotifyMessages
+} from './salesOrderNotifyBody.js';
 import {
   tryNotifyContractReviewerOnSubmit,
   tryNotifyContractCreatorOnReview
 } from './wecomNotify.js';
-
-/** DB 字段 body_text VARCHAR(2048)，统一截断 */
-function clampInternalMessageBody(text, maxLen = 2000) {
-  const s = text == null ? '' : String(text);
-  if (s.length <= maxLen) return s || null;
-  return `${s.slice(0, maxLen - 24)}\n…（正文过长已截断，请到订单管理查看）`;
-}
-
-function normalizeInternalMessageCategory(raw) {
-  const s = raw == null ? '' : String(raw);
-  if (s === 'todo' || s === 'system') return s;
-  return 'notice';
-}
-
-async function insertInternalMessage(pool, toUserId, { title, bodyText, fromUserId, refType, refId, msgCategory }) {
-  const body = clampInternalMessageBody(bodyText);
-  const kind = normalizeInternalMessageCategory(msgCategory);
-  await pool.query(
-    `INSERT INTO sales_internal_messages (to_user_id, from_user_id, category, title, body_text, ref_type, ref_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [toUserId, fromUserId || null, kind, title, body, refType || null, refId || null]
-  );
-}
+import { userDisplayLabel } from './userDisplayLabel.js';
+import { notifyUser } from './salesInternalInbox.js';
 
 function parseApprovalFlow(c) {
   let flow = null;
@@ -99,19 +81,28 @@ export async function applyContractReview(pool, { contractId, actorUserId, resul
        WHERE id = ?`,
       [nextReviewerId, JSON.stringify(nextFlow), cid]
     );
+    const nextReviewerLabel = await userDisplayLabel(pool, nextReviewerId);
     await pool.query(
       `INSERT INTO sales_contract_audit_logs (contract_id, actor_id, action, result, comment_text)
        VALUES (?, ?, 'review', 'approved', ?)`,
-      [cid, aid, `第 ${activeIndex + 1}/${chain.length} 位审批通过，流转至用户ID ${nextReviewerId}`]
+      [cid, aid, `第 ${activeIndex + 1}/${chain.length} 位审批通过，流转至 ${nextReviewerLabel}`]
     );
 
-    const contractSubmitBody = await buildContractOrdersNotifyBody(pool, cid, {
-      intro: `合同 ${c.contract_no} 待您审核。`,
-      customerName: c.linked_customer_name || ''
+    const chainStep =
+      chain.length > 1 ? { current: nextIndex + 1, total: chain.length } : null;
+    const { inboxBody } = buildContractReviewerNotifyMessages({
+      contractNo: c.contract_no,
+      customerName: c.linked_customer_name || '',
+      chainStep,
+      urge: false,
+      actorUsername: ''
     });
-    await insertInternalMessage(pool, nextReviewerId, {
-      title: '合同待审核',
-      bodyText: contractSubmitBody,
+    await notifyUser(pool, nextReviewerId, {
+      title:
+        chain.length > 1
+          ? `合同待审核（第 ${nextIndex + 1}/${chain.length} 位）`
+          : '合同待审核',
+      bodyText: inboxBody,
       fromUserId: aid,
       refType: 'contract',
       refId: cid,
@@ -119,9 +110,9 @@ export async function applyContractReview(pool, { contractId, actorUserId, resul
     });
     await tryNotifyContractReviewerOnSubmit(pool, {
       contractRow: c,
-      notifyBody: contractSubmitBody,
       fromUserId: aid,
-      reviewerUserId: nextReviewerId
+      reviewerUserId: nextReviewerId,
+      chainStep
     });
 
     return { ok: true, variant: 'progressed', nextReviewerUserId: nextReviewerId };
@@ -152,7 +143,7 @@ export async function applyContractReview(pool, { contractId, actorUserId, resul
       intro: reviewIntro,
       customerName: c.linked_customer_name || ''
     });
-    await insertInternalMessage(pool, c.created_by, {
+    await notifyUser(pool, c.created_by, {
       title: `合同审核${result === 'approved' ? '通过' : '驳回'}`,
       bodyText: contractReviewBody,
       fromUserId: aid,

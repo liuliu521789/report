@@ -134,7 +134,7 @@ async function ensureBuiltinCategoryPermissionDefaults(pool) {
   const [rows] = await pool.query(
     `SELECT id, code, default_permissions_json
      FROM employee_categories
-     WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'finance', 'warehouse', 'sales_admin')`
+     WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'documentary', 'finance', 'warehouse', 'sales_admin')`
   );
   for (const row of rows || []) {
     const next = backfillBuiltinCategoryPermissionDefaults(row.default_permissions_json, row.code);
@@ -246,6 +246,7 @@ const DDL_SALES_PIECES = [
     contact_name VARCHAR(128) NULL,
     phone VARCHAR(64) NULL,
     address VARCHAR(512) NULL,
+    customer_group VARCHAR(32) NOT NULL DEFAULT '',
     created_by BIGINT UNSIGNED NULL,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     updated_by BIGINT UNSIGNED NULL,
@@ -254,6 +255,7 @@ const DDL_SALES_PIECES = [
     PRIMARY KEY (id),
     UNIQUE KEY uk_sales_customers_code (customer_code),
     KEY idx_sales_customers_name (customer_name(64)),
+    KEY idx_sales_customers_group (customer_group),
     KEY idx_sales_customers_active (is_active),
     CONSTRAINT fk_sales_customers_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
     CONSTRAINT fk_sales_customers_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
@@ -290,11 +292,14 @@ const DDL_SALES_PIECES = [
     extra_json JSON NULL,
     data_json JSON NULL,
     qc_qrcode_id BIGINT UNSIGNED NULL DEFAULT NULL,
-    status ENUM('pending_review', 'approved', 'rejected', 'shipped', 'completed', 'cancelled') NOT NULL DEFAULT 'pending_review',
+    status ENUM('pending_review', 'pending_qc', 'approved', 'rejected', 'shipped', 'completed', 'cancelled') NOT NULL DEFAULT 'pending_review',
     submitted_for_review_at DATETIME(3) NULL DEFAULT NULL,
     finance_reviewed_at DATETIME(3) NULL,
     finance_reviewed_by BIGINT UNSIGNED NULL,
     finance_comment VARCHAR(1024) NULL,
+    qc_reviewed_at DATETIME(3) NULL,
+    qc_reviewed_by BIGINT UNSIGNED NULL,
+    qc_comment VARCHAR(1024) NULL,
     shipped_at DATETIME(3) NULL,
     shipped_by BIGINT UNSIGNED NULL,
     shipping_instruction VARCHAR(1024) NULL,
@@ -311,6 +316,7 @@ const DDL_SALES_PIECES = [
     KEY idx_sales_orders_created_by (created_by),
     CONSTRAINT fk_sales_orders_customer FOREIGN KEY (customer_id) REFERENCES sales_customers(id) ON DELETE RESTRICT,
     CONSTRAINT fk_sales_orders_finance_by FOREIGN KEY (finance_reviewed_by) REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT fk_sales_orders_qc_by FOREIGN KEY (qc_reviewed_by) REFERENCES users(id) ON DELETE SET NULL,
     CONSTRAINT fk_sales_orders_shipped_by FOREIGN KEY (shipped_by) REFERENCES users(id) ON DELETE SET NULL,
     CONSTRAINT fk_sales_orders_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
     CONSTRAINT fk_sales_orders_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
@@ -556,7 +562,7 @@ export async function ensureAccountModuleHardeningColumns() {
     );
     await pool.query(
       `UPDATE employee_categories SET is_builtin = 1
-       WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'finance', 'warehouse', 'sales_admin')`
+       WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'documentary', 'finance', 'warehouse', 'sales_admin')`
     );
   }
 }
@@ -565,6 +571,12 @@ export async function ensureAccountModuleHardeningColumns() {
 export async function ensureSalesInternalMessagesTable() {
   const pool = getPool();
   await pool.query(DDL_SALES_INTERNAL_MESSAGES);
+  /** 旧库若早已存在无 category 等列的表，CREATE TABLE IF NOT EXISTS 不会 ALTER，会导致 SELECT … category … 500 */
+  if (!(await columnExists(pool, 'sales_internal_messages', 'category'))) {
+    await pool.query(
+      "ALTER TABLE sales_internal_messages ADD COLUMN category VARCHAR(32) NOT NULL DEFAULT 'notice' AFTER from_user_id"
+    );
+  }
 }
 
 /** 启动自检 sales_internal_models 表（与迁移脚本一致） */
@@ -631,6 +643,16 @@ export async function ensureSalesModuleTables() {
       /* constraint may already exist or other DB limitation */
     }
   }
+  if (!(await columnExists(pool, 'sales_customers', 'customer_group'))) {
+    await pool.query(
+      "ALTER TABLE sales_customers ADD COLUMN customer_group VARCHAR(32) NOT NULL DEFAULT '' AFTER address"
+    );
+    try {
+      await pool.query('ALTER TABLE sales_customers ADD KEY idx_sales_customers_group (customer_group)');
+    } catch {
+      /* index may already exist */
+    }
+  }
 
   await pool.query(
     `INSERT IGNORE INTO sales_settings (id, order_no_prefix, last_order_seq) VALUES (1, 'SO', 0)`
@@ -647,6 +669,23 @@ export async function ensureSalesModuleTables() {
       row
     );
   }
+  /** 品管(qc)、跟单(documentary)：未跑完整 schema.sql 的库可由 INSERT IGNORE 幂等补齐 */
+  const qcDocumentarySeeds = [
+    ['品管', 'qc', 9],
+    ['跟单', 'documentary', 14]
+  ];
+  for (const [nameZh, code, sortOrder] of qcDocumentarySeeds) {
+    const json = JSON.stringify(defaultPermissionsForRole(code));
+    await pool.query(
+      `INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor)
+       VALUES (?, ?, ?, CAST(? AS JSON), 0)`,
+      [nameZh, code, sortOrder, json]
+    );
+  }
+  await pool.query(
+    `UPDATE employee_categories SET is_builtin = 1
+     WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'documentary', 'finance', 'warehouse', 'sales_admin')`
+  );
   await pool.query(
     `UPDATE employee_categories
      SET default_permissions_json = JSON_SET(
@@ -655,6 +694,16 @@ export async function ensureSalesModuleTables() {
        CAST(? AS JSON)
      )
      WHERE code = 'sales'`,
+    ['true']
+  );
+  await pool.query(
+    `UPDATE employee_categories
+     SET default_permissions_json = JSON_SET(
+       default_permissions_json,
+       '$.order_management.order_query_all',
+       CAST(? AS JSON)
+     )
+     WHERE code = 'documentary'`,
     ['true']
   );
   await ensureBuiltinCategoryPermissionDefaults(pool);
@@ -842,10 +891,10 @@ CREATE TABLE IF NOT EXISTS wecom_config (
   id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
   corp_id VARCHAR(32) NOT NULL DEFAULT '',
   agent_id INT UNSIGNED NOT NULL DEFAULT 0,
-  corp_secret VARCHAR(255) NOT NULL DEFAULT '',
+  corp_secret VARCHAR(2048) NOT NULL DEFAULT '',
   remark VARCHAR(255) NULL,
-  receive_token VARCHAR(64) NOT NULL DEFAULT '',
-  encoding_aes_key VARCHAR(64) NOT NULL DEFAULT '',
+  receive_token VARCHAR(2048) NOT NULL DEFAULT '',
+  encoding_aes_key VARCHAR(2048) NOT NULL DEFAULT '',
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
 ) ENGINE=InnoDB;
 `;
@@ -877,6 +926,31 @@ CREATE TABLE IF NOT EXISTS wecom_notify_templates (
 ) ENGINE=InnoDB;
 `;
 
+/** 与 migrations/041_wecom_notify_jobs.sql 一致 */
+const DDL_WECOM_NOTIFY_JOBS = `
+CREATE TABLE IF NOT EXISTS wecom_notify_jobs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_type VARCHAR(64) NOT NULL,
+  template_code VARCHAR(64) NOT NULL,
+  to_user TEXT NOT NULL,
+  variables_json JSON NOT NULL,
+  biz_type VARCHAR(64) NULL,
+  biz_id BIGINT UNSIGNED NULL,
+  status ENUM('pending','sending','sent','failed','dead') NOT NULL DEFAULT 'pending',
+  retry_count INT NOT NULL DEFAULT 0,
+  max_retries INT NOT NULL DEFAULT 5,
+  next_retry_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  last_error TEXT NULL,
+  wecom_response_json JSON NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  sent_at DATETIME(3) NULL,
+  PRIMARY KEY (id),
+  KEY idx_wecom_jobs_status_next (status, next_retry_at),
+  KEY idx_wecom_jobs_biz (biz_type, biz_id)
+) ENGINE=InnoDB;
+`;
+
 export async function ensureWecomNotificationsTables() {
   const pool = getPool();
   await pool.query(DDL_WECOM_CONFIG);
@@ -887,14 +961,49 @@ export async function ensureWecomNotificationsTables() {
   await pool.query(DDL_WECOM_TEMPLATES);
 }
 
+export async function ensureWecomNotifyJobsTable() {
+  const pool = getPool();
+  await pool.query(DDL_WECOM_NOTIFY_JOBS);
+}
+
+const DDL_WECOM_CALLBACK_EVENTS = `
+CREATE TABLE IF NOT EXISTS wecom_callback_events (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  msg_type VARCHAR(64) NULL,
+  event_type VARCHAR(128) NULL,
+  from_user VARCHAR(128) NULL,
+  raw_xml MEDIUMTEXT NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_wecom_callback_created (created_at),
+  KEY idx_wecom_callback_event (event_type)
+) ENGINE=InnoDB;
+`;
+
+/** 与 migrations/042_wecom_secrets_wide_and_callback_events.sql 一致：加宽密文字段 + 回调事件表 */
+export async function ensureWecomSecretsWideAndCallbackEvents() {
+  const pool = getPool();
+  try {
+    await pool.query(
+      `ALTER TABLE wecom_config
+       MODIFY COLUMN corp_secret VARCHAR(2048) NOT NULL DEFAULT '',
+       MODIFY COLUMN receive_token VARCHAR(2048) NOT NULL DEFAULT '',
+       MODIFY COLUMN encoding_aes_key VARCHAR(2048) NOT NULL DEFAULT ''`
+    );
+  } catch (e) {
+    if (e?.code !== 'ER_NO_SUCH_TABLE' && e?.code !== 'ER_BAD_FIELD_ERROR') throw e;
+  }
+  await pool.query(DDL_WECOM_CALLBACK_EVENTS);
+}
+
 const WECOM_ORDER_TEMPLATES_SEED = `
 INSERT IGNORE INTO wecom_notify_templates (code, name_zh, msg_type, title_template, body_template, url_template, btntxt)
 VALUES
 ('sales_order_submit_finance', '销售提交财务审核（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
 ('sales_order_withdraw_finance', '销售撤回财务审核（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
-('sales_order_approved_warehouse', '财务通过→仓库备货（系统）', 'textcard', '订单已审核通过', '{{detail}}', '{{shipConfirmUrl}}', '完成发货'),
+('sales_order_approved_warehouse', '财务通过→仓库备货（系统）', 'textcard', '订单待发货', '{{detail}}', '{{shipConfirmUrl}}', '完成发货'),
 ('sales_order_rejected_sales', '财务驳回→销售（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
-('sales_contract_submit_reviewer', '提交合同发送信息给审核人', 'textcard', '合同待审核', '{{customerName}} 销售合同待您审核', '{{reviewUrl}}', '去审核'),
+('sales_contract_submit_reviewer', '提交合同发送信息给审核人', 'textcard', '{{notificationTitle}}', '{{detail}}', '{{reviewUrl}}', '打开审批'),
 ('sales_contract_review_result', '合同审核结果通知提交审核人', 'text', NULL, '📢{{customerName}}销售合同审核状态更新\n🔒状态：{{contractReviewStatus}}\n💾备注：{{reviewComment}}', NULL, '详情')
 `;
 
@@ -914,12 +1023,12 @@ export async function ensureWecomReceiveCallbackColumns() {
   const pool = getPool();
   if (!(await columnExists(pool, 'wecom_config', 'receive_token'))) {
     await pool.query(
-      "ALTER TABLE wecom_config ADD COLUMN receive_token VARCHAR(64) NOT NULL DEFAULT '' COMMENT '回调 Token' AFTER remark"
+      "ALTER TABLE wecom_config ADD COLUMN receive_token VARCHAR(2048) NOT NULL DEFAULT '' COMMENT '回调 Token' AFTER remark"
     );
   }
   if (!(await columnExists(pool, 'wecom_config', 'encoding_aes_key'))) {
     await pool.query(
-      "ALTER TABLE wecom_config ADD COLUMN encoding_aes_key VARCHAR(64) NOT NULL DEFAULT '' COMMENT '43位 EncodingAESKey' AFTER receive_token"
+      "ALTER TABLE wecom_config ADD COLUMN encoding_aes_key VARCHAR(2048) NOT NULL DEFAULT '' COMMENT 'EncodingAESKey 密文或明文' AFTER receive_token"
     );
   }
 }
@@ -1025,4 +1134,141 @@ export async function ensureStampsSvgFields() {
       "ALTER TABLE company_stamps ADD COLUMN active_image_type ENUM('original', 'svg') NOT NULL DEFAULT 'original' COMMENT '当前激活的图片类型' AFTER svg_image_url"
     );
   }
+}
+
+/** 与 migrations/046_qc_yearbook_data.sql 一致：年度品质台账年份与明细 */
+const DDL_QC_YEARBOOK_YEARS = `
+CREATE TABLE IF NOT EXISTS qc_yearbook_years (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  year SMALLINT UNSIGNED NOT NULL,
+  remark VARCHAR(255) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_qc_yearbook_years_year (year)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
+
+const DDL_QC_YEARBOOK_RECORDS = `
+CREATE TABLE IF NOT EXISTS qc_yearbook_records (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  year_id BIGINT UNSIGNED NOT NULL,
+  category VARCHAR(128) NOT NULL DEFAULT '',
+  subject VARCHAR(512) NOT NULL DEFAULT '',
+  body MEDIUMTEXT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_qc_yearbook_records_year (year_id),
+  KEY idx_qc_yearbook_records_year_sort (year_id, sort_order, id),
+  CONSTRAINT fk_qc_yearbook_records_year FOREIGN KEY (year_id) REFERENCES qc_yearbook_years(id) ON DELETE CASCADE,
+  CONSTRAINT fk_qc_yearbook_records_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_qc_yearbook_records_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
+
+const DDL_QC_YEARBOOK_FINISHED_PRODUCT_ROWS = `
+CREATE TABLE IF NOT EXISTS qc_yearbook_finished_product_rows (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  year_id BIGINT UNSIGNED NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  inspection_num INT UNSIGNED NOT NULL COMMENT '年度内检验序号，创建后不变',
+  inspection_id VARCHAR(32) NOT NULL COMMENT '检验ID：统计年度-序号',
+  product_model VARCHAR(128) NOT NULL DEFAULT '',
+  product_batch_no VARCHAR(64) NOT NULL DEFAULT '',
+  barrel_count DECIMAL(14, 4) NULL,
+  initial_batch_kg DECIMAL(14, 4) NULL,
+  inspection_batch_kg DECIMAL(14, 4) NULL,
+  appearance VARCHAR(64) NULL,
+  color_fe_co VARCHAR(32) NULL,
+  solid_content_pct DECIMAL(10, 4) NULL,
+  viscosity_s_25c DECIMAL(12, 4) NULL,
+  acid_value_mgkoh_g DECIMAL(12, 4) NULL,
+  tolerance_g_ml DECIMAL(14, 6) NULL,
+  nco_content_pct DECIMAL(10, 4) NULL,
+  inspection_conclusion VARCHAR(64) NULL,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_qc_yearbook_fp_inspection_id (inspection_id),
+  UNIQUE KEY uk_qc_yearbook_fp_year_inspnum (year_id, inspection_num),
+  KEY idx_qc_yearbook_fp_year (year_id),
+  KEY idx_qc_yearbook_fp_year_sort (year_id, sort_order, id),
+  KEY idx_qc_yearbook_fp_model_batch (year_id, product_model(32), product_batch_no(16)),
+  CONSTRAINT fk_qc_yearbook_fp_year FOREIGN KEY (year_id) REFERENCES qc_yearbook_years(id) ON DELETE CASCADE,
+  CONSTRAINT fk_qc_yearbook_fp_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_qc_yearbook_fp_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
+
+async function ensureQcYearbookFinishedProductInspectionColumns(pool) {
+  const table = 'qc_yearbook_finished_product_rows';
+  const [tables] = await pool.query(
+    "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+    [table]
+  );
+  if (!tables?.length) return;
+
+  if (!(await columnExists(pool, table, 'inspection_num'))) {
+    await pool.query(
+      `ALTER TABLE ${table}
+        ADD COLUMN inspection_num INT UNSIGNED NULL DEFAULT NULL COMMENT '年度内检验序号' AFTER sort_order,
+        ADD COLUMN inspection_id VARCHAR(32) NULL DEFAULT NULL COMMENT '检验ID：统计年度-序号' AFTER inspection_num`
+    );
+  } else if (!(await columnExists(pool, table, 'inspection_id'))) {
+    await pool.query(
+      `ALTER TABLE ${table}
+        ADD COLUMN inspection_id VARCHAR(32) NULL DEFAULT NULL COMMENT '检验ID：统计年度-序号' AFTER inspection_num`
+    );
+  }
+
+  await pool.query(
+    `UPDATE qc_yearbook_finished_product_rows fp
+     INNER JOIN qc_yearbook_years y ON y.id = fp.year_id
+     INNER JOIN (
+       SELECT id, ROW_NUMBER() OVER (PARTITION BY year_id ORDER BY sort_order ASC, id ASC) AS rn
+       FROM qc_yearbook_finished_product_rows
+     ) t ON t.id = fp.id
+     SET fp.inspection_num = t.rn,
+         fp.inspection_id = CONCAT(y.year, '-', LPAD(t.rn, 5, '0'))
+     WHERE fp.inspection_num IS NULL OR fp.inspection_id IS NULL OR fp.inspection_id = ''`
+  );
+
+  try {
+    await pool.query(
+      `ALTER TABLE ${table}
+        MODIFY COLUMN inspection_num INT UNSIGNED NOT NULL,
+        MODIFY COLUMN inspection_id VARCHAR(32) NOT NULL`
+    );
+  } catch (_e) {
+    /* 可能仍有 NULL（空表等），忽略直至数据补齐 */
+  }
+
+  if (!(await indexExists(pool, table, 'uk_qc_yearbook_fp_inspection_id'))) {
+    try {
+      await pool.query(`ALTER TABLE ${table} ADD UNIQUE KEY uk_qc_yearbook_fp_inspection_id (inspection_id)`);
+    } catch (_e) {
+      /* 重复执行或冲突时跳过 */
+    }
+  }
+  if (!(await indexExists(pool, table, 'uk_qc_yearbook_fp_year_inspnum'))) {
+    try {
+      await pool.query(`ALTER TABLE ${table} ADD UNIQUE KEY uk_qc_yearbook_fp_year_inspnum (year_id, inspection_num)`);
+    } catch (_e) {
+      /* 重复执行或冲突时跳过 */
+    }
+  }
+}
+
+export async function ensureQcYearbookDataTables() {
+  const pool = getPool();
+  await pool.query(DDL_QC_YEARBOOK_YEARS);
+  await pool.query(DDL_QC_YEARBOOK_RECORDS);
+  await pool.query(DDL_QC_YEARBOOK_FINISHED_PRODUCT_ROWS);
+  await pool.query("INSERT IGNORE INTO qc_yearbook_years (year, remark) VALUES (2026, '系统预置')");
+  await ensureQcYearbookFinishedProductInspectionColumns(pool);
 }

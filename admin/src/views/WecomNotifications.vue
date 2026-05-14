@@ -16,10 +16,11 @@
     <el-alert type="success" :closable="false" class="mb-3" title="财务通过 → 仓库（销售订单）">
       模板 <code>sales_order_approved_warehouse</code> 须为<strong>文本卡片</strong>：财务通过时<strong>按订单逐条</strong>推送企业微信，正文含厂家、标签型号、仓库型号、规格、批号、数量、备注；占位符除
       <code>detail</code>、<code>orderNo</code>、<code>count</code>、<code>fromUser</code> 外，「链接地址」须使用
-      <span v-pre><code>{{shipConfirmUrl}}</code></span>（打开确认页，避免点卡片正文即发货）；系统另传 <code>shipUrl</code> 供确认页内按钮真正执行发货。
+      <span v-pre><code>{{shipConfirmUrl}}</code></span>（打开确认页，避免点卡片正文即发货）；<code>shipUrl</code> 与同变量等价（兼容旧模板），确认页内「完成发货」通过表单 <strong>POST</strong>
+      <code>/api/public/wecom-order-ship</code> 执行发货（GET 已停用）。
       服务器需配置与外网一致的 <code>PUBLIC_BASE_URL</code> 及 <code>JWT_SECRET</code>；在确认页点击「完成发货」才把该单更新为「已发货」（无需登录）。升级请执行迁移
       <code>025_wecom_warehouse_ship_textcard.sql</code>、<code>029_wecom_warehouse_ship_confirm_page.sql</code>。
-      <strong>若点击后提示「无法打开页面」：</strong>多为企业微信拦截非 HTTPS 或未加入可信域名——请用 HTTPS 域名（反代到本服务）、在企业微信后台把该域名配进应用可信网页域名；可先在同一网络用手机系统浏览器访问
+      <strong>若点击后提示「无法打开页面」：</strong>多为企业微信拦截非 HTTPS 或未加入可信域名——请用 HTTPS 域名（反代到本服务）、在企业微信后台把<strong>主机名</strong>配进应用可信网页域名（勿填协议头；不支持 IP、短链）；可先在同一网络用手机系统浏览器访问
       「与 .env 中 <code>PUBLIC_BASE_URL</code> 相同根地址」<code>/api/public/wecom-order-ship-probe</code>（应返回纯文本
       <code>wecom-ship-probe-ok</code>）确认手机能否到达本服务。服务端默认监听 <code>0.0.0.0</code>（可用 <code>LISTEN_HOST</code> 覆盖）。
     </el-alert>
@@ -48,7 +49,15 @@
             />
           </el-form-item>
           <el-form-item label="回调 Token">
-            <el-input v-model="cfgForm.receiveToken" clearable placeholder="与自建应用「设置 API 接收」中的 Token 一致" />
+            <el-input
+              v-model="cfgForm.receiveToken"
+              clearable
+              placeholder="与自建应用「设置 API 接收」一致；已保存则留空不改，填写新值则更新"
+            />
+            <div class="field-tip">
+              <span v-if="receiveTokenConfigured" class="text-ok">当前已保存回调 Token（接口不回显原文）</span>
+              <el-button link type="danger" size="small" @click="markClearReceiveToken">清除已存 Token</el-button>
+            </div>
           </el-form-item>
           <el-form-item label="EncodingAESKey">
             <el-input
@@ -154,6 +163,99 @@
           </el-card>
         </div>
       </el-tab-pane>
+      <el-tab-pane label="发送记录" name="jobs">
+        <p class="tab-lead">
+          系统自动推送（订单/合同）经队列异步发往企业微信；此处可查看状态、失败原因，并对失败/死信任务手动重试。
+          环境变量 <code>WECOM_NOTIFY_WORKER_DISABLED=true</code> 可关闭本机 worker（需另行部署消费进程时再用）。
+        </p>
+        <div class="toolbar jobs-toolbar">
+          <el-select v-model="jobFilterStatus" placeholder="状态" clearable style="width: 140px" @change="jobsPage = 1; loadJobs()">
+            <el-option label="全部状态" value="" />
+            <el-option label="待发送" value="pending" />
+            <el-option label="发送中" value="sending" />
+            <el-option label="已发送" value="sent" />
+            <el-option label="失败" value="failed" />
+            <el-option label="死信" value="dead" />
+          </el-select>
+          <el-input
+            v-model="jobFilterTemplateCode"
+            clearable
+            placeholder="模板代码"
+            style="width: 200px"
+            @keyup.enter="jobsPage = 1; loadJobs()"
+          />
+          <el-input
+            v-model="jobFilterBizType"
+            clearable
+            placeholder="业务类型"
+            style="width: 140px"
+            @keyup.enter="jobsPage = 1; loadJobs()"
+          />
+          <el-input
+            v-model="jobFilterBizId"
+            clearable
+            placeholder="业务ID"
+            style="width: 120px"
+            @keyup.enter="jobsPage = 1; loadJobs()"
+          />
+          <el-button type="primary" :loading="jobsLoading" @click="jobsPage = 1; loadJobs()">查询</el-button>
+        </div>
+        <el-table :data="jobs" border stripe v-loading="jobsLoading">
+          <el-table-column prop="id" label="ID" width="72" />
+          <el-table-column prop="bizType" label="业务类型" width="120">
+            <template #default="{ row }">{{ row.bizType || '—' }}</template>
+          </el-table-column>
+          <el-table-column prop="bizId" label="业务ID" width="88">
+            <template #default="{ row }">{{ row.bizId != null ? row.bizId : '—' }}</template>
+          </el-table-column>
+          <el-table-column prop="templateCode" label="模板代码" min-width="160">
+            <template #default="{ row }"><code>{{ row.templateCode }}</code></template>
+          </el-table-column>
+          <el-table-column label="接收人" min-width="140">
+            <template #default="{ row }">
+              <span class="mono" :title="row.toUserPreview">{{ row.toUserPreview }}</span>
+              <span v-if="row.toUserRecipientCount > 1" class="text-muted">（{{ row.toUserRecipientCount }}人）</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="status" label="状态" width="88" />
+          <el-table-column label="重试" width="72">
+            <template #default="{ row }">{{ row.retryCount }}/{{ row.maxRetries }}</template>
+          </el-table-column>
+          <el-table-column prop="lastError" label="最后错误" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="createdAt" label="创建时间" width="168">
+            <template #default="{ row }">{{ formatJobTime(row.createdAt) }}</template>
+          </el-table-column>
+          <el-table-column prop="sentAt" label="发送时间" width="168">
+            <template #default="{ row }">{{ formatJobTime(row.sentAt) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="88" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                v-if="row.status === 'failed' || row.status === 'dead'"
+                link
+                type="primary"
+                size="small"
+                :loading="row._retrying"
+                @click="retryJob(row)"
+              >
+                重试
+              </el-button>
+              <span v-else class="text-muted">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="jobs-pagination">
+          <el-pagination
+            v-model:current-page="jobsPage"
+            v-model:page-size="jobsPageSize"
+            :total="jobsTotal"
+            :page-sizes="[10, 20, 50]"
+            layout="total, sizes, prev, pager, next"
+            @current-change="loadJobs"
+            @size-change="jobsPage = 1; loadJobs()"
+          />
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="recipientDlg" :title="recipientEditId ? '编辑通知对象' : '新增通知对象'" width="520px" destroy-on-close>
@@ -188,13 +290,18 @@
       destroy-on-close
       @closed="resetTemplateForm"
     >
+      <el-alert v-if="systemTemplateSchemaHint" type="warning" :closable="false" show-icon class="mb-2">
+        <template #title>系统模板校验</template>
+        {{ systemTemplateSchemaHint }}
+      </el-alert>
       <el-alert type="info" :closable="false" show-icon class="template-intro">
         <template #title>怎么写占位符</template>
         <div class="template-intro-body">
           在内容里输入 <code v-pre>{{detail}}</code> 表示「这里以后换成真实内容」。发送时用同名变量传入，例如
           <code>detail</code>、<code>orderNo</code>。下面按钮可一键插入，避免手打拼错。
-          若选<strong>文本卡片</strong>，「链接地址」必填且替换变量后不能为空，否则企业微信返回
-          <strong>41010 missing url</strong>。
+          若选<strong>文本卡片</strong>，「链接地址」替换后必须是带 <code>https://</code> 的完整链接。
+          填 <code v-pre>{{reviewUrl}}</code> 时，真实发送由服务端填入；在<strong>测试发送</strong>里须在 JSON 中自行传入
+          <code>reviewUrl</code>，否则会报 <strong>41010 missing url</strong>。
         </div>
       </el-alert>
 
@@ -251,7 +358,7 @@
           </div>
           <div class="field-tip">
             销售系统自动推送已约定：<code>detail</code>（长摘要）、<code>orderNo</code>、<code>contractNo</code>、<code>customerName</code>、<code>reviewUrl</code>（合同待审：移动端审批页 HTTPS 链接，可插入正文或文本卡片 url）、<code>contractReviewStatus</code>（合同审核状态）、<code>reviewComment</code>（审核备注）、<code>count</code>、<code>fromUser</code>；财务通过→仓库的文本卡片另传
-            <span v-pre><code>{{shipConfirmUrl}}</code></span>（卡片应指向的确认页链接）与 <code>shipUrl</code>（确认页内执行发货的链接）。自写接口可自行传其它变量名。
+            <span v-pre><code>{{shipConfirmUrl}}</code></span>（卡片应指向的确认页链接）；<code>shipUrl</code> 与前者同源兼容占位。执行发货仅为确认页内 POST <code>/api/public/wecom-order-ship</code>。自写接口可自行传其它变量名。
           </div>
         </el-form-item>
 
@@ -295,7 +402,7 @@
             </div>
             <el-input
               v-model="templateForm.urlTemplate"
-              placeholder="必填。https://你的域名/路径/{{orderNo}}（须 HTTPS 且在应用「可信域名」内，否则也会报错）"
+              placeholder="必填。合同审批模板请填 {{reviewUrl}}（服务器须配置 PUBLIC_BASE_URL + JWT_SECRET）。仓库发货等填对应链接变量。"
             />
           </el-form-item>
           <el-form-item label="按钮文字">
@@ -396,7 +503,9 @@ import {
   updateWecomTemplate,
   deleteWecomTemplate,
   getWecomTemplateSnippet,
-  sendWecomNotification
+  sendWecomNotification,
+  listWecomNotifyJobs,
+  retryWecomNotifyJob
 } from '../api';
 
 function parseUserIdsText(text) {
@@ -454,9 +563,13 @@ export default {
       activeTab: 'cfg',
       metaHint: '',
       metaApiBase: '',
+      templateVariableSchemas: {},
+      secretEncryptionEnabled: false,
       callbackBaseOverride: '',
       encodingAesKeyConfigured: false,
       clearEncodingAesKeyOnSave: false,
+      receiveTokenConfigured: false,
+      clearReceiveTokenOnSave: false,
       cfgLoaded: false,
       secretConfigured: false,
       cfgSaving: false,
@@ -496,6 +609,15 @@ export default {
       testRecipientId: null,
       testVariablesJson: '{\n  "title": "测试标题",\n  "detail": "测试内容"\n}',
       testSending: false,
+      jobs: [],
+      jobsTotal: 0,
+      jobsPage: 1,
+      jobsPageSize: 20,
+      jobsLoading: false,
+      jobFilterStatus: '',
+      jobFilterTemplateCode: '',
+      jobFilterBizType: '',
+      jobFilterBizId: '',
       templateVariableList: [
         { key: 'detail', label: '长摘要' },
         { key: 'orderNo', label: '订单号' },
@@ -505,9 +627,10 @@ export default {
         { key: 'count', label: '数量' },
         { key: 'fromUser', label: '操作人' },
         { key: 'contractNo', label: '合同编号' },
-        { key: 'reviewUrl', label: '合同审批页链接(企微)' },
+        { key: 'reviewUrl', label: '合同审批页链接(文本卡片 url)' },
+        { key: 'notificationTitle', label: '卡片标题(合同审批)' },
         { key: 'shipConfirmUrl', label: '发货确认页链接' },
-        { key: 'shipUrl', label: '执行发货链接' },
+        { key: 'shipUrl', label: '发货兼容占位(同确认页)' },
         { key: 'title', label: '短标题' }
       ]
     };
@@ -569,7 +692,7 @@ export default {
         count: '1',
         fromUser: '李四',
         shipConfirmUrl: 'https://你的域名/api/public/wecom-order-ship-confirm?t=示例',
-        shipUrl: 'https://你的域名/api/public/wecom-order-ship?t=示例',
+        shipUrl: 'https://你的域名/api/public/wecom-order-ship-confirm?t=示例',
         title: '待审核通知'
       };
       const apply = (s) => {
@@ -583,9 +706,25 @@ export default {
         body: apply(this.templateForm.bodyTemplate),
         url: apply(this.templateForm.urlTemplate)
       };
+    },
+    systemTemplateSchemaHint() {
+      const code = (this.templateForm.code || '').trim();
+      const sch = this.templateVariableSchemas[code];
+      if (!sch) return '';
+      const allowed = (sch.allowed || []).join('、');
+      const rb = (sch.requiredInBody || []).join('、');
+      const ru = (sch.requiredInUrl || []).join('、');
+      let s = `系统模板「${code}」：允许变量 ${allowed}；正文须含 {{${rb}}}`;
+      if (ru && this.templateForm.msgType === 'textcard') {
+        s += `；链接须含 {{${ru}}}`;
+      }
+      return s;
     }
   },
   watch: {
+    activeTab(val) {
+      if (val === 'jobs') this.loadJobs();
+    },
     'templateForm.nameZh'() {
       if (this.templateEditId) return;
       if (this.templateCodeManual) return;
@@ -605,6 +744,10 @@ export default {
         this.metaHint = [meta?.receiveHint, meta?.placeholderHint].filter(Boolean).join('\n');
         this.metaApiBase = meta?.apiBase || '';
         this.templateCodeCatalog = Array.isArray(meta?.templateCodeCatalog) ? meta.templateCodeCatalog : [];
+        this.templateVariableSchemas = meta?.templateVariableSchemas && typeof meta.templateVariableSchemas === 'object'
+          ? meta.templateVariableSchemas
+          : {};
+        this.secretEncryptionEnabled = !!meta?.secretEncryptionEnabled;
       } catch {
         this.metaHint = '';
         this.metaApiBase = '';
@@ -620,7 +763,9 @@ export default {
       this.cfgForm.agentId = c.agentId != null ? Number(c.agentId) : 0;
       this.cfgForm.remark = c.remark || '';
       this.cfgForm.corpSecret = '';
-      this.cfgForm.receiveToken = c.receiveToken || '';
+      this.cfgForm.receiveToken = '';
+      this.receiveTokenConfigured = !!c.receiveTokenConfigured;
+      this.clearReceiveTokenOnSave = false;
       this.cfgForm.encodingAesKeyNew = '';
       this.encodingAesKeyConfigured = !!c.encodingAesKeyConfigured;
       this.clearEncodingAesKeyOnSave = false;
@@ -632,15 +777,24 @@ export default {
       this.cfgForm.encodingAesKeyNew = '';
       ElMessage.info('下次保存将清除 EncodingAESKey');
     },
+    markClearReceiveToken() {
+      this.clearReceiveTokenOnSave = true;
+      this.cfgForm.receiveToken = '';
+      ElMessage.info('下次保存将清除回调 Token');
+    },
     async saveConfig() {
       this.cfgSaving = true;
       try {
         const payload = {
           corpId: this.cfgForm.corpId || '',
           agentId: this.cfgForm.agentId != null ? Number(this.cfgForm.agentId) : 0,
-          remark: this.cfgForm.remark || '',
-          receiveToken: (this.cfgForm.receiveToken || '').trim()
+          remark: this.cfgForm.remark || ''
         };
+        if (this.clearReceiveTokenOnSave) {
+          payload.clearReceiveToken = true;
+        } else if ((this.cfgForm.receiveToken || '').trim()) {
+          payload.receiveToken = (this.cfgForm.receiveToken || '').trim();
+        }
         if (this.clearEncodingAesKeyOnSave) {
           payload.encodingAesKey = '';
         } else if (this.cfgForm.encodingAesKeyNew && String(this.cfgForm.encodingAesKeyNew).trim().length === 43) {
@@ -656,6 +810,7 @@ export default {
         ElMessage.success('已保存');
         this.cfgForm.corpSecret = '';
         this.clearEncodingAesKeyOnSave = false;
+        this.clearReceiveTokenOnSave = false;
         await this.loadConfig();
       } catch (e) {
         ElMessage.error(this.$apiUserMsg(e, '保存失败'));
@@ -825,6 +980,12 @@ export default {
             e?.response?.data?.message ||
               '文本卡片必须填写链接地址（企业微信 41010：missing url）'
           );
+        } else if (
+          err === 'WECOM_TEMPLATE_MISSING_VARIABLE' ||
+          err === 'WECOM_TEMPLATE_UNKNOWN_VARIABLE' ||
+          err === 'WECOM_TEMPLATE_MISSING_URL_VARIABLE'
+        ) {
+          ElMessage.error(e?.response?.data?.message || '模板变量不符合系统要求');
         } else ElMessage.error(this.$apiUserMsg(e, '保存失败'));
       } finally {
         this.templateSaving = false;
@@ -858,7 +1019,61 @@ export default {
     openTestSend(row) {
       this.testRow = row;
       this.testRecipientId = this.recipients[0]?.id ?? null;
+      if (row && row.msgType === 'textcard') {
+        this.testVariablesJson = JSON.stringify(
+          {
+            detail: '【测试】这是一条卡片摘要，真实环境由系统生成较短文案。',
+            notificationTitle: '合同待审核',
+            contractNo: 'TEST-CONTRACT-001',
+            customerName: '测试客户',
+            reviewUrl: 'https://example.com/api/public/wecom-contract-review?t=demo',
+            fromUser: 'test'
+          },
+          null,
+          2
+        );
+      } else {
+        this.testVariablesJson = '{\n  "title": "测试标题",\n  "detail": "测试内容"\n}';
+      }
       this.testDlg = true;
+    },
+    formatJobTime(t) {
+      if (t == null || t === '') return '—';
+      return String(t).replace('T', ' ').slice(0, 23);
+    },
+    async loadJobs() {
+      this.jobsLoading = true;
+      try {
+        const params = { page: this.jobsPage, pageSize: this.jobsPageSize };
+        if (this.jobFilterStatus) params.status = this.jobFilterStatus;
+        const tc = String(this.jobFilterTemplateCode || '').trim();
+        if (tc) params.templateCode = tc;
+        const bt = String(this.jobFilterBizType || '').trim();
+        if (bt) params.bizType = bt;
+        const bid = String(this.jobFilterBizId || '').trim();
+        if (bid) params.bizId = bid;
+        const d = await listWecomNotifyJobs(params);
+        this.jobs = (d.items || []).map((x) => ({ ...x, _retrying: false }));
+        this.jobsTotal = Number(d.total) || 0;
+      } catch (e) {
+        ElMessage.error(this.$apiUserMsg(e, '加载发送记录失败'));
+        this.jobs = [];
+        this.jobsTotal = 0;
+      } finally {
+        this.jobsLoading = false;
+      }
+    },
+    async retryJob(row) {
+      row._retrying = true;
+      try {
+        await retryWecomNotifyJob(row.id);
+        ElMessage.success('已重新入队');
+        await this.loadJobs();
+      } catch (e) {
+        ElMessage.error(this.$apiUserMsg(e, '重试失败'));
+      } finally {
+        row._retrying = false;
+      }
     },
     async submitTestSend() {
       let variables = {};
@@ -915,6 +1130,22 @@ export default {
 }
 .toolbar {
   margin-bottom: 12px;
+}
+.jobs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.jobs-pagination {
+  margin-top: 16px;
+  justify-content: flex-end;
+  display: flex;
+}
+.text-muted {
+  color: #94a3b8;
+  font-size: 12px;
 }
 .tpl-two-cols {
   display: grid;

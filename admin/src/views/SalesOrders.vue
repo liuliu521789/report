@@ -25,6 +25,9 @@
           <el-checkbox v-if="perm('order_management', 'order_status_finance')" v-model="filters.pending_finance_only" @change="load">
             仅待财务审核
           </el-checkbox>
+          <el-checkbox v-if="perm('order_management', 'order_status_qc')" v-model="filters.pending_qc_only" @change="load">
+            仅待质检审核
+          </el-checkbox>
           <el-button type="primary" @click="load" icon=Search>查询</el-button>
           <el-button @click="resetFilters" icon=Refresh>重置</el-button>
         </div>
@@ -87,6 +90,16 @@
           批量审核
         </el-button>
         <el-button
+          v-if="perm('order_management', 'order_status_qc')"
+          type="warning"
+          plain
+          size="small"
+          :disabled="batchQcReviewableList.length === 0"
+          @click="openQcReviewBatch"
+        >
+          批量质检审核
+        </el-button>
+        <el-button
           v-if="batchShipActionVisible"
           type="primary"
           plain
@@ -134,9 +147,10 @@
             </el-button>
           </template>
           <div class="order-list-column-picker">
-            <div class="order-list-column-picker__title">默认隐藏，勾选后在表格中显示</div>
+            <div class="order-list-column-picker__title">部分列默认隐藏；勾选「发货人」可关闭独立列（状态角标仍会尽量带出姓名）</div>
             <el-checkbox v-model="orderListColVisible.orderNo">订单号</el-checkbox>
             <el-checkbox v-model="orderListColVisible.sales">销售</el-checkbox>
+            <el-checkbox v-model="orderListColVisible.shipper">发货人</el-checkbox>
             <el-checkbox v-model="orderListColVisible.uploadedAt">上传日期</el-checkbox>
           </div>
         </el-popover>
@@ -201,6 +215,13 @@
             </div>
           </template>
         </el-table-column>
+        <el-table-column
+          v-if="orderListColVisible.shipper"
+          prop="shipped_by_name"
+          label="发货人"
+          width="92"
+          show-overflow-tooltip
+        />
         <el-table-column
           v-for="col in fieldDefinitions"
           :key="col.field_key"
@@ -384,7 +405,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" align="right" class-name="orders-col-actions">
+        <el-table-column label="操作" width="300" align="right" class-name="orders-col-actions">
           <template #default="{ row }">
             <el-button
               v-if="perm('order_management', 'order_edit')"
@@ -412,6 +433,18 @@
               type="danger"
               size="small"
               @click="rejectSingle(row)"
+            >驳回</el-button>
+            <el-button
+              v-if="perm('order_management', 'order_status_qc') && canQcReview(row)"
+              type="success"
+              size="small"
+              @click="approveSingleQc(row)"
+             icon=Select>审核通过</el-button>
+            <el-button
+              v-if="perm('order_management', 'order_status_qc') && canQcReview(row)"
+              type="danger"
+              size="small"
+              @click="rejectSingleQc(row)"
             >驳回</el-button>
             <el-button
               v-if="canShip(row)"
@@ -548,9 +581,27 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="qcReviewOpen" :title="qcReviewDialogTitle" width="440px">
+      <el-form label-width="80px">
+        <el-form-item label="结果">
+          <el-radio-group v-model="qcReviewForm.result">
+            <el-radio label="approved">审核通过</el-radio>
+            <el-radio label="rejected">驳回</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="意见">
+          <el-input v-model="qcReviewForm.comment" type="textarea" rows="3" placeholder="驳回必填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="qcReviewOpen = false" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="qcReviewLoading" @click="submitQcReview" icon=Check>确定</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="shipOpen" :title="shipDialogTitle" width="440px" @close="resetShipDialog">
       <p v-if="shipBatchList.length > 1" class="ship-batch-hint">
-        已选 {{ shipBatchList.length }} 笔「已审核」订单，将一并标记为已发货；以下说明会写入每笔订单并发站内信通知销售与财务。
+        已选 {{ shipBatchList.length }} 笔「财务与质检均已通过」的订单，将一并标记为已发货；以下说明会写入每笔订单并发站内信通知销售与财务。
       </p>
       <el-input v-model="shipNote" type="textarea" rows="3" placeholder="发货指令 / 备注（可选）" />
       <template #footer>
@@ -559,13 +610,22 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="genOpen" title="生成合同" width="480px" @closed="onGenDialogClosed">
+    <el-dialog v-model="genOpen" title="生成合同" width="520px" @closed="onGenDialogClosed">
       <el-form label-width="100px">
-        <el-form-item label="模板">
+        <el-form-item label="方式">
+          <el-radio-group v-model="genUseBlankTemplate" class="gen-contract-mode">
+            <el-radio :label="false" :disabled="!templates.length">选用已保存模板</el-radio>
+            <el-radio :label="true">从空白模板创建</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="!genUseBlankTemplate" label="模板">
           <el-select v-model="genTemplateId" placeholder="选择模板" class="w-full" filterable>
             <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
           </el-select>
         </el-form-item>
+        <p v-if="genUseBlankTemplate" class="hint gen-contract-blank-hint">
+          使用系统推荐版式，正文均为占位符，生成时按当前客户与订单填入买方全称、地址、联系方式及订单明细；避免选用其他客户模板中写死的名称。
+        </p>
         <div class="hint">
           已选 {{ genOrderIdCount }} 条订单；自列表勾选生成时须为同一客户。
         </div>
@@ -866,6 +926,7 @@ import {
   batchSubmitSalesOrderReview,
   withdrawSalesOrderReview,
   batchFinanceReviewSalesOrder,
+  batchQcReviewSalesOrder,
   shipSalesOrder,
   batchShipSalesOrders,
   completeSalesOrder,
@@ -905,11 +966,17 @@ import {
   printContractPreviewFromHtml,
   escapeHtmlText
 } from '../utils/contractPreviewHtml';
+import { resolveInternalMessageRoute } from '../utils/internalMessageNavigate';
 import { h } from 'vue';
 import { ElButton } from 'element-plus';
 import { zhMessageForApiError } from '../../../shared/apiErrorZh.js';
 import { orderFlowStatusZh } from '../utils/salesStatusDisplay';
 import { useAuthStore } from '../stores/auth';
+import {
+  createDefaultSalesOrderFilters,
+  buildSalesOrderQueryParams,
+  loadSalesOrderList
+} from '../composables/useSalesOrderList';
 
 export default {
   name: 'SalesOrders',
@@ -921,19 +988,11 @@ export default {
       page: 1,
       pageSize: 20,
       selected: [],
-      filters: {
-        customer_name: '',
-        customer_code: '',
-        product_name: '',
-        product_model: '',
-        warehouse_model: '',
-        product_code: '',
-        order_no: '',
-        status: '',
-        pending_finance_only: false
-      },
+      filters: createDefaultSalesOrderFilters(),
       dateRange: [],
       sort: 'created_at_desc',
+      /** 路由 query focus_order_id：站内信跳转定位订单 */
+      focusOrderId: null,
       fieldDefinitions: [],
       formOpen: false,
       saving: false,
@@ -976,6 +1035,10 @@ export default {
       financeLoading: false,
       financeRows: [],
       financeForm: { result: 'approved', comment: '' },
+      qcReviewOpen: false,
+      qcReviewLoading: false,
+      qcReviewRows: [],
+      qcReviewForm: { result: 'approved', comment: '' },
       shipOpen: false,
       shipRow: null,
       shipBatchList: [],
@@ -985,6 +1048,8 @@ export default {
       /** 打开「生成合同」对话框时锁定的订单 id；关闭对话框时清空 */
       genOrderIds: [],
       genTemplateId: null,
+      /** true：推荐版式+占位符，不套用已保存模板 */
+      genUseBlankTemplate: false,
       genLoading: false,
       templates: [],
       bindContractOpen: false,
@@ -1025,15 +1090,17 @@ export default {
       qcBindLoading: false,
       qcBindSearch: '',
       qcBindSaving: false,
-      /** 列表默认隐藏：订单号、销售、上传日期；导出仍走服务端全列 */
+      /** 列表默认隐藏：订单号、销售、上传日期；发货人默认显示（企业微信 OAuth / 后台发货会写入） */
       orderListColVisible: {
         orderNo: false,
         sales: false,
+        shipper: true,
         uploadedAt: false
       },
       statusOptions: [
         { value: 'pending_review', label: '待审核' },
-        { value: 'approved', label: '已审核' },
+        { value: 'pending_qc', label: '待质检审核' },
+        { value: 'approved', label: '待发货' },
         { value: 'rejected', label: '驳回' },
         { value: 'shipped', label: '已发货' },
         { value: 'completed', label: '已完成' },
@@ -1056,6 +1123,7 @@ export default {
       return (
         perm('order_management', 'order_submit') ||
         perm('order_management', 'order_status_finance') ||
+        perm('order_management', 'order_status_qc') ||
         perm('contract_management', 'contract_submit') ||
         perm('contract_management', 'contract_review')
       );
@@ -1066,6 +1134,7 @@ export default {
         perm('contract_management', 'contract_generate') ||
         perm('order_management', 'order_submit') ||
         perm('order_management', 'order_status_finance') ||
+        perm('order_management', 'order_status_qc') ||
         perm('order_management', 'order_delete') ||
         perm('order_management', 'order_ship') ||
         perm('order_management', 'order_status_warehouse')
@@ -1097,6 +1166,9 @@ export default {
     batchFinanceReviewableList() {
       return this.selected.filter((r) => this.canFinanceReview(r));
     },
+    batchQcReviewableList() {
+      return this.selected.filter((r) => this.canQcReview(r));
+    },
     batchDeletableList() {
       return this.selected.filter((r) => this.canDelete(r));
     },
@@ -1127,6 +1199,20 @@ export default {
         align: 'center',
         cellRenderer: ({ rowData }) => h(SalesStatusPill, { kind: 'order', orderRow: rowData })
       });
+      if (this.orderListColVisible.shipper) {
+        cols.push({
+          key: 'shipper',
+          dataKey: 'shipped_by_name',
+          title: '发货人',
+          width: 92,
+          cellRenderer: ({ rowData }) =>
+            h(
+              'span',
+              { class: 'v2-cell-txt', title: rowData.shipped_by_name || '' },
+              rowData.shipped_by_name || '—'
+            )
+        });
+      }
       for (const col of this.fieldDefinitions) {
         const key = col.field_key;
         cols.push({
@@ -1164,7 +1250,7 @@ export default {
         key: 'actions',
         dataKey: 'id',
         title: '操作',
-        width: 260,
+        width: 340,
         align: 'right',
         cellRenderer: ({ rowData }) => {
           const chunks = [];
@@ -1226,6 +1312,34 @@ export default {
               )
             );
           }
+          if (perm('order_management', 'order_status_qc')) {
+            chunks.push(
+              h(
+                ElButton,
+                {
+                  size: 'small',
+                  type: 'success',
+                  plain: true,
+                  disabled: !this.canQcReview(rowData),
+                  onClick: () => this.approveSingleQc(rowData)
+                },
+                () => '审核通过'
+              )
+            );
+            chunks.push(
+              h(
+                ElButton,
+                {
+                  size: 'small',
+                  type: 'danger',
+                  plain: true,
+                  disabled: !this.canQcReview(rowData),
+                  onClick: () => this.rejectSingleQc(rowData)
+                },
+                () => '驳回'
+              )
+            );
+          }
           if (this.canShip(rowData)) {
             chunks.push(
               h(
@@ -1256,6 +1370,10 @@ export default {
       const n = this.financeRows?.length || 0;
       return n > 1 ? `财务审核（${n}笔）` : '财务审核';
     },
+    qcReviewDialogTitle() {
+      const n = this.qcReviewRows?.length || 0;
+      return n > 1 ? `质检审核（${n}笔）` : '质检审核';
+    },
     shipDialogTitle() {
       if (this.shipBatchList.length > 1) return `批量发货（${this.shipBatchList.length}笔）`;
       return '发货';
@@ -1263,15 +1381,19 @@ export default {
     /** 与后端列表一致：待财务队列 / 纯财务账号按「提交审核」时间筛，其余按上传时间 */
     orderDateRangeUsesSubmittedAt() {
       if (this.filters.pending_finance_only) return true;
-      return (
-        perm('order_management', 'order_status_finance') &&
-        !perm('order_management', 'order_input')
-      );
+      return perm('order_management', 'order_status_finance') && !perm('order_management', 'order_input');
+    },
+    /** 与后端纯品管列表一致：日期按 finance_reviewed_at */
+    orderDateRangeUsesFinancePassedAt() {
+      if (this.filters.pending_qc_only) return true;
+      return perm('order_management', 'order_status_qc') && !perm('order_management', 'order_input');
     },
     orderDateRangeStartPh() {
+      if (this.orderDateRangeUsesFinancePassedAt) return '财务通过开始';
       return this.orderDateRangeUsesSubmittedAt ? '提交审核开始' : '上传开始';
     },
     orderDateRangeEndPh() {
+      if (this.orderDateRangeUsesFinancePassedAt) return '财务通过结束';
       return this.orderDateRangeUsesSubmittedAt ? '提交审核结束' : '上传结束';
     },
     filteredMessages() {
@@ -1285,10 +1407,15 @@ export default {
     '$route.query.view'() {
       this.applyQuickViewFromRoute();
       this.load();
+    },
+    '$route.query.focus_order_id'() {
+      this.applyFocusOrderFromRoute();
+      this.load();
     }
   },
   mounted() {
     this.applyQuickViewFromRoute();
+    this.applyFocusOrderFromRoute();
     if (!this.isBlockedByPasswordPolicy()) this.load();
     // 移除纯财务用户默认选中「仅待财务审核」的逻辑
     if (!perm('order_management', 'order_query') && perm('order_management', 'order_input')) {
@@ -1598,12 +1725,15 @@ export default {
       try {
         const d = await listContractTemplates();
         this.templates = d.items || [];
-        if (!this.templates.length) {
-          this.$message.warning('请先在合同管理 → 合同模板中新建模板');
-          return;
-        }
         this.genOrderIds = orderIds.slice();
-        this.genTemplateId = this.templates[0]?.id;
+        if (this.templates.length) {
+          this.genTemplateId = this.templates[0]?.id;
+          this.genUseBlankTemplate = false;
+        } else {
+          this.genTemplateId = null;
+          this.genUseBlankTemplate = true;
+          this.$message.info('暂无已保存模板，将使用「从空白模板创建」推荐版式');
+        }
         this.genOpen = true;
       } catch (e) {
         this.$message.error('加载模板失败');
@@ -1611,6 +1741,7 @@ export default {
     },
     onGenDialogClosed() {
       this.genOrderIds = [];
+      this.genUseBlankTemplate = false;
     },
     isFinanceRejectInboxMessage(m) {
       if (!m) return false;
@@ -1651,6 +1782,9 @@ export default {
     canFinanceReview(row) {
       return row.status === 'pending_review' && row.submitted_for_review_at;
     },
+    canQcReview(row) {
+      return row.status === 'pending_qc';
+    },
     /** 与 POST /orders/:id/ship 一致：order_ship 或（兼容旧配置）order_status_warehouse */
     canShip(row) {
       if (row.status !== 'approved') return false;
@@ -1688,37 +1822,17 @@ export default {
       return false;
     },
     queryParams() {
-      const hasDateRange = Array.isArray(this.dateRange) && this.dateRange.length === 2;
-      const [df, dt] = hasDateRange ? this.dateRange : [];
-      return {
-        customer_name: this.filters.customer_name || undefined,
-        customer_code: this.filters.customer_code || undefined,
-        product_name: this.filters.product_name || undefined,
-        product_model: this.filters.product_model || undefined,
-        warehouse_model: this.filters.warehouse_model || undefined,
-        product_code: this.filters.product_code || undefined,
-        order_no: this.filters.order_no || undefined,
-        status: this.filters.status || undefined,
-        date_from: df || undefined,
-        date_to: dt || undefined,
+      return buildSalesOrderQueryParams({
+        filters: this.filters,
+        dateRange: this.dateRange,
         page: this.page,
-        page_size: this.pageSize,
+        pageSize: this.pageSize,
         sort: this.sort,
-        pending_finance_only: this.filters.pending_finance_only ? '1' : undefined
-      };
+        focusOrderId: this.focusOrderId
+      });
     },
     resetFilters() {
-      this.filters = {
-        customer_name: '',
-        customer_code: '',
-        product_name: '',
-        product_model: '',
-        warehouse_model: '',
-        product_code: '',
-        order_no: '',
-        status: '',
-        pending_finance_only: false
-      };
+      this.filters = createDefaultSalesOrderFilters();
       this.dateRange = null;
       this.page = 1;
       this.load();
@@ -1729,12 +1843,19 @@ export default {
         if (view === 'sales') {
           this.filters.status = '';
           this.filters.pending_finance_only = false;
+          this.filters.pending_qc_only = false;
         } else if (view === 'finance') {
           this.filters.status = '';
           this.filters.pending_finance_only = true;
+          this.filters.pending_qc_only = false;
         } else if (view === 'warehouse') {
           this.filters.status = 'approved';
           this.filters.pending_finance_only = false;
+          this.filters.pending_qc_only = false;
+        } else if (view === 'qc') {
+          this.filters.status = '';
+          this.filters.pending_finance_only = false;
+          this.filters.pending_qc_only = true;
         }
       } else {
         // 默认视图：状态下拉框不默认选中
@@ -1744,6 +1865,28 @@ export default {
       if (cc) {
         this.filters.customer_code = cc;
       }
+    },
+    applyFocusOrderFromRoute() {
+      const foc = this.$route?.query?.focus_order_id;
+      if (foc != null && String(foc).trim() !== '') {
+        const n = Number(foc);
+        this.focusOrderId = Number.isFinite(n) && n > 0 ? n : null;
+      } else {
+        this.focusOrderId = null;
+      }
+    },
+    async maybeScrollToFocusOrder() {
+      const id = this.focusOrderId;
+      if (!id || this.ordersVirtualTable) return;
+      await this.$nextTick();
+      const tb = this.$refs.ordersTable;
+      if (!tb) return;
+      const row = (this.items || []).find((r) => Number(r.id) === Number(id));
+      if (!row) return;
+      tb.setCurrentRow(row);
+      await this.$nextTick();
+      const tr = tb.$el?.querySelector?.('.el-table__body tr.current-row');
+      tr?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     },
     onOrdersSelectionChange(rows) {
       if (this.ordersTableSelectionSync) return;
@@ -1757,7 +1900,11 @@ export default {
       }
       const silent = options.silent === true;
       try {
-        const d = await listSalesOrders(this.queryParams(), { silent });
+        const d = await loadSalesOrderList({
+          listApi: listSalesOrders,
+          params: this.queryParams(),
+          silent
+        });
         this.items = d.items || [];
         this.total = d.total || 0;
         if (d.field_definitions?.length) this.fieldDefinitions = d.field_definitions;
@@ -1788,10 +1935,14 @@ export default {
       } finally {
         await this.$nextTick();
         this.ordersTableSelectionSync = false;
+        await this.maybeScrollToFocusOrder();
       }
     },
-    canEditOrderQc() {
-      return perm('order_management', 'order_edit');
+    canEditOrderQc(row) {
+      return (
+        (perm('order_management', 'order_edit') && this.canEdit(row)) ||
+        (perm('order_management', 'order_status_qc') && row && row.status === 'pending_qc')
+      );
     },
     canRemoveQc(row) {
       return this.canEditOrderQc(row) && (row.qc_bound_manual || row.qc_report_label === '绑定已失效');
@@ -1899,7 +2050,7 @@ export default {
         return;
       }
       if (row.status === 'approved') {
-        this.$message.warning('该订单已审核通过，不能编辑');
+        this.$message.warning('该订单待发货，不能编辑');
         return;
       }
       if (row.status === 'shipped') {
@@ -2123,6 +2274,7 @@ export default {
       if (perm('contract_management', 'contract_generate')) return true;
       if (perm('order_management', 'order_submit') && this.canSubmit(row)) return true;
       if (perm('order_management', 'order_status_finance') && this.canFinanceReview(row)) return true;
+      if (perm('order_management', 'order_status_qc') && this.canQcReview(row)) return true;
       if (perm('order_management', 'order_delete') && this.canDelete(row)) return true;
       if (this.canShip(row)) return true;
       return false;
@@ -2266,6 +2418,103 @@ export default {
         this.financeLoading = false;
       }
     },
+    openQcReviewBatch() {
+      const rows = this.batchQcReviewableList;
+      if (!rows.length) return;
+      this.qcReviewRows = [...rows];
+      this.qcReviewForm = { result: 'approved', comment: '' };
+      this.qcReviewOpen = true;
+    },
+    async submitQcReview() {
+      if (this.qcReviewForm.result === 'rejected' && !this.qcReviewForm.comment.trim()) {
+        this.$message.warning('驳回请填写意见');
+        return;
+      }
+      this.qcReviewLoading = true;
+      try {
+        const r = await batchQcReviewSalesOrder({
+          ids: this.qcReviewRows.map((x) => x.id),
+          result: this.qcReviewForm.result,
+          comment: this.qcReviewForm.comment
+        });
+        if (r.failed?.length) {
+          this.$message.warning(`已处理 ${r.ok} 笔，未处理 ${r.failed.length} 笔`);
+        } else {
+          this.$message.success(`已处理 ${r.ok} 笔`);
+        }
+        this.qcReviewOpen = false;
+        this.load();
+        this.refreshMessages();
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '操作失败'));
+      } finally {
+        this.qcReviewLoading = false;
+      }
+    },
+    async approveSingleQc(row) {
+      try {
+        await this.$confirm(`确认审核通过订单 ${row.order_no}？通过后仓库可发货。`, '审核通过', { type: 'warning' });
+      } catch {
+        return;
+      }
+      this.qcReviewLoading = true;
+      try {
+        const r = await batchQcReviewSalesOrder({
+          ids: [row.id],
+          result: 'approved',
+          comment: ''
+        });
+        if (r.failed?.length) {
+          this.$message.warning('部分订单未能处理，请刷新后重试');
+        } else {
+          this.$message.success('订单已进入待发货');
+        }
+        this.load();
+        this.refreshMessages();
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '操作失败'));
+      } finally {
+        this.qcReviewLoading = false;
+      }
+    },
+    async rejectSingleQc(row) {
+      let comment = '';
+      try {
+        const { value } = await this.$prompt(`请输入驳回订单 ${row.order_no} 的原因`, '驳回', {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          inputType: 'textarea',
+          inputPlaceholder: '驳回原因必填',
+          inputValidator: (v) => {
+            if (!v || !String(v).trim()) return '驳回原因必填';
+            return true;
+          }
+        });
+        comment = String(value || '').trim();
+      } catch {
+        return;
+      }
+      if (!comment) return;
+      this.qcReviewLoading = true;
+      try {
+        const r = await batchQcReviewSalesOrder({
+          ids: [row.id],
+          result: 'rejected',
+          comment
+        });
+        if (r.failed?.length) {
+          this.$message.warning('部分订单未能处理，请刷新后重试');
+        } else {
+          this.$message.success('已驳回 1 笔订单');
+        }
+        this.load();
+        this.refreshMessages();
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '操作失败'));
+      } finally {
+        this.qcReviewLoading = false;
+      }
+    },
     openShip(row) {
       this.shipBatchList = [];
       this.shipRow = row;
@@ -2287,7 +2536,7 @@ export default {
     },
     async approveSingle(row) {
       try {
-        await this.$confirm(`确认通过订单 ${row.order_no} 审核？`, '通过审核', { type: 'warning' });
+        await this.$confirm(`确认财务通过订单 ${row.order_no}？通过后进入待质检审核。`, '财务通过', { type: 'warning' });
       } catch {
         return;
       }
@@ -2301,7 +2550,7 @@ export default {
         if (r.failed?.length) {
           this.$message.warning('部分订单未能处理，请刷新后重试');
         } else {
-          this.$message.success('已通过 1 笔订单');
+          this.$message.success('财务已通过，订单已进入待质检审核');
         }
         this.load();
         this.refreshMessages();
@@ -2544,18 +2793,20 @@ export default {
       await this.prepareContractGenDialog(this.selected.map((r) => r.id));
     },
     async runGenerate() {
-      if (!this.genTemplateId) {
-        this.$message.warning('请选择模板');
+      if (!this.genUseBlankTemplate && !this.genTemplateId) {
+        this.$message.warning('请选择模板，或改用「从空白模板创建」');
         return;
       }
       this.genLoading = true;
       try {
         const orderIds =
           this.genOrderIds.length > 0 ? this.genOrderIds : this.selected.map((x) => x.id);
-        const r = await generateSalesContract({
-          templateId: this.genTemplateId,
-          orderIds
-        });
+        const payload = {
+          orderIds,
+          fromBlank: this.genUseBlankTemplate === true
+        };
+        if (!this.genUseBlankTemplate) payload.templateId = this.genTemplateId;
+        const r = await generateSalesContract(payload);
         this.$message.success(`合同已生成 ${r.contract_no}`);
         this.genOpen = false;
         if (r.id != null) {
@@ -2622,7 +2873,17 @@ export default {
           this.refreshMessages();
         } catch {
           /* ignore */
+          return;
         }
+      }
+      const target = resolveInternalMessageRoute(m);
+      if (!target) return;
+      this.messagesOpen = false;
+      try {
+        await this.$router.push(target);
+      } catch (e) {
+        if (e && e.name === 'NavigationDuplicated') return;
+        throw e;
       }
     },
     async clearMessageHistory() {

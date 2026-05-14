@@ -1,15 +1,26 @@
-import { fetchWecomAccessToken, applyWecomTemplate, wecomSendMessage } from './wecomApi.js';
+import {
+  fetchWecomAccessToken,
+  applyWecomTemplate,
+  normalizeWecomPlaceholders,
+  wecomSendMessage
+} from './wecomApi.js';
 import { signWecomContractReviewToken } from './wecomContractReviewToken.js';
+import { buildContractReviewerNotifyMessages } from './salesOrderNotifyBody.js';
 import {
   loadOrderFieldDefinitions,
   attachCustomerNamesToOrders,
   formatWarehouseWecomOrderDetail
 } from './salesOrderFields.js';
 import { signWecomShipToken } from './wecomShipToken.js';
+import { signWecomFinanceReviewToken } from './wecomFinanceReviewToken.js';
+import { enqueueWecomNotify } from './wecomNotifyOutbox.js';
+import { decryptSecret } from './secretCrypto.js';
 
 export const WECOM_TEMPLATE_SALES_ORDER_SUBMIT_FINANCE = 'sales_order_submit_finance';
 export const WECOM_TEMPLATE_SALES_ORDER_WITHDRAW_FINANCE = 'sales_order_withdraw_finance';
 export const WECOM_TEMPLATE_SALES_ORDER_APPROVED_WAREHOUSE = 'sales_order_approved_warehouse';
+/** 财务通过后待品管质检：收件人为品管类别；模板未配置时静默跳过 */
+export const WECOM_TEMPLATE_SALES_ORDER_PENDING_QC = 'sales_order_pending_qc';
 export const WECOM_TEMPLATE_SALES_ORDER_REJECTED_SALES = 'sales_order_rejected_sales';
 
 // 合同相关模板编码（需在「企业微信通知模板」配置中创建）
@@ -18,23 +29,28 @@ export const WECOM_TEMPLATE_CONTRACT_REVIEW_RESULT = 'sales_contract_review_resu
 export const WECOM_TEMPLATE_CODE_CATALOG = [
   {
     code: WECOM_TEMPLATE_SALES_ORDER_SUBMIT_FINANCE,
-    meaning: '销售订单提交财务审核后通知财务',
+    meaning: '销售订单提交财务审核后通知财务（文本卡片链接可用 {{financeReviewUrl}}）',
     usedBy: ['销售订单提交审核', '销售订单批量提交审核']
   },
   {
     code: WECOM_TEMPLATE_SALES_ORDER_WITHDRAW_FINANCE,
-    meaning: '销售订单撤回审核后通知财务',
+    meaning: '销售订单撤回审核后通知财务（文本卡片链接可用 {{financeReviewUrl}}）',
     usedBy: ['销售订单撤回审核']
   },
   {
     code: WECOM_TEMPLATE_SALES_ORDER_APPROVED_WAREHOUSE,
-    meaning: '财务审核通过后通知仓库发货（文本卡片）',
-    usedBy: ['销售订单财务审核通过']
+    meaning: '品管审核通过后通知仓库发货（文本卡片）',
+    usedBy: ['销售订单品管审核通过']
+  },
+  {
+    code: WECOM_TEMPLATE_SALES_ORDER_PENDING_QC,
+    meaning: '财务通过后通知品管质检审核（文本卡片；链接可用 {{financeReviewUrl}} 或固定 https 地址）',
+    usedBy: ['销售订单财务审核通过（待品管）']
   },
   {
     code: WECOM_TEMPLATE_SALES_ORDER_REJECTED_SALES,
-    meaning: '财务驳回后通知订单创建销售',
-    usedBy: ['销售订单财务审核驳回', '销售订单财务批量驳回']
+    meaning: '财务或品管驳回后通知订单创建销售',
+    usedBy: ['销售订单财务审核驳回', '销售订单财务批量驳回', '销售订单品管驳回']
   },
   {
     code: WECOM_TEMPLATE_CONTRACT_SUBMIT_REVIEWER,
@@ -48,15 +64,116 @@ export const WECOM_TEMPLATE_CODE_CATALOG = [
   }
 ];
 
+function decryptWecomCorpSecret(raw) {
+  try {
+    return raw ? decryptSecret(String(raw).trim()) : '';
+  } catch {
+    const e = new Error('WECOM_NOT_CONFIGURED');
+    e.code = 'WECOM_NOT_CONFIGURED';
+    throw e;
+  }
+}
+
 function clampWecomText(str, maxLen = 1900) {
   const s = str == null ? '' : String(str);
   if (s.length <= maxLen) return s;
   return `${s.slice(0, maxLen - 20)}\n…（已截断）`;
 }
 
-function publicWecomBaseUrl() {
-  const b = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-  return b || '';
+/** 企业微信文本卡片要求可跳转的 http(s) url；无协议时常被误判为空 */
+function coerceToHttpUrl(s) {
+  const t = String(s || '').trim();
+  if (!t) return '';
+  if (/^https?:\/\//i.test(t)) return t;
+  // Path-only value (e.g. "/api/public/...") is not a valid external host.
+  // Keep it empty so caller can fallback to absolute variables like shipConfirmUrl/reviewUrl.
+  if (t.startsWith('/')) return '';
+  if (t.startsWith('//')) return `https:${t}`;
+  return `https://${t.replace(/^\/+/, '')}`;
+}
+
+/**
+ * 文本卡片点击链接：模板替换 → 补全协议 → 再尝试常见 URL 变量。
+ */
+function resolveTextcardUrl(urlTemplate, strVars) {
+  const tmpl = normalizeWecomPlaceholders(urlTemplate || '');
+  const raw = applyWecomTemplate(tmpl, strVars).trim();
+  const fromTemplate = coerceToHttpUrl(raw);
+  if (fromTemplate && /^https?:\/\//i.test(fromTemplate)) return fromTemplate;
+  for (const k of ['reviewUrl', 'shipConfirmUrl', 'shipUrl', 'financeReviewUrl']) {
+    const u = coerceToHttpUrl(strVars[k]);
+    if (u && /^https?:\/\//i.test(u)) return u;
+  }
+  return '';
+}
+
+function diagnoseTextcardUrlFailure(urlTemplate, strVars, substitutedTrimmed) {
+  const hints = [];
+  const t = normalizeWecomPlaceholders(urlTemplate || '');
+  if (/\{\{\s*reviewUrl\s*\}\}/i.test(t) && !(String(strVars.reviewUrl || '').trim())) {
+    hints.push(
+      '模板链接含 {{reviewUrl}}，但变量 reviewUrl 为空：请在服务器配置 PUBLIC_BASE_URL（或 WECOM_PUBLIC_BASE_URL）与 JWT_SECRET；后台「测试发送」须在 JSON 里传入 reviewUrl（https 完整链接）。'
+    );
+  }
+  if (/\{\{\s*financeReviewUrl\s*\}\}/i.test(t) && !(String(strVars.financeReviewUrl || '').trim())) {
+    hints.push(
+      '模板链接含 {{financeReviewUrl}}，但变量为空：请配置 PUBLIC_BASE_URL 与 JWT_SECRET；单测发送须在 JSON 里传入 https 完整 financeReviewUrl。'
+    );
+  }
+  if (substitutedTrimmed && /\{\{/.test(substitutedTrimmed)) {
+    hints.push('链接替换后仍含 {{…}}，占位符未生效：请用半角括号 {{reviewUrl}}，勿用全角｛｝。');
+  }
+  if (substitutedTrimmed && !/^https?:\/\//i.test(coerceToHttpUrl(substitutedTrimmed))) {
+    hints.push(`替换后仍非合法链接：${substitutedTrimmed.slice(0, 120)}`);
+  }
+  if (!substitutedTrimmed && !/\{\{/.test(t)) {
+    hints.push('链接地址未使用变量且为空，或内容未保存成功，请检查模板。');
+  }
+  return hints.filter(Boolean).join(' ');
+}
+
+/**
+ * 不走模板，直接发纯文本（用于合同审批卡片因缺少链接失败时的兜底；worker 亦会调用）。
+ */
+export async function sendWecomPlainTextMessage(pool, { toUser, content }) {
+  const toUserStr = toUser == null ? '' : String(toUser).trim();
+  if (!toUserStr) {
+    const e = new Error('MISSING_RECIPIENT');
+    e.code = 'MISSING_RECIPIENT';
+    throw e;
+  }
+  const [cfgRows] = await pool.query(
+    'SELECT corp_id AS corpId, agent_id AS agentId, corp_secret AS corpSecret FROM wecom_config WHERE id=1 LIMIT 1'
+  );
+  const cfg = cfgRows?.[0];
+  const corpId = cfg?.corpId ? String(cfg.corpId).trim() : '';
+  const corpSecret = decryptWecomCorpSecret(cfg?.corpSecret);
+  const agentId = cfg?.agentId != null ? Number(cfg.agentId) : 0;
+  if (!corpId || !corpSecret || !agentId) {
+    const e = new Error('WECOM_NOT_CONFIGURED');
+    e.code = 'WECOM_NOT_CONFIGURED';
+    throw e;
+  }
+  const token = await fetchWecomAccessToken(corpId, corpSecret);
+  return wecomSendMessage(token, {
+    touser: toUserStr,
+    agentid: agentId,
+    msgtype: 'text',
+    text: { content: clampWecomText(content) }
+  });
+}
+
+/** 拼企业微信里打开的绝对链接（合同审批、发货确认、OAuth 回调域名等） */
+export function resolveWecomPublicBaseUrl() {
+  const keys = ['PUBLIC_BASE_URL', 'WECOM_PUBLIC_BASE_URL', 'API_PUBLIC_URL'];
+  for (const k of keys) {
+    const raw = process.env[k];
+    const b = String(raw || '')
+      .trim()
+      .replace(/\/+$/, '');
+    if (b) return b;
+  }
+  return '';
 }
 
 async function resolveUserWecomUserid(pool, userId) {
@@ -129,6 +246,48 @@ export async function resolveWarehouseWecomTouser(pool) {
 }
 
 /**
+ * 品管收企业微信：所有「品管(qc)」类别且填写了 wecom_userid 的员工（pipe 拼接 touser）。
+ * @param {import('mysql2/promise').Pool} pool
+ * @returns {Promise<string>}
+ */
+export async function resolveQcWecomTouser(pool) {
+  const [rows] = await pool.query(
+    `SELECT u.wecom_userid FROM users u
+     INNER JOIN employee_categories c ON c.id = u.employee_category_id
+     WHERE u.account_type IN ('employee', 'manager') AND u.is_active = 1 AND c.code = 'qc'
+       AND u.wecom_userid IS NOT NULL AND TRIM(u.wecom_userid) <> ''`
+  );
+  const ids = (rows || []).map((r) => String(r.wecom_userid).trim()).filter(Boolean);
+  return [...new Set(ids)].join('|');
+}
+
+/**
+ * 企业微信一键发货：操作者是否属于「财务通过后通知仓库」的收件人集合（与 resolveWarehouseWecomTouser 一致）。
+ * 多人收同一卡片时链接相同，任一合格仓库同事 OAuth 后可发货；其他人 POST 会 403。
+ * @param {import('mysql2/promise').Pool} pool
+ * @param {number} actorUserId users.id
+ */
+export async function isWarehouseWecomShipActor(pool, actorUserId) {
+  const uid = Number(actorUserId);
+  if (!Number.isFinite(uid) || uid <= 0) return false;
+  const [rows] = await pool.query(
+    'SELECT wecom_userid FROM users WHERE id = ? AND is_active = 1 LIMIT 1',
+    [uid]
+  );
+  const wx = rows?.[0]?.wecom_userid != null ? String(rows[0].wecom_userid).trim() : '';
+  if (!wx) return false;
+  const touser = await resolveWarehouseWecomTouser(pool);
+  if (!touser || !String(touser).trim()) return false;
+  const set = new Set(
+    String(touser)
+      .split('|')
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+  );
+  return set.has(wx);
+}
+
+/**
  * @param {import('mysql2/promise').Pool} pool
  * @param {{ templateCode: string, variables: Record<string, string|number|boolean|null|undefined>, toUser: string }} opts
  */
@@ -145,7 +304,7 @@ export async function sendWecomTemplateMessage(pool, { templateCode, variables, 
   );
   const cfg = cfgRows?.[0];
   const corpId = cfg?.corpId ? String(cfg.corpId).trim() : '';
-  const corpSecret = cfg?.corpSecret ? String(cfg.corpSecret).trim() : '';
+  const corpSecret = decryptWecomCorpSecret(cfg?.corpSecret);
   const agentId = cfg?.agentId != null ? Number(cfg.agentId) : 0;
   if (!corpId || !corpSecret || !agentId) {
     const e = new Error('WECOM_NOT_CONFIGURED');
@@ -170,7 +329,9 @@ export async function sendWecomTemplateMessage(pool, { templateCode, variables, 
     strVars[k] = v == null ? '' : String(v);
   }
 
-  const msgType = tpl.msgType;
+  const msgType = String(tpl.msgType || '')
+    .trim()
+    .toLowerCase();
   let body = {
     touser: toUserStr,
     agentid: agentId
@@ -183,12 +344,15 @@ export async function sendWecomTemplateMessage(pool, { templateCode, variables, 
     body.msgtype = 'markdown';
     body.markdown = { content: applyWecomTemplate(tpl.bodyTemplate, strVars) };
   } else if (msgType === 'textcard') {
-    const cardUrl = applyWecomTemplate(tpl.urlTemplate || '', strVars).trim();
+    const substitutedPreview = applyWecomTemplate(tpl.urlTemplate || '', strVars).trim();
+    const cardUrl = resolveTextcardUrl(tpl.urlTemplate, strVars);
     if (!cardUrl) {
+      const extra = diagnoseTextcardUrlFailure(tpl.urlTemplate, strVars, substitutedPreview);
       const e = new Error(
-        '文本卡片缺少链接 url（模板未填或变量替换后为空）。企业微信返回 errcode 41010: missing url。请在模板中填写「链接地址」，且发送时传入能填满 url 的变量。'
+        `文本卡片跳转链接无效或为空（替换后：${substitutedPreview ? `"${substitutedPreview.slice(0, 160)}${substitutedPreview.length > 160 ? '…' : ''}"` : '空'}）。${extra || '须为 http(s) 完整地址。企业微信 errcode 41010: missing url。'}`
       );
       e.code = 'TEXTCARD_URL_EMPTY';
+      e.detail = { substitutedUrl: substitutedPreview, templateUrl: tpl.urlTemplate };
       throw e;
     }
     body.msgtype = 'textcard';
@@ -241,16 +405,91 @@ export async function tryNotifyFinanceWecomOrderEvent(
     const orderNo = first.order_no != null ? String(first.order_no) : '';
     const count = orderRows?.length != null ? String(orderRows.length) : '0';
     const detail = clampWecomText(notifyBody);
+    const bizId =
+      first.id != null && Number.isFinite(Number(first.id)) && Number(first.id) > 0
+        ? Math.floor(Number(first.id))
+        : null;
 
-    await sendWecomTemplateMessage(pool, {
+    let financeReviewUrl = '';
+    try {
+      const baseUrl = resolveWecomPublicBaseUrl();
+      if (baseUrl && bizId) {
+        const batchN = orderRows?.length != null ? Number(orderRows.length) : 1;
+        const tok = signWecomFinanceReviewToken(bizId, Number.isFinite(batchN) && batchN >= 1 ? batchN : 1);
+        financeReviewUrl = `${String(baseUrl).trim().replace(/\/+$/, '')}/api/public/wecom-finance-review?t=${encodeURIComponent(tok)}`;
+      }
+    } catch {
+      financeReviewUrl = '';
+    }
+
+    await enqueueWecomNotify(pool, {
+      eventType: templateCode,
       templateCode,
-      variables: { detail, orderNo, count, fromUser: fromUsername },
-      toUser
+      toUser,
+      variables: { detail, orderNo, count, fromUser: fromUsername, financeReviewUrl },
+      bizType: 'sales_order',
+      bizId
     });
   } catch (e) {
     if (e?.code === 'WECOM_NOT_CONFIGURED' || e?.code === 'TEMPLATE_NOT_FOUND') return;
     // eslint-disable-next-line no-console
     console.warn('[wecom] finance order notify:', e?.message || e);
+  }
+}
+
+/**
+ * 财务通过后通知品管（企业微信）：与财务提交通知同一套变量（detail、orderNo、count、financeReviewUrl）。
+ * 模板未配置、无收件人或链接变量无效时静默跳过。
+ */
+export async function tryNotifyQcWecomPendingQc(pool, { notifyBody, orderRows, fromUserId }) {
+  try {
+    const templateCode = WECOM_TEMPLATE_SALES_ORDER_PENDING_QC;
+    const toUser = await resolveQcWecomTouser(pool);
+    if (!toUser) return;
+
+    const [tplCheck] = await pool.query('SELECT id FROM wecom_notify_templates WHERE code=? LIMIT 1', [
+      templateCode
+    ]);
+    if (!tplCheck?.length) return;
+
+    let fromUsername = '';
+    if (fromUserId) {
+      const [ur] = await pool.query('SELECT username FROM users WHERE id=? LIMIT 1', [fromUserId]);
+      fromUsername = ur?.[0]?.username != null ? String(ur[0].username) : '';
+    }
+    const first = orderRows?.[0] || {};
+    const orderNo = first.order_no != null ? String(first.order_no) : '';
+    const count = orderRows?.length != null ? String(orderRows.length) : '0';
+    const detail = clampWecomText(notifyBody);
+    const bizId =
+      first.id != null && Number.isFinite(Number(first.id)) && Number(first.id) > 0
+        ? Math.floor(Number(first.id))
+        : null;
+
+    let financeReviewUrl = '';
+    try {
+      const baseUrl = resolveWecomPublicBaseUrl();
+      if (baseUrl && bizId) {
+        const batchN = orderRows?.length != null ? Number(orderRows.length) : 1;
+        const tok = signWecomFinanceReviewToken(bizId, Number.isFinite(batchN) && batchN >= 1 ? batchN : 1);
+        financeReviewUrl = `${String(baseUrl).trim().replace(/\/+$/, '')}/api/public/wecom-finance-review?t=${encodeURIComponent(tok)}`;
+      }
+    } catch {
+      financeReviewUrl = '';
+    }
+
+    await enqueueWecomNotify(pool, {
+      eventType: templateCode,
+      templateCode,
+      toUser,
+      variables: { detail, orderNo, count, fromUser: fromUsername, financeReviewUrl },
+      bizType: 'sales_order',
+      bizId
+    });
+  } catch (e) {
+    if (e?.code === 'WECOM_NOT_CONFIGURED' || e?.code === 'TEMPLATE_NOT_FOUND') return;
+    // eslint-disable-next-line no-console
+    console.warn('[wecom] qc pending notify:', e?.message || e);
   }
 }
 
@@ -268,7 +507,7 @@ export async function tryNotifyWarehouseWecomOrderApproved(pool, { orderRows, fr
       console.warn('[wecom] warehouse approve notify skipped: JWT_SECRET not set');
       return;
     }
-    const baseUrl = publicWecomBaseUrl();
+    const baseUrl = resolveWecomPublicBaseUrl();
     if (!baseUrl) {
       // eslint-disable-next-line no-console
       console.warn('[wecom] warehouse approve notify skipped: PUBLIC_BASE_URL empty (required for ship link)');
@@ -293,7 +532,7 @@ export async function tryNotifyWarehouseWecomOrderApproved(pool, { orderRows, fr
     const definitions = await loadOrderFieldDefinitions(pool, { activeOnly: true });
     const enriched = await attachCustomerNamesToOrders(pool, list);
 
-    const intro = '订单已通过财务审核，请备货发货。';
+    const intro = '订单已通过品管（质检）审核，请备货发货。';
     for (const row of enriched) {
       try {
         const block = formatWarehouseWecomOrderDetail(row, definitions);
@@ -302,10 +541,14 @@ export async function tryNotifyWarehouseWecomOrderApproved(pool, { orderRows, fr
         const shipToken = signWecomShipToken(row.id);
         const enc = encodeURIComponent(shipToken);
         const shipConfirmUrl = `${baseUrl}/api/public/wecom-order-ship-confirm?t=${enc}`;
-        const shipUrl = `${baseUrl}/api/public/wecom-order-ship?t=${enc}`;
+        /** 与 shipConfirmUrl 同址：勿再在卡片 url 指向 GET /wecom-order-ship；执行发货仅在确认页内 POST */
+        const shipUrl = shipConfirmUrl;
 
-        await sendWecomTemplateMessage(pool, {
+        const oid = row.id != null && Number.isFinite(Number(row.id)) && Number(row.id) > 0 ? Math.floor(Number(row.id)) : null;
+        await enqueueWecomNotify(pool, {
+          eventType: templateCode,
           templateCode,
+          toUser,
           variables: {
             detail,
             orderNo,
@@ -314,7 +557,8 @@ export async function tryNotifyWarehouseWecomOrderApproved(pool, { orderRows, fr
             shipConfirmUrl,
             shipUrl
           },
-          toUser
+          bizType: 'sales_order',
+          bizId: oid
         });
       } catch (oneErr) {
         if (oneErr?.code === 'WECOM_NOT_CONFIGURED' || oneErr?.code === 'TEMPLATE_NOT_FOUND') return;
@@ -359,11 +603,18 @@ export async function tryNotifySalesWecomOrderRejected(pool, { notifyBody, order
     const orderNo = first.order_no != null ? String(first.order_no) : '';
     const count = orderRows?.length != null ? String(orderRows.length) : '0';
     const detail = clampWecomText(notifyBody);
+    const bizId =
+      first.id != null && Number.isFinite(Number(first.id)) && Number(first.id) > 0
+        ? Math.floor(Number(first.id))
+        : null;
 
-    await sendWecomTemplateMessage(pool, {
+    await enqueueWecomNotify(pool, {
+      eventType: templateCode,
       templateCode,
+      toUser,
       variables: { detail, orderNo, count, fromUser: fromUsername },
-      toUser
+      bizType: 'sales_order',
+      bizId
     });
   } catch (e) {
     if (e?.code === 'WECOM_NOT_CONFIGURED' || e?.code === 'TEMPLATE_NOT_FOUND') return;
@@ -373,14 +624,17 @@ export async function tryNotifySalesWecomOrderRejected(pool, { notifyBody, order
 }
 
 /**
- * 合同提交审核后，给审核人发企业微信，正文与站内信摘要一致。
+ * 合同审批：企业微信通知审核人（文本卡片时链接变量一般为 {{reviewUrl}}）。
+ * @param {{ chainStep?: { current: number, total: number } | null, urge?: { actorUsername?: string } | null }} opts
  */
 export async function tryNotifyContractReviewerOnSubmit(
   pool,
-  { contractRow, notifyBody, fromUserId, reviewerUserId }
+  { contractRow, fromUserId, reviewerUserId, chainStep = null, urge = null }
 ) {
+  let toUser = '';
+  let wecomDetail = '';
+  const templateCode = WECOM_TEMPLATE_CONTRACT_SUBMIT_REVIEWER;
   try {
-    const templateCode = WECOM_TEMPLATE_CONTRACT_SUBMIT_REVIEWER;
     const toUid = reviewerUserId != null ? reviewerUserId : contractRow?.reviewer_user_id;
     const contractNo = contractRow?.contract_no != null ? String(contractRow.contract_no) : '';
 
@@ -390,7 +644,7 @@ export async function tryNotifyContractReviewerOnSubmit(
       return;
     }
 
-    const toUser = await resolveUserWecomUserid(pool, toUid);
+    toUser = await resolveUserWecomUserid(pool, toUid);
     if (!toUser) {
       const [userRows] = await pool.query(
         'SELECT username, wecom_userid, is_active FROM users WHERE id=? LIMIT 1',
@@ -427,29 +681,61 @@ export async function tryNotifyContractReviewerOnSubmit(
         : contractRow?.customer_name != null
         ? String(contractRow.customer_name)
         : '';
-    const detail = clampWecomText(notifyBody);
+
+    const urgeActor =
+      urge && urge.actorUsername != null ? String(urge.actorUsername).trim() : '';
+    const built = buildContractReviewerNotifyMessages({
+      contractNo,
+      customerName,
+      chainStep,
+      urge: !!urge,
+      actorUsername: urgeActor
+    });
+    const notificationTitle = built.notificationTitle;
+    wecomDetail = built.wecomDetail;
 
     let reviewUrl = '';
     try {
-      const base = publicWecomBaseUrl();
+      const base = resolveWecomPublicBaseUrl();
       const cid = contractRow?.id != null ? Number(contractRow.id) : NaN;
       const tid = Number(toUid);
       if (base && process.env.JWT_SECRET && Number.isFinite(cid) && cid > 0 && Number.isFinite(tid) && tid > 0) {
         const tok = signWecomContractReviewToken(cid, tid);
         reviewUrl = `${base}/api/public/wecom-contract-review?t=${encodeURIComponent(tok)}`;
+      } else if (!base || !process.env.JWT_SECRET) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[wecom] contract reviewUrl cannot be built for ${contractNo}: ` +
+            `${!base ? 'PUBLIC_BASE_URL is empty' : ''}${!base && !process.env.JWT_SECRET ? '; ' : ''}` +
+            `${!process.env.JWT_SECRET ? 'JWT_SECRET is empty' : ''}. Textcard requires https link.`
+        );
       }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[wecom] contract reviewUrl omitted:', e?.message || e);
     }
 
-    await sendWecomTemplateMessage(pool, {
+    const cid =
+      contractRow?.id != null && Number.isFinite(Number(contractRow.id)) && Number(contractRow.id) > 0
+        ? Math.floor(Number(contractRow.id))
+        : null;
+    await enqueueWecomNotify(pool, {
+      eventType: templateCode,
       templateCode,
-      variables: { detail, contractNo, customerName, fromUser: fromUsername, reviewUrl },
-      toUser
+      toUser,
+      variables: {
+        detail: wecomDetail,
+        notificationTitle,
+        contractNo,
+        customerName,
+        fromUser: fromUsername,
+        reviewUrl
+      },
+      bizType: 'sales_contract',
+      bizId: cid
     });
     // eslint-disable-next-line no-console
-    console.log(`[wecom] contract submit notify sent: contract ${contractNo} -> reviewer userId=${toUid}`);
+    console.log(`[wecom] contract submit notify queued: contract ${contractNo} -> reviewer userId=${toUid}`);
   } catch (e) {
     if (e?.code === 'WECOM_NOT_CONFIGURED' || e?.code === 'TEMPLATE_NOT_FOUND') return;
     // eslint-disable-next-line no-console
@@ -517,8 +803,14 @@ export async function tryNotifyContractCreatorOnReview(
     const statusLabel = result === 'approved' ? '已通过' : '已驳回';
     const reviewCommentText = reviewComment == null ? '' : String(reviewComment);
 
-    await sendWecomTemplateMessage(pool, {
+    const cid =
+      contractRow?.id != null && Number.isFinite(Number(contractRow.id)) && Number(contractRow.id) > 0
+        ? Math.floor(Number(contractRow.id))
+        : null;
+    await enqueueWecomNotify(pool, {
+      eventType: templateCode,
       templateCode,
+      toUser,
       variables: {
         detail,
         contractNo,
@@ -528,10 +820,11 @@ export async function tryNotifyContractCreatorOnReview(
         contractReviewStatus: statusLabel,
         reviewComment: reviewCommentText
       },
-      toUser
+      bizType: 'sales_contract',
+      bizId: cid
     });
     // eslint-disable-next-line no-console
-    console.log(`[wecom] contract review notify sent: contract ${contractNo} -> userId=${creatorId}, result=${result}`);
+    console.log(`[wecom] contract review notify queued: contract ${contractNo} -> userId=${creatorId}, result=${result}`);
   } catch (e) {
     if (e?.code === 'WECOM_NOT_CONFIGURED' || e?.code === 'TEMPLATE_NOT_FOUND') return;
     // eslint-disable-next-line no-console

@@ -41,6 +41,13 @@
           <el-icon><Files /></el-icon>
           <span>报告模板管理</span>
         </el-menu-item>
+        <el-menu-item
+          v-if="perm('qc_yearbooks', 'view') || perm('qc_yearbooks', 'upload')"
+          index="/qc-yearbooks"
+        >
+          <el-icon><DataAnalysis /></el-icon>
+          <span>品质管控数据</span>
+        </el-menu-item>
         <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
           <el-icon><Link /></el-icon>
           <span>二维码管理</span>
@@ -116,10 +123,6 @@
             <el-icon><Service /></el-icon>
             <span>技术支持联系</span>
           </el-menu-item>
-          <el-menu-item index="/backups">
-            <el-icon><Download /></el-icon>
-            <span>备份与恢复</span>
-          </el-menu-item>
         </el-sub-menu>
         <el-sub-menu v-if="showAuditMenu" index="audit-submenu" class="no-parent-active">
           <template #title>
@@ -141,6 +144,10 @@
           <el-menu-item v-if="isSuperAdminUser" index="/security">
             <el-icon><Lock /></el-icon>
             <span>系统安全</span>
+          </el-menu-item>
+          <el-menu-item v-if="isSuperAdminUser" index="/backups">
+            <el-icon><Download /></el-icon>
+            <span>备份与恢复</span>
           </el-menu-item>
         </el-sub-menu>
         <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
@@ -283,6 +290,13 @@
             <el-icon><Files /></el-icon>
             <span>报告模板管理</span>
           </el-menu-item>
+          <el-menu-item
+            v-if="perm('qc_yearbooks', 'view') || perm('qc_yearbooks', 'upload')"
+            index="/qc-yearbooks"
+          >
+            <el-icon><DataAnalysis /></el-icon>
+            <span>品质管控数据</span>
+          </el-menu-item>
           <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
             <el-icon><Link /></el-icon>
             <span>二维码管理</span>
@@ -358,10 +372,6 @@
               <el-icon><Service /></el-icon>
               <span>技术支持联系</span>
             </el-menu-item>
-            <el-menu-item index="/backups">
-              <el-icon><Download /></el-icon>
-              <span>备份与恢复</span>
-            </el-menu-item>
           </el-sub-menu>
           <el-sub-menu v-if="showAuditMenu" index="audit-submenu-mobile" class="no-parent-active">
             <template #title>
@@ -383,6 +393,10 @@
             <el-menu-item v-if="isSuperAdminUser" index="/security">
               <el-icon><Lock /></el-icon>
               <span>系统安全</span>
+            </el-menu-item>
+            <el-menu-item v-if="isSuperAdminUser" index="/backups">
+              <el-icon><Download /></el-icon>
+              <span>备份与恢复</span>
             </el-menu-item>
           </el-sub-menu>
           <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
@@ -497,6 +511,7 @@ import { mapState } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { isSuperAdmin, perm, canAccessSalesContractWorkspace } from '../utils/permissions';
 import { changePassword, getMe, listSalesMessages, logout as apiLogout, markSalesMessageRead } from '../api';
+import { resolveInternalMessageRoute } from '../utils/internalMessageNavigate';
 import { useAuthStore } from '../stores/auth';
 import SidebarGuide from '../components/SidebarGuide.vue';
 
@@ -596,6 +611,7 @@ export default {
       if (p === '/dashboard') return '控制台';
       if (p === '/reports/image-library') return '系统图片库';
       if (p === '/report-templates') return '报告模板管理';
+      if (p === '/qc-yearbooks') return '品质管控数据台账';
       if (p.startsWith('/reports')) return '报告管理';
       if (p.startsWith('/qrcodes')) return '二维码管理';
       if (p.startsWith('/stamps')) return '公司章管理';
@@ -611,7 +627,7 @@ export default {
       if (p.startsWith('/departments')) return '账号管理 · 部门管理';
       if (p.startsWith('/users')) return '账号管理 · 员工账号';
       if (p.startsWith('/support-contact')) return '账号管理 · 技术支持联系';
-      if (p.startsWith('/backups')) return '账号管理 · 备份与恢复';
+      if (p.startsWith('/backups')) return '安全中心 · 备份与恢复';
       if (p === '/security') return '系统安全';
       if (p.startsWith('/audit/login-logs')) return '安全中心 · 登录日志';
       if (p.startsWith('/audit/operations')) return '安全中心 · 操作日志';
@@ -625,6 +641,7 @@ export default {
       if (p === '/dashboard') return '系统概览：报表趋势与状态分布';
       if (p === '/reports') return '查询、编辑、作废报告，批量生成二维码';
       if (p === '/report-templates') return '统一管理报告模板，支持新增、编辑、删除与克隆';
+      if (p === '/qc-yearbooks') return '按年维护成品检验台账，支持 Excel 导入与结构化编辑';
       if (p === '/reports/image-library') return '仅超级管理员维护，供报告样式设计器选用（服务器存储）';
       if (p.startsWith('/reports')) return '录入报告与自定义字段';
       if (p.startsWith('/qrcodes')) return '查看二维码与绑定报告';
@@ -1022,13 +1039,17 @@ export default {
         customClass: 'sales-internal-msg-notify',
         offset: 80
       };
-      const hint = '请点击顶部站内信图标查看详情。';
+      const hint = '点击本条通知或顶部站内信图标查看详情。';
+      const openInbox = () => {
+        this.goToMessages();
+      };
       if (items.length === 1) {
         const m = items[0];
         ElNotification({
           title: m.title || '新站内信',
           message: hint,
           duration: 15000,
+          onClick: openInbox,
           ...opts
         });
       } else {
@@ -1036,6 +1057,7 @@ export default {
           title: `新站内信 (${items.length})`,
           message: hint,
           duration: 15000,
+          onClick: openInbox,
           ...opts
         });
       }
@@ -1110,13 +1132,15 @@ export default {
         return;
       }
       try {
-        await Promise.all(unread.map((m) => this.readMsg(m, true)));
+        await Promise.all(unread.map((m) => this.readMsg(m, { silent: true, navigate: false })));
         this.unreadMessageCount = 0;
       } catch {
         this.pollSalesInternalMessages();
       }
     },
-    async readMsg(m, silent = false) {
+    async readMsg(m, opts = {}) {
+      const silent = opts.silent === true;
+      const navigate = opts.navigate !== false;
       if (!m.read_at) {
         try {
           await markSalesMessageRead(m.id);
@@ -1124,7 +1148,18 @@ export default {
           this.unreadMessageCount = Math.max(0, this.unreadMessageCount - 1);
         } catch {
           if (!silent) this.$message.error('标记已读失败');
+          return;
         }
+      }
+      if (!navigate) return;
+      const target = resolveInternalMessageRoute(m);
+      if (!target) return;
+      this.messagesOpen = false;
+      try {
+        await this.$router.push(target);
+      } catch (e) {
+        if (e && e.name === 'NavigationDuplicated') return;
+        throw e;
       }
     },
     async pollSalesInternalMessages() {
@@ -1710,6 +1745,9 @@ export default {
 
 <style>
 /* 站内信弹窗：多行正文与后端 \n 对齐 */
+.sales-internal-msg-notify {
+  cursor: pointer;
+}
 .sales-internal-msg-notify .el-notification__content {
   white-space: pre-wrap;
   word-break: break-word;

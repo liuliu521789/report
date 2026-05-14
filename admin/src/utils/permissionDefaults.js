@@ -64,6 +64,7 @@ export function emptyPermissionShape() {
       order_submit: false,
       order_withdraw: false,
       order_status_finance: false,
+      order_status_qc: false,
       order_status_warehouse: false,
       order_ship: false,
       order_view_status_logs: false,
@@ -94,6 +95,10 @@ export function emptyPermissionShape() {
       create: false,
       edit: false,
       disable: false
+    },
+    qc_yearbooks: {
+      view: false,
+      upload: false
     }
   };
 }

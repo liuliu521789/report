@@ -84,3 +84,58 @@ export async function buildContractOrdersNotifyBody(pool, contractId, { intro = 
   if (customerName) head += `${head ? '\n' : ''}客户/厂家：${customerName}`;
   return buildOrderNotifyBody(pool, ords || [], { intro: head, maxOrders: 15 });
 }
+
+function clampNotifyText(str, maxLen = 900) {
+  const s = str == null ? '' : String(str);
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, maxLen - 16)}\n…（已截断）`;
+}
+
+/**
+ * 合同待审批：站内信与企业微信文本卡片用的简短文案（不含订单明细；明细在系统合同管理中查看）。
+ * 企业微信链接只放在文本卡片的 url，由按钮打开审批页。
+ */
+export function buildContractReviewerNotifyMessages({
+  contractNo,
+  customerName,
+  chainStep,
+  urge = false,
+  actorUsername = ''
+}) {
+  const no = contractNo != null ? String(contractNo).trim() : '';
+  const cn = customerName != null ? String(customerName).trim() : '';
+  const notificationTitle = urge ? '合同审批催办' : '合同待审核';
+
+  const seqLine =
+    chainStep && chainStep.total > 1 && Number(chainStep.current) >= 1
+      ? `审批顺序：第 ${chainStep.current}/${chainStep.total} 位。\n`
+      : '';
+
+  let head;
+  if (urge) {
+    const label = cn && no ? `${cn}（${no}）` : cn || (no ? `合同 ${no}` : '合同');
+    head = `【催办】${label}仍待您审批，请尽快处理。`;
+  } else if (cn && no) {
+    head = `${cn} 的销售合同（${no}）待您审核。`;
+  } else if (no) {
+    head = `合同 ${no} 待您审核。`;
+  } else if (cn) {
+    head = `${cn} 的销售合同待您审核。`;
+  } else {
+    head = '您有新的销售合同待审核。';
+  }
+
+  const wecomDetail = clampNotifyText(
+    `${head}\n${seqLine}请点击下方按钮进入审批页面。\n（合同与订单明细请在电脑端「合同管理」查看）` +
+      (urge && actorUsername ? `\n（由 ${actorUsername} 发起催办）` : ''),
+    512
+  );
+
+  let inboxBody =
+    `${head}\n${seqLine}` +
+    `请在「合同管理」中查看明细；企业微信用户请点击通知卡片上的按钮进入审批页。`;
+  if (urge && actorUsername) inboxBody += `\n（由 ${actorUsername} 发起催办）`;
+  inboxBody = clampNotifyText(inboxBody, 1900);
+
+  return { notificationTitle, wecomDetail, inboxBody };
+}

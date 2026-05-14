@@ -4,7 +4,8 @@
 
 const ORDER_BASE_LABEL = {
   pending_review: '待审核',
-  approved: '已审核',
+  pending_qc: '待质检审核',
+  approved: '待发货',
   rejected: '驳回',
   shipped: '已发货',
   completed: '已完成',
@@ -24,6 +25,11 @@ export function orderFlowStatusZh(status) {
 /**
  * @param {{ status?: string, submitted_for_review_at?: string | null }} row
  */
+function shipperSuffix(row) {
+  const name = String(row?.shipped_by_name ?? row?.shippedByName ?? '').trim();
+  return name ? `（发货：${name}）` : '';
+}
+
 export function orderStatusDisplay(row) {
   const status = row?.status || '';
   const base = ORDER_BASE_LABEL[status] || status || '—';
@@ -35,11 +41,15 @@ export function orderStatusDisplay(row) {
     return { type: 'warning', icon: 'Clock', label: `${base}（审核中）`, rejectReason: '' };
   }
 
+  if (status === 'pending_qc') {
+    return { type: 'warning', icon: 'View', label: base, rejectReason: '' };
+  }
+
   const map = {
     approved: { type: 'success', icon: 'CircleCheck' },
     rejected: { type: 'danger', icon: 'CircleClose' },
     shipped: { type: 'primary', icon: 'Van' },
-    /** 与「已审核」同色区分：已完成用勾选完成图标 */
+    /** 与「待发货」同色区分：已完成用勾选完成图标 */
     completed: { type: 'success', icon: 'Finished' },
     cancelled: { type: 'info', icon: 'CloseBold' }
   };
@@ -47,8 +57,12 @@ export function orderStatusDisplay(row) {
   const m = map[status];
   if (m) {
     const rejectReason =
-      status === 'rejected' ? String(row.finance_comment || '').trim() : '';
-    return { type: m.type, icon: m.icon, label: base, rejectReason };
+      status === 'rejected'
+        ? String(row.qc_comment || row.finance_comment || '').trim()
+        : '';
+    const shipTag = status === 'shipped' || status === 'completed' ? shipperSuffix(row) : '';
+    const label = shipTag ? `${base}${shipTag}` : base;
+    return { type: m.type, icon: m.icon, label, rejectReason };
   }
   return { type: 'info', icon: 'InfoFilled', label: base, rejectReason: '' };
 }

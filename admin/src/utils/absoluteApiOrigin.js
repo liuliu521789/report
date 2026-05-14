@@ -1,3 +1,5 @@
+import { normalizeAdminApiBaseUrl } from './apiBaseNormalize.js';
+
 /**
  * 本地固定端口约定（与 admin/vite.config.js、server/src/index.js 一致）：
  * - 管理端（Vite）：3000
@@ -9,7 +11,7 @@
 export function absoluteApiOrigin() {
   const raw = String(import.meta.env.VITE_APP_API_BASE_URL || '').trim();
   if (raw) {
-    return raw.replace(/\/$/, '').replace('localhost:3003', 'localhost:3001');
+    return normalizeAdminApiBaseUrl(raw);
   }
   if (import.meta.env.DEV) {
     return 'http://localhost:3000';

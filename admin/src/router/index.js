@@ -31,6 +31,7 @@ import InternalModels from '../views/InternalModels.vue';
 import ContractTemplateEdit from '../views/ContractTemplateEdit.vue';
 import WecomNotifications from '../views/WecomNotifications.vue';
 import Backups from '../views/Backups.vue';
+import QcYearbooks from '../views/QcYearbooks.vue';
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -44,6 +45,11 @@ const router = createRouter({
         { path: '/dashboard', component: Dashboard },
         { path: '/reports', component: ReportsList },
         { path: '/report-templates', component: ReportTemplates, meta: { needPerm: ['templates', 'use'] } },
+        {
+          path: '/qc-yearbooks',
+          component: QcYearbooks,
+          meta: { needAnyPerm: [['qc_yearbooks', 'view'], ['qc_yearbooks', 'upload']] }
+        },
         { path: '/reports/designer', component: ReportDesigner, meta: { needPerm: ['reports', 'create'] } },
         {
           path: '/reports/image-library',

@@ -2,19 +2,18 @@ import axios from 'axios';
 import { getActivePinia } from 'pinia';
 import { useAuthStore } from '../stores/auth';
 import { enrichApiErrorBody } from '../../../shared/apiErrorZh.js';
+import { normalizeAdminApiBaseUrl } from '../utils/apiBaseNormalize.js';
 
 /** 开发环境默认空串：请求发到当前页所在源，由 Vite 把 /api、/uploads 代理到后端（见 vite.config.js）。须同时启动 server。 */
-function normalizeApiBaseUrl(url) {
-  const raw = String(url || '').trim();
-  if (!raw) return raw;
-  // 历史配置兼容：旧端口 3003 统一迁移到后端默认端口 3001
-  return raw.replace('localhost:3003', 'localhost:3001');
+function resolveHttpBaseURL() {
+  const raw = String(import.meta.env.VITE_APP_API_BASE_URL || '').trim();
+  if (!raw) {
+    return import.meta.env.DEV ? '' : normalizeAdminApiBaseUrl('http://localhost:3001');
+  }
+  return normalizeAdminApiBaseUrl(raw);
 }
 
-const baseURL = normalizeApiBaseUrl(
-  import.meta.env.VITE_APP_API_BASE_URL ||
-  (import.meta.env.DEV ? '' : 'http://localhost:3001')
-);
+const baseURL = resolveHttpBaseURL();
 
 export const http = axios.create({
   baseURL,
@@ -83,9 +82,12 @@ http.interceptors.request.use((config) => {
   if (!config.silentProgress) startProgress();
   const p = getActivePinia();
   const url = String(config.url || '');
-  const isAuthLogin = url.includes('/api/auth/login');
+  const isAnonymousAuth =
+    url.includes('/api/auth/login') ||
+    url.includes('/api/auth/captcha') ||
+    url.includes('/api/auth/bootstrap-admin');
   const token = p ? useAuthStore().token : localStorage.getItem('token');
-  if (token && !isAuthLogin) {
+  if (token && !isAnonymousAuth) {
     config.headers = config.headers || {};
     config.headers.Authorization = `Bearer ${token}`;
   }

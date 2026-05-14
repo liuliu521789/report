@@ -147,7 +147,7 @@
                   @click="confirmWithdrawContractReview(row)"
                 >撤销审核</el-button>
                 <el-button
-                  v-if="perm('contract_management', 'contract_review') && row.status === 'pending_review' && (isSuperAdmin() || isReviewer(row))"
+                  v-if="row.status === 'pending_review' && (isSuperAdmin() || isReviewer(row))"
                   link
                   type="warning"
                   @click="openReview(row)"
@@ -441,7 +441,7 @@
     </el-dialog>
 
     <el-dialog v-model="submitOpen" title="提交合同审核" width="480px">
-      <div class="submit-hint">可先选部门（含子部门）缩小名单，再选择具备合同审核权限的审批人。</div>
+      <div class="submit-hint">可先选部门（含子部门）缩小名单，再按顺序添加审批人。</div>
       <el-tree-select
         v-model="submitDeptFilter"
         :data="submitDeptTree"
@@ -721,6 +721,14 @@ export default {
       this.clampActiveTab();
       this.loadContracts();
     },
+    '$route.query.review_contract_id'(n) {
+      if (this.$route.path !== '/sales/contracts') return;
+      if (n == null || String(n).trim() === '') return;
+      this.$nextTick(async () => {
+        await this.loadContracts();
+        await this.tryOpenReviewFromRouteQuery();
+      });
+    },
     '$route.path'(p) {
       if (p === '/sales/contracts') {
         this.syncTabFromQuery();
@@ -748,6 +756,7 @@ export default {
     this.loadTemplates();
     await this.loadContracts();
     this.loadFlow();
+    await this.tryOpenReviewFromRouteQuery();
   },
   beforeUnmount() {
     this.detailOpen = false;
@@ -778,7 +787,10 @@ export default {
     canAccessSalesContractWorkspace,
     syncTabFromQuery() {
       const t = this.$route.query.tab;
-      if (t === 'tpl' && perm('contract_management', 'template_manage')) this.tab = 'tpl';
+      const openReview = this.$route.query.review_contract_id;
+      if (openReview != null && String(openReview).trim() !== '' && canAccessSalesContractWorkspace()) {
+        this.tab = 'list';
+      } else if (t === 'tpl' && perm('contract_management', 'template_manage')) this.tab = 'tpl';
       else if (t === 'list' && canAccessSalesContractWorkspace()) this.tab = 'list';
       else if (t === 'flow' && perm('process_management', 'view_flow')) this.tab = 'flow';
       this.clampActiveTab();
@@ -848,17 +860,35 @@ export default {
       if (result === 'rejected') return 'danger';
       return 'info';
     },
+    /** 审批意见展示：去掉数字用户 ID、登录名括号等，与时间轴「只显示姓名」一致 */
+    approvalFlowOpinionDisplay(comment) {
+      let s = String(comment || '').trim();
+      if (!s) return '';
+      s = s.replace(/流转至用户ID\s*\d+/gi, '流转至下一审批人');
+      s = s.replace(/用户ID\s*\d+/gi, '');
+      s = s.replace(/用户\s*#\s*\d+/g, '审批人');
+      // 服务端「姓名(登录账号)」仅保留姓名
+      s = s.replace(/\(([A-Za-z0-9_.@+-]+)\)/g, '');
+      s = s.replace(/\s{2,}/g, ' ').trim();
+      return s;
+    },
+    /** 审批节点操作人：优先真实姓名，不展示数值型用户 ID */
+    approvalFlowActorDisplay(auditRow) {
+      const rn = String(auditRow.actor_real_name || '').trim();
+      if (rn) return rn;
+      const un = String(auditRow.actor_username || '').trim();
+      return un || '—';
+    },
     /** 将审核日志转为纵向审批流程步骤（参考钉钉式时间轴） */
     buildApprovalTimelineSteps(audits) {
       const raw = Array.isArray(audits) ? [...audits] : [];
       raw.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
       return raw.map((a, idx) => {
         const timeText = this.$dt(a.created_at);
-        const rn = String(a.actor_real_name || '').trim();
-        const un = String(a.actor_username || '').trim();
-        const actorName = rn || un || '—';
+        const actorName = this.approvalFlowActorDisplay(a);
         const idKey = a.id != null ? String(a.id) : `idx-${idx}`;
-        const comment = String(a.comment_text || '').trim();
+        const commentRaw = String(a.comment_text || '').trim();
+        const comment = this.approvalFlowOpinionDisplay(commentRaw);
         if (a.action === 'urge_review') {
           return {
             key: `urge-${idKey}`,
@@ -1083,10 +1113,18 @@ export default {
       if (account && account !== main) return `${main}（${account}）`;
       return main;
     },
+    /** 审批流程时间轴 / 已选顺序：只展示姓名（无登录名、无用户 ID） */
+    reviewerNameOnly(u) {
+      const rn = String(u?.realName || '').trim();
+      if (rn) return rn;
+      const dn = String(u?.displayName || '').trim();
+      if (dn) return dn;
+      return String(u?.username || '').trim() || '—';
+    },
     reviewerLabelById(id) {
       const hit = (this.reviewers || []).find((u) => Number(u.id) === Number(id));
-      if (hit) return this.reviewerOptionLabel(hit);
-      return `用户 #${id}`;
+      if (hit) return this.reviewerNameOnly(hit);
+      return '—';
     },
     addSubmitReviewer() {
       const id = Number(this.submitReviewerId);
@@ -1482,6 +1520,47 @@ export default {
       this.reviewRow = row;
       this.reviewForm = { result: 'approved', comment: '' };
       this.reviewOpen = true;
+    },
+    async tryOpenReviewFromRouteQuery() {
+      const raw = this.$route.query.review_contract_id;
+      if (raw == null || String(raw).trim() === '') return;
+      if (!canAccessSalesContractWorkspace()) return;
+      const id = Number(raw);
+      if (!Number.isFinite(id) || id < 1) return;
+
+      this.tab = 'list';
+      this.clampActiveTab();
+
+      let row = (this.contracts || []).find((c) => Number(c.id) === id);
+      if (!row) {
+        try {
+          const d = await getSalesContract(id);
+          const c = d?.contract;
+          if (c) row = c;
+        } catch {
+          row = null;
+        }
+      }
+
+      const restQuery = { ...this.$route.query };
+      delete restQuery.review_contract_id;
+
+      const stripReviewParam = () => {
+        this.$router.replace({ path: '/sales/contracts', query: restQuery });
+      };
+
+      if (!row) {
+        this.$message.warning('未找到该合同');
+        stripReviewParam();
+        return;
+      }
+      if (row.status !== 'pending_review' || (!isSuperAdmin() && !this.isReviewer(row))) {
+        this.$message.warning('当前合同无需您审核或状态已变更');
+        stripReviewParam();
+        return;
+      }
+      this.openReview(row);
+      stripReviewParam();
     },
     async doReview() {
       if (this.reviewForm.result === 'rejected' && !this.reviewForm.comment.trim()) {

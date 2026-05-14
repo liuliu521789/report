@@ -19,7 +19,7 @@ export function signWecomShipToken(orderId) {
     e.code = 'BAD_ORDER_ID';
     throw e;
   }
-  return jwt.sign({ purpose: PURPOSE, orderId: id }, secret, { expiresIn: '30d' });
+  return jwt.sign({ purpose: PURPOSE, orderId: id }, secret, { expiresIn: '7d' });
 }
 
 export function verifyWecomShipToken(token) {

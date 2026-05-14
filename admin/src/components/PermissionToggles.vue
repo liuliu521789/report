@@ -69,7 +69,7 @@
       <el-checkbox v-model="inner.order_management.order_withdraw" @change="emit">撤回审核申请</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_status_finance" @change="emit">财务审核 / 完结</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_status_warehouse" @change="emit">仓库（全员订单 / 待发货视图）</el-checkbox>
-      <el-checkbox v-model="inner.order_management.order_ship" @change="emit">确认发货（已审核 → 已发货）</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_ship" @change="emit">确认发货（待发货 → 已发货）</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_view_status_logs" @change="emit">状态与修改日志</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_cancel" @change="emit">取消订单</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_delete" @change="emit">删除订单（含批量；非财务角色仅能删本人创建的单据）</el-checkbox>
@@ -102,6 +102,11 @@
       <el-checkbox v-model="inner.customer_management.create" @change="emit">新增客户</el-checkbox>
       <el-checkbox v-model="inner.customer_management.edit" @change="emit">编辑客户信息</el-checkbox>
       <el-checkbox v-model="inner.customer_management.disable" @change="emit">启用/停用客户</el-checkbox>
+    </div>
+    <div class="perm-block">
+      <div class="perm-title">品质台账（module=qc_yearbooks）</div>
+      <el-checkbox v-model="inner.qc_yearbooks.view" @change="emit">查看各年份台账数据</el-checkbox>
+      <el-checkbox v-model="inner.qc_yearbooks.upload" @change="emit">维护（新增年份、Excel 导入与成品检验台账）</el-checkbox>
     </div>
   </div>
 </template>

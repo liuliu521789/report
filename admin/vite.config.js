@@ -3,29 +3,15 @@ import vue from '@vitejs/plugin-vue';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { normalizeAdminApiBaseUrl, normalizeProxyTargetFromEnv } from './src/utils/apiBaseNormalize.js';
 
-function normalizeProxyTarget(rawUrl) {
-  const fallback = 'http://127.0.0.1:3001';
-  const raw = String(rawUrl || '').trim();
-  if (!raw) return fallback;
-  try {
-    const url = new URL(raw);
-    // Windows 开发环境下 localhost 可能优先解析到 IPv6，后端若仅监听 IPv4 会导致代理偶发拒绝连接
-    if (url.hostname === 'localhost') url.hostname = '127.0.0.1';
-    // 兼容历史误配端口（前端 3000 / 旧后端 3003），统一回当前后端默认 3001
-    if (url.port === '3000' || url.port === '3003') url.port = '3001';
-    return url.toString().replace(/\/$/, '');
-  } catch {
-    return fallback;
-  }
-}
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function resolvedApiPort(env) {
   const raw = String(env.VITE_APP_API_BASE_URL || '').trim();
   if (!raw) return 3001;
   try {
-    const u = new URL(raw);
+    const u = new URL(normalizeAdminApiBaseUrl(raw));
     if (u.port) return Number(u.port);
     return u.protocol === 'https:' ? 443 : 80;
   } catch {
@@ -36,7 +22,7 @@ function resolvedApiPort(env) {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   /** 后端默认 PORT=3001；勿写成 3000（与 Vite 自身端口冲突导致代理失败） */
-  const target = normalizeProxyTarget(env.VITE_APP_API_BASE_URL);
+  const target = normalizeProxyTargetFromEnv(env.VITE_APP_API_BASE_URL);
   const adminPort = Number(env.VITE_ADMIN_DEV_PORT || 3000);
   const apiPort = resolvedApiPort(env);
   if (adminPort === apiPort) {
@@ -57,6 +43,15 @@ export default defineConfig(({ mode }) => {
       proxy: {
         // 批量导入/导出等接口可能耗时较长；避免开发代理默认超时过早断开
         '/api': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
+        '/qc-yearbooks': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
+        '/uploads': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
+        '/miniprogram': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 }
+      }
+    },
+    preview: {
+      proxy: {
+        '/api': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
+        '/qc-yearbooks': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
         '/uploads': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
         '/miniprogram': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 }
       }

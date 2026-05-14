@@ -14,7 +14,30 @@ import {
   normalizePublicSummaryAssets
 } from '../lib/reportCustomerPayload.js';
 import { verifyWecomShipToken } from '../lib/wecomShipToken.js';
+import { verifyWecomFinanceReviewToken } from '../lib/wecomFinanceReviewToken.js';
 import { performWecomQuickShip } from '../lib/wecomOrderQuickShip.js';
+import {
+  appendWecomContractReviewActorCookie,
+  appendWecomShipActorCookie,
+  buildWecomShipOAuthAuthorizeUrl,
+  clearWecomContractReviewActorCookie,
+  clearWecomShipActorCookie,
+  exchangeWecomOAuthCodeForMappedUser,
+  isWecomContractReviewOAuthDisabled,
+  isWecomShipOAuthDisabled,
+  loadWecomAppCredentials,
+  readWecomContractReviewActorCookie,
+  readWecomShipActorCookie,
+  signWecomContractReviewActorToken,
+  signWecomContractReviewOAuthState,
+  signWecomShipActorToken,
+  signWecomShipOAuthState,
+  verifyWecomContractReviewActorToken,
+  verifyWecomContractReviewOAuthState,
+  verifyWecomShipActorToken,
+  verifyWecomShipOAuthState
+} from '../lib/wecomShipOAuth.js';
+import { isWarehouseWecomShipActor, resolveWecomPublicBaseUrl } from '../lib/wecomNotify.js';
 import {
   attachCustomerNamesToOrders,
   formatWarehouseWecomOrderDetail,
@@ -24,6 +47,8 @@ import {
 export const router = Router();
 
 const wecomContractReviewForm = express.urlencoded({ extended: true, limit: '256kb' });
+/** 确认页「完成发货」表单 POST，仅字段 t（JWT） */
+const wecomOrderShipForm = express.urlencoded({ extended: false });
 
 function escapeHtmlContractReview(s) {
   return String(s ?? '')
@@ -33,13 +58,17 @@ function escapeHtmlContractReview(s) {
     .replace(/"/g, '&quot;');
 }
 
-/** 合同审批页 CSP：允许展示模板 HTML（含样式/外链图片），禁止脚本与外链脚本 */
+/**
+ * 合同审批页 CSP。
+ * 企业微信/X5、部分 iOS WKWebView 对 script nonce 支持不完整，脚本会被静默拦截，表格缩放不生效；
+ * 此处仅对本页放开 `unsafe-inline`（正文仍为服务端下发的合同 HTML，本身已需可信来源）。
+ */
 const WECOM_CONTRACT_REVIEW_CSP = [
   "default-src 'none'",
   "img-src * data: blob: https: http:",
   "font-src * data: https: http:",
   "style-src 'unsafe-inline' https: http:",
-  "script-src 'none'",
+  "script-src 'unsafe-inline'",
   "base-uri 'none'",
   "form-action 'self'",
   "connect-src 'none'",
@@ -140,6 +169,75 @@ function wecomContractReviewPageHtml({ tokenEsc, blockReason, canAct, detailHtml
       </form></div>`
     : '';
   const detail = detailHtml || '';
+  const tableFitScript = `<script>(function(){
+function scaleContractTables(){
+var wrap=document.querySelector(".contract-html");
+if(!wrap)return;
+var vw=wrap.clientWidth||wrap.getBoundingClientRect().width;
+if(vw<48)return;
+var pad=4;
+var avail=Math.max(vw-pad,48);
+var tables=wrap.querySelectorAll("table");
+for(var i=0;i<tables.length;i++){
+var tbl=tables[i];
+var inner=tbl.closest(".wecom-table-scale-inner");
+var holder=inner&&inner.parentElement;
+if(!inner){
+holder=document.createElement("div");
+holder.className="wecom-table-scale";
+inner=document.createElement("div");
+inner.className="wecom-table-scale-inner";
+tbl.parentNode.insertBefore(holder,tbl);
+inner.appendChild(tbl);
+holder.appendChild(inner);
+}
+tbl.style.width="max-content";
+tbl.style.maxWidth="none";
+tbl.style.tableLayout="auto";
+inner.style.transform="none";
+inner.style.width="max-content";
+var tw=Math.max(tbl.scrollWidth,tbl.offsetWidth)||1;
+try{tw=Math.max(tw,tbl.getBoundingClientRect().width||0);}catch(e){}
+if(tw<1)tw=1;
+var s=tw>avail?(avail/tw):1;
+if(s>1)s=1;
+inner.style.width=tw+"px";
+inner.style.transform="scale("+s+")";
+var hScaled=0;
+try{
+var br=inner.getBoundingClientRect();
+hScaled=br&&isFinite(br.height)?br.height:0;
+}catch(e){}
+if(!(hScaled>0)){
+hScaled=(tbl.offsetHeight||0)*s;
+}
+var slack=4;
+holder.style.height=(Math.ceil(hScaled)+slack)+"px";
+}
+}
+function schedule(){
+scaleContractTables();
+requestAnimationFrame(function(){requestAnimationFrame(scaleContractTables);});
+setTimeout(scaleContractTables,80);
+setTimeout(scaleContractTables,320);
+}
+function bindImgLoads(){
+var wrap=document.querySelector(".contract-html");
+if(!wrap)return;
+var imgs=wrap.querySelectorAll("img");
+for(var k=0;k<imgs.length;k++){
+var im=imgs[k];
+if(im.complete)continue;
+im.addEventListener("load",schedule,{once:true,passive:true});
+}
+}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",schedule);
+else schedule();
+bindImgLoads();
+window.addEventListener("resize",scaleContractTables,{passive:true});
+window.addEventListener("orientationchange",schedule,{passive:true});
+window.addEventListener("load",schedule,{passive:true});
+})();</script>`;
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>合同审批</title>
 <style>
 *{box-sizing:border-box;} html,body{max-width:100%;overflow-x:hidden;}
@@ -149,22 +247,23 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Micros
 .detail{margin-bottom:12px;width:100%;max-width:100%;}
 .contract-panel{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 8px;width:100%;max-width:100%;overflow-x:hidden;}
 .muted{color:#94a3b8;font-size:13px;margin:0;}
-.contract-html{font-size:13px;line-height:1.6;color:#1e293b;width:100%;max-width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%;}
+.contract-html{font-size:13px;line-height:1.5;color:#1e293b;width:100%;max-width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%;}
 .contract-html img,svg{max-width:100%!important;height:auto!important;}
 .contract-html video{max-width:100%!important;height:auto!important;}
-.contract-html table{width:100%!important;max-width:100%!important;table-layout:fixed!important;border-collapse:collapse;}
+.wecom-table-scale{width:100%;overflow:hidden;line-height:0;margin:0 auto;}
+.wecom-table-scale-inner{display:inline-block;vertical-align:top;transform-origin:top left;line-height:normal;}
+.contract-html table{width:max-content!important;max-width:none!important;table-layout:auto!important;border-collapse:collapse;}
 .contract-html colgroup col{width:auto!important;}
 .contract-html td,.contract-html th{
   min-width:0;
-  max-width:100%;
   word-break:break-word;
   overflow-wrap:anywhere;
-  white-space:normal!important;
+  white-space:normal;
   vertical-align:top;
-  padding:5px 4px!important;
+  padding:4px 6px!important;
   font-size:inherit;
 }
-.contract-html td[style],.contract-html th[style]{width:auto!important;min-width:0!important;}
+.contract-html td[style],.contract-html th[style]{min-width:0!important;}
 .contract-html div,.contract-html section,.contract-html p{max-width:100%;}
 .contract-html pre{white-space:pre-wrap;word-break:break-word;max-width:100%;overflow-x:hidden;}
 .doc-frame-wrap{border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#fff;width:100%;max-width:100%;}
@@ -184,7 +283,7 @@ ${detail}
 ${reason}
 ${formSection}
 <p class="fine">链接仅当前审批人可用，请勿转发。打开即代表您确认在企业微信内身份可信。</p>
-</div></body></html>`;
+</div>${tableFitScript}</body></html>`;
 }
 
 function mapActiveStamps(rows) {
@@ -544,19 +643,36 @@ function escapeHtmlAttr(s) {
     .replace(/</g, '&lt;');
 }
 
-/** 企业微信卡片整块同 URL：先进此页展示摘要，仅页面底部按钮跳转真正发货接口，避免误点正文即发货 */
-function wecomOrderShipConfirmPageHtml({ orderNo, orderDetailText, canShip, shipHref, blockReason }) {
+/** 页面/API 绝对地址：优先与发卡片相同的公网根（.env），避免 OAuth redirect_uri 与可信域名不一致 */
+function wecomOrderShipPublicOrigin(req) {
+  const fromEnv = resolveWecomPublicBaseUrl();
+  if (fromEnv) return String(fromEnv).trim().replace(/\/+$/, '');
+  const host = req.get('host') || '';
+  const proto = req.protocol || 'http';
+  return `${proto}://${host}`.replace(/\/+$/, '');
+}
+
+/** 企业微信卡片整块同 URL：先进此页展示摘要，仅页面底部表单 POST 真正发货接口，避免误点正文即发货 */
+function wecomOrderShipConfirmPageHtml({ orderNo, orderDetailText, canShip, shipPost, blockReason, actorHint }) {
   const detailRaw =
     orderDetailText != null && String(orderDetailText).trim() !== ''
       ? String(orderDetailText)
       : `订单号：${orderNo || '—'}`;
   const detailHtml = `<div class="order-detail">${wecomShipEscapeHtml(detailRaw)}</div>`;
+  const actorHtml =
+    actorHint && String(actorHint).trim()
+      ? `<p class="actor-hint">发货操作人（企业微信已识别）：<strong>${wecomShipEscapeHtml(String(actorHint).trim())}</strong></p>`
+      : '';
   const reasonHtml = blockReason
     ? `<p class="hint-warn">${wecomShipEscapeHtml(blockReason)}</p>`
     : '';
-  const btnHtml = canShip
-    ? `<a class="btn-ship" href="${escapeHtmlAttr(shipHref)}">完成发货</a>`
-    : '';
+  const btnHtml =
+    canShip && shipPost?.actionUrl && shipPost?.token
+      ? `<form method="post" action="${escapeHtmlAttr(shipPost.actionUrl)}">
+  <input type="hidden" name="t" value="${escapeHtmlAttr(shipPost.token)}" />
+  <button type="submit" class="btn-ship">完成发货</button>
+</form>`
+      : '';
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -582,14 +698,17 @@ function wecomOrderShipConfirmPageHtml({ orderNo, orderDetailText, canShip, ship
         display: block; width: 100%; margin-top: 20px; padding: 14px 16px; border-radius: 10px;
         background: #16a34a; color: #fff !important; font-size: 16px; font-weight: 600; text-align: center;
         text-decoration: none; -webkit-tap-highlight-color: transparent;
+        border: none; cursor: pointer; font-family: inherit;
       }
       .btn-ship:active { opacity: 0.92; }
       .fine { margin: 14px 0 0; font-size: 12px; color: #94a3b8; line-height: 1.45; text-align: center; }
+      .actor-hint { margin: 0 0 14px; font-size: 13px; color: #475569; line-height: 1.5; text-align: center; }
     </style>
   </head>
   <body>
     <div class="card">
       <h1>确认发货</h1>
+      ${actorHtml}
       ${detailHtml}
       <p class="lead">请对照以上信息确认备货无误后，点击下方按钮将本单标记为「已发货」。打开本页不会自动发货。</p>
       ${reasonHtml}
@@ -600,9 +719,117 @@ function wecomOrderShipConfirmPageHtml({ orderNo, orderDetailText, canShip, ship
 </html>`;
 }
 
+/** 企业微信「提交/撤回财务审核」卡片：引导打开管理后台订单页（Hash 路由） */
+function wecomFinanceReviewLandingHtml({ orderNo, batchCount, ordersAdminHref }) {
+  const safeNo = wecomShipEscapeHtml(orderNo || '—');
+  const bc = Number(batchCount) || 1;
+  const batchLine =
+    bc > 1
+      ? `<p class="lead">本次相关订单共 <strong>${wecomShipEscapeHtml(String(bc))}</strong> 笔，以下为其中一笔订单号。</p>`
+      : '<p class="lead">请登录管理后台，在订单管理中完成财务审核。</p>';
+  const safeHref = escapeHtmlAttr(ordersAdminHref);
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>财务审核</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #f1f5f9; color: #0f172a; display: flex; align-items: center; justify-content: center;
+        padding: 24px; padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+      .card { background: #fff; border-radius: 12px; padding: 26px 22px 28px; max-width: 420px; width: 100%;
+        box-shadow: 0 4px 24px rgba(15,23,42,0.08); text-align: center; }
+      h1 { font-size: 18px; margin: 0 0 16px; }
+      .ord { font-size: 15px; color: #334155; margin: 0 0 18px; line-height: 1.5; }
+      .ord strong { color: #0f172a; }
+      .lead { margin: 0 0 18px; font-size: 14px; color: #475569; line-height: 1.55; text-align: left; }
+      .btn-open {
+        display: block; width: 100%; padding: 14px 16px; border-radius: 10px; background: #2563eb; color: #fff !important;
+        font-size: 16px; font-weight: 600; text-align: center; text-decoration: none; -webkit-tap-highlight-color: transparent;
+      }
+      .btn-open:active { opacity: 0.92; }
+      .fine { margin: 16px 0 0; font-size: 12px; color: #94a3b8; line-height: 1.45; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>订单财务审核</h1>
+      ${batchLine}
+      <p class="ord">订单号：<strong>${safeNo}</strong></p>
+      <a class="btn-open" href="${safeHref}">打开订单管理</a>
+      <p class="fine">若无法打开，请复制链接到已登录后台的浏览器，或联系管理员核对 PUBLIC_BASE_URL / ADMIN_PUBLIC_URL。</p>
+    </div>
+  </body>
+</html>`;
+}
+
 /** 自检：在手机/企业微信中打开，确认能访问到本服务（与「完成发货」同机同域） */
 router.get('/api/public/wecom-order-ship-probe', (req, res) => {
   res.type('text').send('wecom-ship-probe-ok');
+});
+
+/** 企业微信网页授权回调：换取 userid → 映射系统用户 → 写入 HttpOnly Cookie → 回到确认页 */
+router.get('/api/public/wecom-order-ship-oauth', async (req, res) => {
+  try {
+    const code = String(req.query.code || '').trim();
+    const state = String(req.query.state || '').trim();
+    if (!code || !state) {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomOrderShipResultHtml(false, '授权未完成', '请关闭本页后，从企业微信订单卡片重新进入。'));
+    }
+    let shipToken;
+    try {
+      ({ shipToken } = verifyWecomShipOAuthState(state));
+    } catch {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomOrderShipResultHtml(false, '授权已过期', '请从订单卡片重新打开发货链接。'));
+    }
+    const pool = getPool();
+    let wxUserId = '';
+    let mapped = null;
+    try {
+      const r = await exchangeWecomOAuthCodeForMappedUser(pool, code);
+      wxUserId = r.wxUserId;
+      mapped = r.mapped;
+    } catch (e) {
+      const isWx =
+        e?.code === 'WECOM_OAUTH_USERINFO_FAILED' ||
+        e?.code === 'WECOM_OAUTH_USERID_EMPTY' ||
+        e?.code === 'WECOM_TOKEN_ERROR';
+      const msg = isWx
+        ? '企业微信授权无效或已过期，请从订单卡片重新进入。'
+        : '无法获取企业微信身份，请稍后再试或联系管理员。';
+      return res.status(400).type('html').send(wecomOrderShipResultHtml(false, '身份验证失败', msg));
+    }
+    if (!mapped) {
+      const safe = wecomShipEscapeHtml(wxUserId || '未知');
+      return res.status(403).type('html').send(
+        wecomOrderShipResultHtml(
+          false,
+          '账号未绑定',
+          `当前企业微信账号（${safe}）未在系统中绑定员工。请在管理端「用户管理」中为对应员工填写企业微信 UserID 后再发货。`
+        )
+      );
+    }
+    const actorJwt = signWecomShipActorToken(mapped.userId, mapped.displayName);
+    appendWecomShipActorCookie(res, actorJwt);
+    const backBase = resolveWecomPublicBaseUrl() || wecomOrderShipPublicOrigin(req);
+    const back = `${String(backBase).trim().replace(/\/+$/, '')}/api/public/wecom-order-ship-confirm?t=${encodeURIComponent(shipToken)}`;
+    return res.redirect(302, back);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-order-ship-oauth]', e?.message || e);
+    return res
+      .status(500)
+      .type('html')
+      .send(wecomOrderShipResultHtml(false, '暂时无法处理', '服务器异常，请稍后再试。'));
+  }
 });
 
 router.get('/api/public/wecom-order-ship-confirm', async (req, res) => {
@@ -645,11 +872,82 @@ router.get('/api/public/wecom-order-ship-confirm', async (req, res) => {
     const definitions = await loadOrderFieldDefinitions(pool, { activeOnly: true });
     const enriched = await attachCustomerNamesToOrders(pool, [row]);
     const orderDetailText = formatWarehouseWecomOrderDetail(enriched[0], definitions);
-    const pubBase = String(process.env.PUBLIC_BASE_URL || '')
-      .trim()
-      .replace(/\/$/, '');
-    const origin = pubBase || `${req.protocol}://${req.get('host') || ''}`;
-    const shipHref = `${origin}/api/public/wecom-order-ship?t=${encodeURIComponent(token)}`;
+    const origin = wecomOrderShipPublicOrigin(req);
+    const shipPost = {
+      actionUrl: `${origin}/api/public/wecom-order-ship`,
+      token
+    };
+
+    let actorHint = '';
+    if (!isWecomShipOAuthDisabled()) {
+      const ck = readWecomShipActorCookie(req);
+      if (ck) {
+        try {
+          const a = verifyWecomShipActorToken(ck);
+          actorHint = a.displayName || '';
+        } catch {
+          actorHint = '';
+        }
+      }
+      if (!actorHint) {
+        try {
+          const oauthBase = resolveWecomPublicBaseUrl();
+          if (!oauthBase) {
+            return res
+              .status(503)
+              .type('html')
+              .send(
+                wecomOrderShipResultHtml(
+                  false,
+                  '无法完成企业微信授权',
+                  '服务器未配置 PUBLIC_BASE_URL（或 WECOM_PUBLIC_BASE_URL）。网页授权的 redirect_uri 必须与自建应用「可信域名」一致，不能使用请求头猜测的地址。请在服务器 .env 中设置为已备案且已在企微后台校验通过的 HTTPS 根地址（勿带末尾斜杠），例如 https://report.example.com ，保存后重启服务。'
+                )
+              );
+          }
+          const creds = await loadWecomAppCredentials(pool);
+          const redirectUri = `${String(oauthBase).trim().replace(/\/+$/, '')}/api/public/wecom-order-ship-oauth`;
+          const state = signWecomShipOAuthState(token);
+          const authUrl = buildWecomShipOAuthAuthorizeUrl({
+            corpId: creds.corpId,
+            agentId: creds.agentId,
+            redirectUri,
+            state
+          });
+          return res.redirect(302, authUrl);
+        } catch (e) {
+          if (e?.code === 'WECOM_NOT_CONFIGURED' || e?.code === 'JWT_SECRET_NOT_SET') {
+            return res
+              .status(503)
+              .type('html')
+              .send(
+                wecomOrderShipResultHtml(
+                  false,
+                  '无法验证身份',
+                  '企业微信未配置或 JWT 未设置。请检查 wecom_config，或在开发环境设置 WECOM_SHIP_OAUTH_DISABLED=true 临时跳过网页授权。'
+                )
+              );
+          }
+          throw e;
+        }
+      }
+    }
+
+    let warehouseShipBlocked = '';
+    if (!isWecomShipOAuthDisabled() && actorHint) {
+      const ck = readWecomShipActorCookie(req);
+      if (ck) {
+        try {
+          const { userId: actorUid } = verifyWecomShipActorToken(ck);
+          const okWh = await isWarehouseWecomShipActor(pool, actorUid);
+          if (!okWh) {
+            warehouseShipBlocked =
+              '当前账号不在系统配置的仓库收货人范围内，无法通过本页发货。若您应为仓库人员，请联系管理员核对「快捷仓库」或员工类别（仓库）与企业微信 UserID。';
+          }
+        } catch {
+          warehouseShipBlocked = '';
+        }
+      }
+    }
 
     if (status === 'shipped') {
       return res
@@ -659,8 +957,9 @@ router.get('/api/public/wecom-order-ship-confirm', async (req, res) => {
             orderNo,
             orderDetailText,
             canShip: false,
-            shipHref,
-            blockReason: '该订单已是「已发货」状态，无需重复操作。'
+            shipPost,
+            blockReason: '该订单已是「已发货」状态，无需重复操作。',
+            actorHint
           })
         );
     }
@@ -672,8 +971,9 @@ router.get('/api/public/wecom-order-ship-confirm', async (req, res) => {
             orderNo,
             orderDetailText,
             canShip: false,
-            shipHref,
-            blockReason: '当前订单状态不允许从本页发货（可能已撤回或未在「已审核」状态）。请在电脑端查看订单。'
+            shipPost,
+            blockReason: '当前订单状态不允许从本页发货（可能已撤回或未在「待发货」状态）。请在电脑端查看订单。',
+            actorHint
           })
         );
     }
@@ -683,9 +983,10 @@ router.get('/api/public/wecom-order-ship-confirm', async (req, res) => {
         wecomOrderShipConfirmPageHtml({
           orderNo,
           orderDetailText,
-          canShip: true,
-          shipHref,
-          blockReason: ''
+          canShip: !warehouseShipBlocked,
+          shipPost,
+          blockReason: warehouseShipBlocked,
+          actorHint
         })
       );
   } catch (e) {
@@ -700,10 +1001,20 @@ router.get('/api/public/wecom-order-ship-confirm', async (req, res) => {
   }
 });
 
-/** 企业微信确认页内「完成发货」：GET 即执行发货（JWT 链接，无需登录） */
-router.get('/api/public/wecom-order-ship', async (req, res) => {
+/** 旧版 GET 兼容：仅提示页，绝不修改订单（发货仅 POST） */
+router.get('/api/public/wecom-order-ship', (_req, res) => {
+  return res
+    .status(405)
+    .type('html')
+    .send(
+      wecomOrderShipResultHtml(false, '提示', '请从确认页点击「完成发货」按钮。')
+    );
+});
+
+/** 企业微信确认页内「完成发货」：POST；JWT 在表单字段 t（或 JSON body.t / 兼容 query.t），无需登录 */
+router.post('/api/public/wecom-order-ship', wecomOrderShipForm, async (req, res) => {
   try {
-    const token = String(req.query.t || '').trim();
+    const token = String(req.body?.t || req.query?.t || '').trim();
     if (!token) {
       return res
         .status(400)
@@ -732,11 +1043,56 @@ router.get('/api/public/wecom-order-ship', async (req, res) => {
         );
     }
     const pool = getPool();
-    const r = await performWecomQuickShip(pool, orderId);
-    if (!r.ok) {
-      const status = r.code === 'NOT_FOUND' ? 404 : 400;
-      return res.status(status).type('html').send(wecomOrderShipResultHtml(false, '无法发货', r.message));
+    let actorUserId = null;
+    if (!isWecomShipOAuthDisabled()) {
+      const ck = readWecomShipActorCookie(req);
+      if (!ck) {
+        return res
+          .status(403)
+          .type('html')
+          .send(
+            wecomOrderShipResultHtml(
+              false,
+              '无法发货',
+              '未通过企业微信身份验证。请从订单卡片重新进入确认页，完成授权后再点「完成发货」。'
+            )
+          );
+      }
+      try {
+        const a = verifyWecomShipActorToken(ck);
+        actorUserId = a.userId;
+      } catch {
+        return res
+          .status(403)
+          .type('html')
+          .send(
+            wecomOrderShipResultHtml(
+              false,
+              '无法发货',
+              '身份已过期，请从订单卡片重新进入并完成企业微信授权。'
+            )
+          );
+      }
+      const okWh = await isWarehouseWecomShipActor(pool, actorUserId);
+      if (!okWh) {
+        return res
+          .status(403)
+          .type('html')
+          .send(
+            wecomOrderShipResultHtml(
+              false,
+              '无权限发货',
+              '当前账号不在仓库收货人范围内。多人收到通知时，仅配置的仓库同事可点击发货；若身份有误请联系管理员维护「快捷仓库」或员工类别与企业微信 UserID。'
+            )
+          );
+      }
     }
+    const r = await performWecomQuickShip(pool, orderId, { actorUserId });
+    if (!r.ok) {
+      const statusCode = r.code === 'NOT_FOUND' ? 404 : 400;
+      return res.status(statusCode).type('html').send(wecomOrderShipResultHtml(false, '无法发货', r.message));
+    }
+    clearWecomShipActorCookie(res);
     return res
       .type('html')
       .send(wecomOrderShipResultHtml(true, '发货成功', '订单状态已更新为「已发货」。可关闭本页。'));
@@ -809,6 +1165,123 @@ router.get('/api/public/wecom-contract-review/document', async (req, res) => {
 });
 
 /** 企业微信打开：合同审批页（JWT 绑定合同 + 当前审批人） */
+router.get('/api/public/wecom-contract-review-oauth', async (req, res) => {
+  try {
+    const code = String(req.query.code || '').trim();
+    const state = String(req.query.state || '').trim();
+    if (!code || !state) {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '授权未完成', '请关闭本页后，从企业微信通知重新进入。'));
+    }
+    let reviewToken;
+    try {
+      ({ reviewToken } = verifyWecomContractReviewOAuthState(state));
+    } catch {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '授权已过期', '请从企业微信通知重新进入。'));
+    }
+    let tokenPayload;
+    try {
+      tokenPayload = verifyWecomContractReviewToken(reviewToken);
+    } catch {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '链接无效或已过期', '请从企业微信通知重新进入。'));
+    }
+    const pool = getPool();
+    const { wxUserId, mapped } = await exchangeWecomOAuthCodeForMappedUser(pool, code);
+    if (!mapped) {
+      const safe = wecomShipEscapeHtml(wxUserId || '未知');
+      return res.status(403).type('html').send(
+        wecomContractReviewResultHtml(
+          false,
+          '账号未绑定',
+          `当前企业微信账号（${safe}）未在系统中绑定员工。请联系管理员在「用户管理」中维护企业微信 UserID。`
+        )
+      );
+    }
+    if (Number(mapped.userId) !== Number(tokenPayload.reviewerUserId)) {
+      return res
+        .status(403)
+        .type('html')
+        .send(wecomContractReviewResultHtml(false, '无权审批', '当前登录企业微信账号不是该合同当前审批人。'));
+    }
+    const actorJwt = signWecomContractReviewActorToken(mapped.userId, mapped.displayName);
+    appendWecomContractReviewActorCookie(res, actorJwt);
+    const backBase = resolveWecomPublicBaseUrl() || wecomOrderShipPublicOrigin(req);
+    const back = `${String(backBase).trim().replace(/\/+$/, '')}/api/public/wecom-contract-review?t=${encodeURIComponent(reviewToken)}`;
+    return res.redirect(302, back);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-contract-review-oauth]', e?.message || e);
+    return res
+      .status(500)
+      .type('html')
+      .send(wecomContractReviewResultHtml(false, '暂时无法处理', '服务器异常，请稍后再试。'));
+  }
+});
+
+/** 企业微信：财务审核引导页（JWT 绑定首笔订单；跳转后台 Hash 路由「待财务审核」视图） */
+router.get('/api/public/wecom-finance-review', async (req, res) => {
+  try {
+    const token = String(req.query.t || '').trim();
+    if (!token) {
+      return res
+        .status(400)
+        .type('html')
+        .send(wecomOrderShipResultHtml(false, '无法打开', '链接无效，请从企业微信通知重新进入。'));
+    }
+    let orderId;
+    let batchCount = 1;
+    try {
+      const v = verifyWecomFinanceReviewToken(token);
+      orderId = v.orderId;
+      batchCount = v.batchCount;
+    } catch {
+      return res
+        .status(400)
+        .type('html')
+        .send(
+          wecomOrderShipResultHtml(false, '链接无效或已过期', '请从企业微信通知重新进入，或联系管理员核对服务器时间与 JWT 配置。')
+        );
+    }
+    const pool = getPool();
+    const [rows] = await pool.query('SELECT id, order_no FROM sales_orders WHERE id = ? LIMIT 1', [orderId]);
+    const row = rows?.[0];
+    const orderNo = row?.order_no != null ? String(row.order_no) : '';
+    const envAdmin = String(process.env.ADMIN_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+    const pubBase = String(resolveWecomPublicBaseUrl() || '').trim().replace(/\/+$/, '');
+    const adminRoot = envAdmin || pubBase;
+    if (!adminRoot) {
+      return res
+        .status(503)
+        .type('html')
+        .send(
+          wecomOrderShipResultHtml(
+            false,
+            '服务器未配置',
+            '未设置 PUBLIC_BASE_URL（或 WECOM_PUBLIC_BASE_URL），无法生成管理后台入口链接。'
+          )
+        );
+    }
+    const ordersAdminHref = `${adminRoot}/#/sales/orders?view=finance&focus_order_id=${orderId}`;
+    return res.type('html').send(wecomFinanceReviewLandingHtml({ orderNo, batchCount, ordersAdminHref }));
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-finance-review]', e?.message || e);
+    return res
+      .status(500)
+      .type('html')
+      .send(wecomOrderShipResultHtml(false, '暂时无法处理', '服务器异常，请稍后再试。'));
+  }
+});
+
+/** 企业微信打开：合同审批页（JWT 绑定合同 + 当前审批人） */
 router.get('/api/public/wecom-contract-review', async (req, res) => {
   try {
     const token = String(req.query.t || '').trim();
@@ -833,6 +1306,66 @@ router.get('/api/public/wecom-contract-review', async (req, res) => {
           )
         );
     }
+    if (!isWecomContractReviewOAuthDisabled()) {
+      const ck = readWecomContractReviewActorCookie(req);
+      if (!ck) {
+        const oauthBase = resolveWecomPublicBaseUrl();
+        if (!oauthBase) {
+          return res
+            .status(503)
+            .type('html')
+            .send(
+              wecomContractReviewResultHtml(
+                false,
+                '无法完成企业微信授权',
+                '服务器未配置 PUBLIC_BASE_URL（或 WECOM_PUBLIC_BASE_URL）。网页授权 redirect_uri 必须与企业微信应用可信域名一致。'
+              )
+            );
+        }
+        try {
+          const pool = getPool();
+          const creds = await loadWecomAppCredentials(pool);
+          const redirectUri = `${String(oauthBase).trim().replace(/\/+$/, '')}/api/public/wecom-contract-review-oauth`;
+          const state = signWecomContractReviewOAuthState(token);
+          const authUrl = buildWecomShipOAuthAuthorizeUrl({
+            corpId: creds.corpId,
+            agentId: creds.agentId,
+            redirectUri,
+            state
+          });
+          return res.redirect(302, authUrl);
+        } catch (e) {
+          if (e?.code === 'WECOM_NOT_CONFIGURED' || e?.code === 'JWT_SECRET_NOT_SET') {
+            return res
+              .status(503)
+              .type('html')
+              .send(
+                wecomContractReviewResultHtml(
+                  false,
+                  '无法验证身份',
+                  '企业微信未配置或 JWT 未设置。请检查 wecom_config，或在开发环境设置 WECOM_CONTRACT_REVIEW_OAUTH_DISABLED=true 临时跳过身份校验。'
+                )
+              );
+          }
+          throw e;
+        }
+      }
+      try {
+        const actor = verifyWecomContractReviewActorToken(ck);
+        if (Number(actor.userId) !== Number(payload.reviewerUserId)) {
+          return res
+            .status(403)
+            .type('html')
+            .send(wecomContractReviewResultHtml(false, '无权审批', '当前企业微信账号不是该合同当前审批人。'));
+        }
+      } catch {
+        clearWecomContractReviewActorCookie(res);
+        return res
+          .status(403)
+          .type('html')
+          .send(wecomContractReviewResultHtml(false, '身份已过期', '请从企业微信通知重新进入并完成身份验证。'));
+      }
+    }
     const pool = getPool();
     const { row, detailHtml } = await loadWecomContractReviewDetailPayload(pool, payload.contractId, token);
     if (!row) {
@@ -843,6 +1376,8 @@ router.get('/api/public/wecom-contract-review', async (req, res) => {
     }
     const tokenEsc = escapeHtmlContractReview(token);
     res.setHeader('Content-Security-Policy', WECOM_CONTRACT_REVIEW_CSP);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
     if (String(row.status) !== 'pending_review') {
       return res.type('html').send(
         wecomContractReviewPageHtml({
@@ -908,11 +1443,44 @@ router.post('/api/public/wecom-contract-review/submit', wecomContractReviewForm,
         .send(wecomContractReviewResultHtml(false, '链接无效或已过期', '请从企业微信通知重新进入。'));
     }
     const pool = getPool();
+    let actorUserId = Number(payload.reviewerUserId);
+    if (!isWecomContractReviewOAuthDisabled()) {
+      const ck = readWecomContractReviewActorCookie(req);
+      if (!ck) {
+        return res
+          .status(403)
+          .type('html')
+          .send(
+            wecomContractReviewResultHtml(
+              false,
+              '无法审批',
+              '未通过企业微信身份验证。请从通知重新进入后再提交。'
+            )
+          );
+      }
+      try {
+        const actor = verifyWecomContractReviewActorToken(ck);
+        actorUserId = Number(actor.userId);
+      } catch {
+        clearWecomContractReviewActorCookie(res);
+        return res
+          .status(403)
+          .type('html')
+          .send(wecomContractReviewResultHtml(false, '身份已过期', '请从企业微信通知重新进入并完成身份验证。'));
+      }
+      if (actorUserId !== Number(payload.reviewerUserId)) {
+        return res
+          .status(403)
+          .type('html')
+          .send(wecomContractReviewResultHtml(false, '无权审批', '当前企业微信账号不是该合同当前审批人。'));
+      }
+    }
     const applyRes = await applyContractReview(pool, {
       contractId: payload.contractId,
-      actorUserId: payload.reviewerUserId,
+      actorUserId,
       result,
-      comment
+      comment,
+      reviewerUserIdForCheck: payload.reviewerUserId
     });
     if (!applyRes.ok) {
       const msg =
@@ -930,11 +1498,11 @@ router.post('/api/public/wecom-contract-review/submit', wecomContractReviewForm,
     }
 
     let actorUsername = '';
-    const [ur] = await pool.query('SELECT username FROM users WHERE id = ? LIMIT 1', [payload.reviewerUserId]);
+    const [ur] = await pool.query('SELECT username FROM users WHERE id = ? LIMIT 1', [actorUserId]);
     actorUsername = ur?.[0]?.username != null ? String(ur[0].username) : '';
 
     await logOperation(pool, {
-      userId: payload.reviewerUserId,
+      userId: actorUserId,
       username: actorUsername,
       module: '销售合同',
       action: '审核合同(企业微信)',
@@ -950,6 +1518,7 @@ router.post('/api/public/wecom-contract-review/submit', wecomContractReviewForm,
     });
 
     if (applyRes.variant === 'progressed') {
+      clearWecomContractReviewActorCookie(res);
       return res
         .type('html')
         .send(
@@ -965,6 +1534,7 @@ router.post('/api/public/wecom-contract-review/submit', wecomContractReviewForm,
       result === 'approved'
         ? '合同已标记为「已通过」。创建人将收到通知。'
         : '合同已驳回，创建人将收到通知与驳回意见。';
+    clearWecomContractReviewActorCookie(res);
     return res.type('html').send(wecomContractReviewResultHtml(true, okTitle, okMsg));
   } catch (e) {
     // eslint-disable-next-line no-console

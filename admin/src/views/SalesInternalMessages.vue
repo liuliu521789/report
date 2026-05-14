@@ -103,6 +103,7 @@ import {
   deleteSalesMessage,
   batchDeleteSalesMessages
 } from '../api';
+import { resolveInternalMessageRoute } from '../utils/internalMessageNavigate';
 
 export default {
   name: 'SalesInternalMessages',
@@ -232,7 +233,16 @@ export default {
           this.loadMessages();
         } catch {
           /* ignore */
+          return;
         }
+      }
+      const target = resolveInternalMessageRoute(m);
+      if (!target) return;
+      try {
+        await this.$router.push(target);
+      } catch (e) {
+        if (e && e.name === 'NavigationDuplicated') return;
+        throw e;
       }
     },
     async deleteOne(m) {

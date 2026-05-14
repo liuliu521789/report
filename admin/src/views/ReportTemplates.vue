@@ -60,7 +60,7 @@
         </el-table-column>
         <el-table-column label="操作" width="260">
           <template #default="{ row }">
-            <el-button link type="primary" @click="goEditReport(row)" icon=Edit>编辑报告</el-button>
+            <el-button link type="primary" @click="goEditReport(row)" icon=Edit>编辑模板</el-button>
             <el-button link type="danger" @click="onDelete(row)" icon=Delete>删除</el-button>
           </template>
         </el-table-column>

@@ -242,18 +242,29 @@ async function dumpDatabase(destDir) {
   const db = process.env.MYSQL_DATABASE;
   if (!db) throw new Error('MYSQL_DATABASE is required for backup');
   const dumpPath = path.join(destDir, 'db.sql');
+  const dumpCmd = String(process.env.MYSQLDUMP_PATH || 'mysqldump').trim() || 'mysqldump';
   const args = ['--routines', '--triggers', '--single-transaction', '-h', String(host), '-P', String(port), '-u', String(user)];
   if (pass) args.push(`-p${pass}`);
   args.push(String(db));
   const out = fs.createWriteStream(dumpPath, { encoding: 'utf8' });
   await new Promise((resolve, reject) => {
-    const proc = spawn('mysqldump', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(dumpCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     proc.stdout.pipe(out);
     proc.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
     });
-    proc.on('error', reject);
+    proc.on('error', (err) => {
+      if (err && err.code === 'ENOENT') {
+        reject(
+          new Error(
+            '找不到 mysqldump（ENOENT）：未安装客户端、bin 未加入 PATH，或 mysqldump.exe 被改名/删除。可将 MySQL bin 加入运行 Node 的 PATH 并重启；或在 .env 设置 MYSQLDUMP_PATH 为 mysqldump.exe 的完整路径。'
+          )
+        );
+        return;
+      }
+      reject(err);
+    });
     proc.on('close', (code) => {
       if (code !== 0) {
         reject(new Error(stderr || `mysqldump exited with code ${code}`));
@@ -687,9 +698,10 @@ async function runBackup(options = {}) {
   const triggerType = String(options.triggerType || 'manual');
   const actorUserId = Number(options.actorUserId || 0) || null;
   if (isBackingUp) throw new Error('Backup already in progress');
-  const jobId = await createBackupJob({ jobType: 'backup', triggerType, actorUserId, targetBackupId: null });
   isBackingUp = true;
+  let jobId = 0;
   try {
+    jobId = await createBackupJob({ jobType: 'backup', triggerType, actorUserId, targetBackupId: null });
     const backup = await createBackupPackage();
     const cleanup = await cleanupExpiredBackups();
     await finishBackupJob(jobId, {
@@ -700,13 +712,20 @@ async function runBackup(options = {}) {
     });
     return backup;
   } catch (e) {
-    await finishBackupJob(jobId, {
-      status: 'failed',
-      errorMessage: String(e?.message || e || 'backup failed')
-    });
+    const msg = String(e?.message || e || 'backup failed');
+    if (jobId) {
+      try {
+        await finishBackupJob(jobId, {
+          status: 'failed',
+          errorMessage: msg
+        });
+      } catch {
+        /* DB 不可用时避免掩盖原始错误 */
+      }
+    }
     await sendBackupFailureAlert({
       source: triggerType,
-      message: String(e?.message || e || 'backup failed'),
+      message: msg,
       level: 'error'
     });
     throw e;

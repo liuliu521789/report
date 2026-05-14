@@ -39,10 +39,11 @@
             <li><strong>技术支持联系：</strong>维护技术工程师微信号，供全员在本页底部一键复制。</li>
           </ul>
         </el-collapse-item>
-        <el-collapse-item title="安全日志与系统安全（仅超级管理员）" name="audit">
+        <el-collapse-item title="安全中心（仅超级管理员）" name="audit">
           <ul class="guide-list">
             <li>登录日志、操作日志用于审计，通常不可删改。</li>
-            <li>错误日志供技术人员排查；系统安全里可配置密码策略、锁定与超时等。</li>
+            <li>错误日志供技术人员排查；系统安全里可配置密码策略、锁定与超时、备份 Webhook 等。</li>
+            <li>备份与恢复：一键备份数据库与 uploads 包，支持校验、下载与恢复（与「下载 SQL 备份」入口不同）。</li>
           </ul>
         </el-collapse-item>
         <el-collapse-item title="我的操作日志" name="mylogs">

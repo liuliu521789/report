@@ -26,6 +26,8 @@ SELECT 'sales_internal_models' AS table_name, COUNT(*) AS row_count FROM sales_i
 SELECT 'sales_order_field_definitions' AS table_name, COUNT(*) AS row_count FROM sales_order_field_definitions;
 SELECT 'wecom_notify_recipients' AS table_name, COUNT(*) AS row_count FROM wecom_notify_recipients;
 SELECT 'wecom_notify_templates' AS table_name, COUNT(*) AS row_count FROM wecom_notify_templates;
+SELECT 'wecom_notify_jobs' AS table_name, COUNT(*) AS row_count FROM wecom_notify_jobs;
+SELECT 'wecom_callback_events' AS table_name, COUNT(*) AS row_count FROM wecom_callback_events;
 SELECT 'report_styles' AS table_name, COUNT(*) AS row_count FROM report_styles;
 SELECT 'report_image_library' AS table_name, COUNT(*) AS row_count FROM report_image_library;
 
@@ -33,7 +35,7 @@ SELECT 'report_image_library' AS table_name, COUNT(*) AS row_count FROM report_i
 SELECT * FROM company_settings WHERE id = 1;
 SELECT * FROM system_security_settings WHERE id = 1;
 SELECT * FROM support_contact_settings WHERE id = 1;
-SELECT id, corp_id, agent_id, remark, receive_token, updated_at FROM wecom_config WHERE id = 1;
+SELECT id, corp_id, agent_id, remark, updated_at FROM wecom_config WHERE id = 1;
 SELECT * FROM sales_settings WHERE id = 1;
 
 -- Stamps preview (for "company stamp management")

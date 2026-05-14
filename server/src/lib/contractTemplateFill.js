@@ -57,6 +57,24 @@ function ensureSalesContractTitleBelowCompany(html, vars = {}) {
   return s;
 }
 
+/** 管理端可视化默认卖方/抬头名；存进模板后若未改，生成合同时应换成公司信息里的名称 */
+const DEMO_SELLER_COMPANY_ZH_MARKERS = ['开封物源化工有限公司（示例）', '开封物源化工有限公司'];
+
+/**
+ * 占位符替换后，将正文中仍残留的示例卖方公司名统一为公司信息中的中文名称。
+ * @param {string} html fillContractTemplate 之后
+ * @param {string} companyNameZh company_settings.company_name_zh（trim 后）
+ */
+export function applyCompanySellerNameToFilledContract(html, companyNameZh) {
+  const official = String(companyNameZh || '').trim();
+  if (!official) return String(html ?? '');
+  let s = String(html ?? '');
+  for (const needle of DEMO_SELLER_COMPANY_ZH_MARKERS) {
+    if (needle && needle !== official) s = s.split(needle).join(official);
+  }
+  return s;
+}
+
 /** @param {string} html @param {Record<string, string|number>} vars */
 export function fillContractTemplate(html, vars) {
   let s = String(html ?? '');

@@ -12,6 +12,22 @@ function normHeaderCell(s) {
   return normText(s).replace(/\(/g, '（').replace(/\)/g, '）');
 }
 
+/**
+ * 模板正文里订单明细是 `{{ORDER_LINES}}` 文本占位符；DOM 子节点只有元素，`children` 会跳过该文本，
+ * 解析器永远找不到「订单表」而返回 null。解析前换成与 `isOrderLinesTable` 一致的空表；保存时
+ * `visualToBodyHtml` 仍会写回 `{{ORDER_LINES}}`。
+ */
+function stubOrderLinesTableHtmlForParse() {
+  const CELL = 'border:1px solid #000;padding:4px 6px;text-align:center';
+  const CELL_NW = `${CELL};white-space:nowrap`;
+  const TABLE_STYLE =
+    'width:100%;border-collapse:collapse;border:1px solid #000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35';
+  const ths = CONTRACT_ORDER_LINE_HEADERS.map((h, i) => `<th style="${i < 2 ? CELL_NW : CELL}">${h}</th>`).join('');
+  const tds = CONTRACT_ORDER_LINE_HEADERS.map((_, i) => `<td style="${i < 2 ? CELL_NW : CELL}"></td>`).join('');
+  const totalRow = `<tr><td style="${CELL}">总金额</td><td colspan="8" style="${CELL};text-align:left">{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）</td></tr>`;
+  return `<table style="${TABLE_STYLE}"><thead><tr>${ths}</tr></thead><tbody><tr>${tds}</tr>${totalRow}</tbody></table>`;
+}
+
 /** 跳过空段落（模板生成/富文本常在条款标题与表格之间插入空 p），避免无法识别为可视化版式 */
 function indexAfterEmptyParagraphs(kids, start) {
   let j = start;
@@ -218,8 +234,9 @@ function splitHeaderTitleLine(line) {
  * 若版式不匹配（例如旧版推荐模板）返回 null。
  */
 export function parseContractHtmlToVisual(html, base) {
-  const raw = String(html || '').trim();
-  if (!raw || !base) return null;
+  const rawTrim = String(html || '').trim();
+  if (!rawTrim || !base) return null;
+  const raw = rawTrim.replace(/\{\{\s*ORDER_LINES\s*\}\}/g, stubOrderLinesTableHtmlForParse());
 
   let doc;
   try {

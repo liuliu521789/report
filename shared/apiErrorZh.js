@@ -35,6 +35,13 @@ export const API_ERROR_ZH = {
   NO_FILES: '未选择文件',
   MISSING_FILE: '未上传文件',
   INVALID_FILE_TYPE: '文件类型不正确（仅支持 .docx）',
+  INVALID_FILE_NAME: '文件名不符合规范或不在允许列表内',
+  INVALID_TARGET_NAME: '保存文件名不符合规范',
+  INVALID_XLSX: '不是有效的 Excel 文件（.xlsx）',
+  PATH_OUTSIDE_PUBLIC: '路径非法',
+  YEAR_FILE_MISMATCH: 'Excel 文件名中的年份与所选目标年份不一致',
+  SHEET_TOO_LARGE: '某个工作表数据量过大，无法导入，请拆分或联系管理员',
+  EMPTY_FILE: '文件为空或无法读取',
   NO_FIELDS_FOUND: '未能从文档中识别出可用的模板字段',
   PARSE_FAILED: '文档解析失败，请检查模板格式',
   FILE_TOO_LARGE: '单个文件过大，请压缩或拆分后重试',
@@ -86,8 +93,11 @@ export const API_ERROR_ZH = {
   CONCURRENT_UPDATE: '记录已被他人修改，请刷新后重试',
   DUPLICATE_CUSTOMER_CODE: '客户编号重复',
 
+  DUPLICATE_YEAR: '该年份台账已存在',
+  YEAR_NOT_FOUND: '所选年份不存在',
+  SHEET_NOT_FOUND: '工作簿中未找到需要导入的工作表，请核对表名',
+
   MAPS_TO_CONFLICT: '该业务映射已被其他启用字段占用',
-  BAD_MAPS_TO: '无效的业务映射',
 
   TRANSLATE_FAILED: '翻译服务暂时不可用',
 

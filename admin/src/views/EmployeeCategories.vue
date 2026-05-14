@@ -2,7 +2,7 @@
   <div class="categories-page">
     <div class="toolbar">
       <el-button type="primary" @click="openCreate" icon=Plus>新增类别</el-button>
-      <span class="hint">内置「品管」「客服」「董事长」不可删除；可新增其他类别并配置默认权限。</span>
+      <span class="hint">可编辑任意类别的名称、排序、双因素与默认权限；删除前需无员工绑定此类别。</span>
     </div>
 
     <el-table v-loading="loading" :data="items" border class="desktop-table">
@@ -13,13 +13,7 @@
       <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
           <el-button link @click="openEdit(row)" icon=Edit>编辑</el-button>
-          <el-button
-            link
-            :disabled="row.code === 'qc' || row.code === 'cs' || row.code === 'chairman'"
-            @click="onDelete(row)"
-           icon=Delete>
-            删除
-          </el-button>
+          <el-button link @click="onDelete(row)" icon=Delete>删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -33,13 +27,7 @@
         <div class="mobile-line"><span>排序</span><span>{{ row.sortOrder }}</span></div>
         <div class="mobile-actions">
           <el-button size="small" @click="openEdit(row)" icon=Edit>编辑</el-button>
-          <el-button
-            size="small"
-            :disabled="row.code === 'qc' || row.code === 'cs' || row.code === 'chairman'"
-            @click="onDelete(row)"
-           icon=Delete>
-            删除
-          </el-button>
+          <el-button size="small" @click="onDelete(row)" icon=Delete>删除</el-button>
         </div>
       </div>
       <el-empty v-if="!items.length && !loading" description="暂无类别" />
@@ -191,7 +179,6 @@ export default {
       } catch (e) {
         const code = e?.response?.data?.error;
         if (code === 'CATEGORY_IN_USE') this.$message.error('仍有员工绑定此类别，无法删除');
-        else if (code === 'CANNOT_DELETE_BUILTIN') this.$message.error('内置类别不可删除');
         else this.$message.error(code || '删除失败');
       }
     }

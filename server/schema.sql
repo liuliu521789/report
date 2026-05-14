@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS employee_categories (
 INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor, is_builtin) VALUES
 ('品管', 'qc', 1, CAST('{"reports":{"list":true,"view":true,"create":true,"edit":true,"void":true,"activate":true,"bulkPass":true,"bulkVoid":true,"bulkActivate":true,"bulkDelete":true,"previewPrint":true,"seals":true},"qrcodes":{"list":true,"create":true,"viewDetail":true,"delete":true},"templates":{"use":true},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false}}' AS JSON), 0, 1),
 ('客服', 'cs', 2, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false}}' AS JSON), 0, 1),
-('董事长', 'chairman', 3, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false,"export":true,"chairmanApprove":true,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":true},"stamps":{"manage":false,"view":true},"company":{"manage":false,"view":true},"audit":{"viewLogin":true,"viewOperations":true,"viewErrors":true,"exportAudit":true}}' AS JSON), 1, 1);
+('董事长', 'chairman', 3, CAST('{"reports":{"list":true,"view":true,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":true,"seals":false,"export":true,"chairmanApprove":true,"fieldEdit":{}},"qrcodes":{"list":true,"create":false,"viewDetail":true,"delete":false},"templates":{"use":true},"stamps":{"manage":false,"view":true},"company":{"manage":false,"view":true},"audit":{"viewLogin":true,"viewOperations":true,"viewErrors":true,"exportAudit":true}}' AS JSON), 1, 1),
+('跟单', 'documentary', 14, CAST('{"reports":{"list":false,"view":false,"create":false,"edit":false,"void":false,"activate":false,"bulkPass":false,"bulkVoid":false,"bulkActivate":false,"bulkDelete":false,"previewPrint":false,"seals":false,"export":false,"chairmanApprove":false,"fieldEdit":{}},"qrcodes":{"list":false,"create":false,"viewDetail":false,"delete":false},"templates":{"use":false},"stamps":{"manage":false,"view":false},"company":{"manage":false,"view":false},"audit":{"viewLogin":false,"viewOperations":false,"viewErrors":false,"exportAudit":false},"wecom":{"manage":false,"send":false},"order_management":{"order_input":true,"order_query":true,"order_query_all":true,"order_edit":true,"order_submit":true,"order_withdraw":true,"order_status_finance":false,"order_status_warehouse":false,"order_ship":false,"order_view_status_logs":true,"order_cancel":true,"order_delete":true,"order_field_config":true},"contract_management":{"template_manage":true,"contract_generate":true,"contract_submit":true,"contract_review":false,"contract_view":true,"contract_edit":false,"contract_delete":false,"contract_edit_approved":false,"contract_delete_approved":false,"contract_version_view":true,"contract_multi_approve":true},"process_management":{"view_flow":true},"data_management":{"data_export":true,"data_export_all":true},"customer_management":{"view":true,"create":true,"edit":true,"disable":true}}' AS JSON), 0, 1);
 
 -- 组织架构（钉钉式部门树）
 CREATE TABLE IF NOT EXISTS departments (
@@ -135,10 +136,10 @@ CREATE TABLE IF NOT EXISTS wecom_config (
   id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
   corp_id VARCHAR(32) NOT NULL DEFAULT '',
   agent_id INT UNSIGNED NOT NULL DEFAULT 0,
-  corp_secret VARCHAR(255) NOT NULL DEFAULT '',
+  corp_secret VARCHAR(2048) NOT NULL DEFAULT '',
   remark VARCHAR(255) NULL,
-  receive_token VARCHAR(64) NOT NULL DEFAULT '',
-  encoding_aes_key VARCHAR(64) NOT NULL DEFAULT '',
+  receive_token VARCHAR(2048) NOT NULL DEFAULT '',
+  encoding_aes_key VARCHAR(2048) NOT NULL DEFAULT '',
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
 ) ENGINE=InnoDB;
 
@@ -167,6 +168,40 @@ CREATE TABLE IF NOT EXISTS wecom_notify_templates (
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
   UNIQUE KEY uk_wecom_notify_templates_code (code)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS wecom_notify_jobs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_type VARCHAR(64) NOT NULL,
+  template_code VARCHAR(64) NOT NULL,
+  to_user TEXT NOT NULL,
+  variables_json JSON NOT NULL,
+  biz_type VARCHAR(64) NULL,
+  biz_id BIGINT UNSIGNED NULL,
+  status ENUM('pending','sending','sent','failed','dead') NOT NULL DEFAULT 'pending',
+  retry_count INT NOT NULL DEFAULT 0,
+  max_retries INT NOT NULL DEFAULT 5,
+  next_retry_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  last_error TEXT NULL,
+  wecom_response_json JSON NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  sent_at DATETIME(3) NULL,
+  PRIMARY KEY (id),
+  KEY idx_wecom_jobs_status_next (status, next_retry_at),
+  KEY idx_wecom_jobs_biz (biz_type, biz_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS wecom_callback_events (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  msg_type VARCHAR(64) NULL,
+  event_type VARCHAR(128) NULL,
+  from_user VARCHAR(128) NULL,
+  raw_xml MEDIUMTEXT NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_wecom_callback_created (created_at),
+  KEY idx_wecom_callback_event (event_type)
 ) ENGINE=InnoDB;
 
 -- Reports (cannot delete, only void)
@@ -286,7 +321,7 @@ CREATE TABLE IF NOT EXISTS system_security_settings (
   CONSTRAINT fk_security_settings_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
-INSERT IGNORE INTO system_security_settings (id, settings_json) VALUES (1, CAST('{"minPasswordLength":6,"bannedPasswords":["123456","admin","password","qwerty","111111","12345678","888888","666666"],"idleTimeoutMinutes":60,"loginFailMaxAttempts":5,"loginLockMinutes":60,"confirmSensitiveOperations":true,"errorLogRetentionDays":180}' AS JSON));
+INSERT IGNORE INTO system_security_settings (id, settings_json) VALUES (1, CAST('{"minPasswordLength":6,"bannedPasswords":["123456","admin","password","qwerty","111111","12345678","888888","666666"],"idleTimeoutMinutes":60,"loginFailMaxAttempts":5,"loginLockMinutes":60,"confirmSensitiveOperations":true,"errorLogRetentionDays":180,"enforceTwoFactorForSuperAdmin":false}' AS JSON));
 
 CREATE TABLE IF NOT EXISTS login_logs (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -364,3 +399,68 @@ CREATE TABLE IF NOT EXISTS report_styles (
     FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
+-- 年度品质管控台账（按年 + 明细；与 ensureSchema.ensureQcYearbookDataTables 一致）
+CREATE TABLE IF NOT EXISTS qc_yearbook_years (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  year SMALLINT UNSIGNED NOT NULL,
+  remark VARCHAR(255) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_qc_yearbook_years_year (year)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS qc_yearbook_records (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  year_id BIGINT UNSIGNED NOT NULL,
+  category VARCHAR(128) NOT NULL DEFAULT '',
+  subject VARCHAR(512) NOT NULL DEFAULT '',
+  body MEDIUMTEXT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_qc_yearbook_records_year (year_id),
+  KEY idx_qc_yearbook_records_year_sort (year_id, sort_order, id),
+  CONSTRAINT fk_qc_yearbook_records_year FOREIGN KEY (year_id) REFERENCES qc_yearbook_years(id) ON DELETE CASCADE,
+  CONSTRAINT fk_qc_yearbook_records_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_qc_yearbook_records_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 「成品」工作表结构化行（与 migrations/047 一致）
+CREATE TABLE IF NOT EXISTS qc_yearbook_finished_product_rows (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  year_id BIGINT UNSIGNED NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  inspection_num INT UNSIGNED NOT NULL COMMENT '年度内检验序号，创建后不变',
+  inspection_id VARCHAR(32) NOT NULL COMMENT '检验ID：统计年度-序号',
+  product_model VARCHAR(128) NOT NULL DEFAULT '',
+  product_batch_no VARCHAR(64) NOT NULL DEFAULT '',
+  barrel_count DECIMAL(14, 4) NULL,
+  initial_batch_kg DECIMAL(14, 4) NULL,
+  inspection_batch_kg DECIMAL(14, 4) NULL,
+  appearance VARCHAR(64) NULL,
+  color_fe_co VARCHAR(32) NULL,
+  solid_content_pct DECIMAL(10, 4) NULL,
+  viscosity_s_25c DECIMAL(12, 4) NULL,
+  acid_value_mgkoh_g DECIMAL(12, 4) NULL,
+  tolerance_g_ml DECIMAL(14, 6) NULL,
+  nco_content_pct DECIMAL(10, 4) NULL,
+  inspection_conclusion VARCHAR(64) NULL,
+  created_by BIGINT UNSIGNED NULL,
+  updated_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_qc_yearbook_fp_inspection_id (inspection_id),
+  UNIQUE KEY uk_qc_yearbook_fp_year_inspnum (year_id, inspection_num),
+  KEY idx_qc_yearbook_fp_year (year_id),
+  KEY idx_qc_yearbook_fp_year_sort (year_id, sort_order, id),
+  KEY idx_qc_yearbook_fp_model_batch (year_id, product_model(32), product_batch_no(16)),
+  CONSTRAINT fk_qc_yearbook_fp_year FOREIGN KEY (year_id) REFERENCES qc_yearbook_years(id) ON DELETE CASCADE,
+  CONSTRAINT fk_qc_yearbook_fp_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_qc_yearbook_fp_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO qc_yearbook_years (year, remark) VALUES (2026, '系统预置');

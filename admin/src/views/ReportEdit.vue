@@ -2,7 +2,7 @@
   <div class="report-edit-root">
     <div class="toolbar">
       <div>
-        <el-button @click="$router.push('/reports')" icon=Back>返回</el-button>
+        <el-button @click="goBackFromEdit" icon=Back>返回</el-button>
       </div>
       <div class="toolbar-right">
         <span class="toolbar-label">判定结论</span>
@@ -21,15 +21,15 @@
           :disabled="!canSaveAsTemplate"
           @click="openSaveTemplate"
         >
-          {{ designerMode ? '保存报告样式' : '保存为模板' }}
+          {{ designerMode ? '保存报告样式' : '另存为新模板' }}
         </el-button>
         <el-button
-          v-if="isNew ? perm('reports', 'create') : perm('reports', 'edit')"
+          v-if="primarySaveIsTemplate ? perm('reports', 'create') && perm('templates', 'use') : isNew ? perm('reports', 'create') : perm('reports', 'edit')"
           type="primary"
           :loading="saving"
           @click="save"
          icon=Check>
-          保存报告
+          {{ primarySaveIsTemplate ? '保存模板' : '保存报告' }}
         </el-button>
       </div>
     </div>
@@ -44,12 +44,20 @@
     />
 
     <el-alert
-      v-if="isNew"
+      v-if="isNew && !primarySaveIsTemplate"
       type="info"
       show-icon
       :closable="false"
       class="top-alert"
       title="新增报告：可选模板套用，或空白报告；版式与打印预览一致"
+    />
+    <el-alert
+      v-if="primarySaveIsTemplate"
+      type="info"
+      show-icon
+      :closable="false"
+      class="top-alert"
+      title="正在编辑已有报告模板：主按钮「保存模板」会更新该模板的版式与字段默认值，不会创建业务报告；「另存为新模板」可复制为一份新模板。"
     />
     <el-alert
       v-if="designerMode"
@@ -508,7 +516,7 @@
       </div>
     </div>
 
-    <el-dialog title="保存为模板" v-model="tplDialog" width="520px">
+    <el-dialog title="另存为新模板" v-model="tplDialog" width="520px">
       <el-form :model="tplForm" label-width="110px">
         <el-form-item label="模板名称">
           <el-input v-model="tplForm.name" placeholder="例如：常规化工检测报告模板" />
@@ -523,7 +531,7 @@
       </el-form>
       <template #footer>
         <el-button @click="tplDialog = false" icon=Close>取消</el-button>
-        <el-button type="primary" :loading="tplSaving" @click="saveAsTemplate" icon=Check>保存</el-button>
+        <el-button type="primary" :loading="tplSaving" @click="saveAsTemplate" icon=Check>确认另存</el-button>
       </template>
     </el-dialog>
 
@@ -632,6 +640,8 @@ export default {
       styleEditDialog: false,
       styleEditSaving: false,
       styleEditForm: { id: null, name: '', description: '' },
+      /** 从报告模板管理进入 /reports/new?templateId= 时，主保存走更新模板而非创建报告 */
+      editingExistingTemplate: false,
       translateFallbackToZh: true,
       company: {
         companyNameZh: '',
@@ -666,6 +676,15 @@ export default {
     },
     designerMode() {
       return this.isNew && String(this.$route?.query?.designer || '') === '1';
+    },
+    /** 模板管理「编辑」入口：新建页且仍绑定从 URL 带入的模板 */
+    primarySaveIsTemplate() {
+      return (
+        this.isNew &&
+        this.editingExistingTemplate &&
+        !!this.form.templateId &&
+        Number(this.$route?.query?.templateId) === Number(this.form.templateId)
+      );
     },
     canSaveAsTemplate() {
       return (this.form.fields || []).length > 0;
@@ -756,6 +775,7 @@ export default {
       this.loadSuggestedReportNo();
       const queryTemplateId = Number(this.$route?.query?.templateId);
       if (Number.isFinite(queryTemplateId) && queryTemplateId > 0) {
+        this.editingExistingTemplate = true;
         this.selectedTemplateId = queryTemplateId;
         await this.applyTemplateById(queryTemplateId, { skipConfirm: true });
       }
@@ -1140,6 +1160,24 @@ export default {
         f.sortOrder = (idx + 1) * 10;
       });
     },
+    /** 保存前统一排序与检验表结构，供报告与模板落库共用 */
+    normalizePaperForSave() {
+      this.reindexSortOrders();
+      const tf = this.inspectionTable;
+      if (tf) {
+        tf.fieldValue = {
+          columnLabels: tf.fieldValue.columnLabels || this.defaultColumnLabels(),
+          rows: tf.fieldValue.rows || []
+        };
+      }
+    },
+    goBackFromEdit() {
+      if (this.isNew && this.editingExistingTemplate && this.form.templateId) {
+        this.$router.push('/report-templates');
+        return;
+      }
+      this.$router.push('/reports');
+    },
     getSealImage(sealType) {
       const url = this.appliedSeals?.[sealType]?.imageUrl || '';
       if (!url) return '';
@@ -1299,19 +1337,11 @@ export default {
     },
     async saveTemplate() {
       if (!this.form.templateId) return;
-      const name = String(this.templateForm.name || '').trim();
-      if (!name) {
-        this.$message.warning('请输入模板名称');
-        return;
-      }
       this.templateSaving = true;
       try {
-        const { template } = await getTemplate(this.form.templateId);
-        await updateTemplate(this.form.templateId, {
-          name,
-          description: String(this.templateForm.description || '').trim() || null,
-          fields: template.fields || []
-        });
+        const body = this.buildTemplateUpsertFromForm();
+        if (!body) return;
+        await updateTemplate(this.form.templateId, body);
         this.$message.success('模板已更新');
         this.templateEditMode = false;
         await this.loadTemplates();
@@ -1410,21 +1440,42 @@ export default {
       this.tplDialog = true;
       this.tplForm = { name: '', description: '', includeValues: false };
     },
+    buildTemplateUpsertFromForm() {
+      const name = String(this.templateForm.name || '').trim();
+      if (!name) {
+        this.$message.warning('请输入模板名称');
+        return null;
+      }
+      if (!this.form.templateId) return null;
+      if (!(this.form.fields || []).length) {
+        this.$message.warning('当前没有可保存的模板字段');
+        return null;
+      }
+      this.normalizePaperForSave();
+      return {
+        name,
+        description: String(this.templateForm.description || '').trim() || null,
+        fields: this.form.fields.map((f) => {
+          const en = String(f.fieldLabelEn || '').trim();
+          return {
+            fieldKey: f.fieldKey,
+            fieldLabel: f.fieldLabel,
+            fieldLabelEn: en || undefined,
+            fieldType: f.fieldType,
+            defaultValue: f.fieldValue,
+            sortOrder: f.sortOrder || 0
+          };
+        })
+      };
+    },
     buildPayload() {
-      this.reindexSortOrders();
+      this.normalizePaperForSave();
       const prod = this.form.fields.find((f) => f.fieldKey === 'product_name');
       const batch = this.form.fields.find((f) => f.fieldKey === 'batch_no');
       const productName = String(prod?.fieldValue?.zh || '').trim();
       if (!productName) {
         this.$message.warning('请填写产品名称');
         return null;
-      }
-      const tf = this.inspectionTable;
-      if (tf) {
-        tf.fieldValue = {
-          columnLabels: tf.fieldValue.columnLabels || this.defaultColumnLabels(),
-          rows: tf.fieldValue.rows || []
-        };
       }
       return {
         reportNo: FIXED_REPORT_NO,
@@ -1453,12 +1504,12 @@ export default {
         return;
       }
       if ((this.form.fields || []).length === 0) {
-        this.$message.warning('当前没有字段可保存为模板');
+        this.$message.warning('当前没有字段可另存为新模板');
         return;
       }
       this.tplSaving = true;
       try {
-        this.reindexSortOrders();
+        this.normalizePaperForSave();
         if (this.id) {
           await saveReportAsTemplate(this.id, this.tplForm);
         } else {
@@ -1476,16 +1527,41 @@ export default {
           };
           await createTemplate(payload);
         }
-        this.$message.success('已保存为模板');
+        this.$message.success('已另存为新模板');
         this.tplDialog = false;
         this.loadTemplates();
       } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '保存模板失败'));
+        this.$message.error(this.$apiUserMsg(e, '另存模板失败'));
       } finally {
         this.tplSaving = false;
       }
     },
+    async saveCurrentTemplateFromEditor() {
+      if (!this.perm('templates', 'use')) return;
+      if (!this.perm('reports', 'create')) return;
+      const body = this.buildTemplateUpsertFromForm();
+      if (!body) return;
+      this.saving = true;
+      try {
+        await updateTemplate(this.form.templateId, body);
+        this.$message.success('模板已保存');
+        await this.loadTemplates();
+      } catch (e) {
+        const code = e?.response?.data?.error;
+        const msg =
+          code === 'DUPLICATE_FIELD_KEY'
+            ? '字段标识（field key）重复，请检查并删除或合并重复字段'
+            : this.$apiUserMsg(e, '保存模板失败');
+        this.$message.error(msg);
+      } finally {
+        this.saving = false;
+      }
+    },
     async save() {
+      if (this.primarySaveIsTemplate) {
+        await this.saveCurrentTemplateFromEditor();
+        return;
+      }
       if (this.id && !this.perm('reports', 'edit')) return;
       if (!this.id && !this.perm('reports', 'create')) return;
       const payload = this.buildPayload();

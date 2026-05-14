@@ -150,9 +150,16 @@ function sessionJson(user, settings, token) {
   };
 }
 
+/** JWT  wall-clock 上限，与「无操作自动退出」idleTimeoutMinutes 解耦；后者仅由前端计时，避免持续操作时仍被 token 固定时长踢下线 */
+function sessionTokenMaxMinutes() {
+  const raw = Number(process.env.JWT_SESSION_MAX_MINUTES);
+  if (Number.isFinite(raw) && raw >= 15 && raw <= 24 * 60) return raw;
+  return 12 * 60;
+}
+
 async function issueSessionToken(req, pool, user, settings) {
   const payload = buildTokenPayload(user);
-  const expMin = Math.min(settings.idleTimeoutMinutes, 12 * 60);
+  const expMin = sessionTokenMaxMinutes();
   const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: `${expMin}m` });
   const ip = clientIp(req);
   const ua = req.headers['user-agent'] || '';

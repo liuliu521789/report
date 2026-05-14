@@ -1,8 +1,8 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
+import './env.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import express from 'express';
+import cors from 'cors';
 import { createRequire } from 'module';
 import jwt from 'jsonwebtoken';
 
@@ -12,6 +12,7 @@ import { router as reportsRouter } from './routes/reports.js';
 import { router as qrcodesRouter } from './routes/qrcodes.js';
 import { router as stampsRouter } from './routes/stamps.js';
 import { router as templatesRouter } from './routes/templates.js';
+import { router as qcYearbooksRouter } from './routes/qcYearbooks.js';
 import { router as companyRouter } from './routes/company.js';
 import { router as employeeCategoriesRouter } from './routes/employeeCategories.js';
 import { router as departmentsRouter } from './routes/departments.js';
@@ -44,9 +45,11 @@ import {
   ensureDepartmentsTable,
   ensureReportsReportUidColumn,
   ensureWecomNotificationsTables,
+  ensureWecomNotifyJobsTable,
   ensureUsersWecomUseridColumn,
   ensureUsersAccountTypeManagerEnum,
   ensureWecomReceiveCallbackColumns,
+  ensureWecomSecretsWideAndCallbackEvents,
   ensureSalesContractDocumentColumns,
   ensureSalesContractVersioning,
   ensureSalesCustomerCodesWyFormat,
@@ -54,11 +57,13 @@ import {
   ensureSupportContactSettingsTable,
   ensureAccountModuleHardeningColumns,
   ensureCompanySettingsColumns,
-  ensureStampsSvgFields
+  ensureStampsSvgFields,
+  ensureQcYearbookDataTables
 } from './db/ensureSchema.js';
 import { apiErrorI18nMiddleware } from './middleware/apiErrorI18n.js';
 import { enrichApiErrorBody } from '../../shared/apiErrorZh.js';
 import { validateProductionConfigOrExit } from './lib/productionConfig.js';
+import { startWecomNotifyWorker } from './lib/wecomNotifyWorker.js';
 
 const port = Number(process.env.PORT || 3001);
 /** 与 admin Vite 开发服务器默认端口一致；API 不得与其共用 */
@@ -78,11 +83,17 @@ const app = express();
 app.set('trust proxy', 1);
 
 app.use(cors());
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '12mb' }));
 app.use(apiErrorI18nMiddleware());
 
+/** 订单接口 JWT/403 调试日志：仅开发环境且显式开启，禁止在生产输出 */
+const ordersHttpDebugEnabled =
+  String(process.env.ENABLE_ORDERS_HTTP_DEBUG || '').toLowerCase() === 'true' &&
+  process.env.NODE_ENV !== 'production' &&
+  process.env.NODE_ENV !== 'prod';
+
 app.use((req, res, next) => {
-  if (!String(req.path || '').startsWith('/api/sales/orders')) return next();
+  if (!ordersHttpDebugEnabled || !String(req.path || '').startsWith('/api/sales/orders')) return next();
   const startedAt = Date.now();
   const targetUser = String(process.env.DEBUG_AUTH_USERNAME || 'SALES-2604-001').trim();
   const authHeader = String(req.headers.authorization || '');
@@ -178,6 +189,9 @@ app.use('/api/reports', reportsRouter);
 app.use('/api/qrcodes', qrcodesRouter);
 app.use('/api/stamps', stampsRouter);
 app.use('/api/templates', templatesRouter);
+app.use('/api/qc-yearbooks', qcYearbooksRouter);
+/** 部分反代会把 `/api` 前缀去掉再转发到 Node，此处挂载同一路由器以兼容 */
+app.use('/qc-yearbooks', qcYearbooksRouter);
 app.use('/api/company', companyRouter);
 app.use('/api/employee-categories', employeeCategoriesRouter);
 app.use('/api/departments', departmentsRouter);
@@ -266,11 +280,14 @@ async function start() {
     await ensureSalesContractVersioning();
     await ensureDepartmentsTable();
     await ensureWecomNotificationsTables();
+    await ensureWecomNotifyJobsTable();
     await ensureUsersWecomUseridColumn();
     await ensureWecomReceiveCallbackColumns();
+    await ensureWecomSecretsWideAndCallbackEvents();
     await ensureBackupJobsTable();
     await ensureSupportContactSettingsTable();
     await ensureStampsSvgFields();
+    await ensureQcYearbookDataTables();
     await purgeExpiredErrorLogs();
     // eslint-disable-next-line no-console
     console.log('[server] db connected');
@@ -291,6 +308,10 @@ async function start() {
   const server = app.listen(port, host, () => {
     // eslint-disable-next-line no-console
     console.log(`[server] listening on http://${host}:${port}`);
+    if (String(process.env.WECOM_NOTIFY_WORKER_DISABLED || '').toLowerCase() !== 'true') {
+      const wms = Number(process.env.WECOM_NOTIFY_WORKER_MS || 5000);
+      startWecomNotifyWorker(Number.isFinite(wms) && wms >= 2000 ? wms : 5000);
+    }
   });
   server.on('error', (err) => {
     if (err?.code === 'EADDRINUSE') {
