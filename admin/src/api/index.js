@@ -6,11 +6,6 @@ export async function login(username, password, extra = {}) {
   return data;
 }
 
-export async function getLoginCaptcha() {
-  const { data } = await http.get('/api/auth/captcha');
-  return data;
-}
-
 export async function bootstrapAdmin(username, password) {
   const { data } = await http.post('/api/auth/bootstrap-admin', { username, password });
   return data;
@@ -69,13 +64,7 @@ export async function bulkDeleteLoginLogs(ids) {
 
 export async function exportLoginLogs(ids) {
   const res = await http.post('/api/audit/login/export', { ids }, { responseType: 'blob' });
-  const blob = new Blob([res.data], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `login-logs-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  return new Blob([res.data], { type: 'application/json' });
 }
 
 export async function listAuditOperations(params) {
@@ -90,13 +79,7 @@ export async function bulkDeleteAuditOperations(ids) {
 
 export async function exportAuditOperations(ids) {
   const res = await http.post('/api/audit/operations/export', { ids }, { responseType: 'blob' });
-  const blob = new Blob([res.data], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `operation-logs-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  return new Blob([res.data], { type: 'application/json' });
 }
 
 export async function listMyOperations(params) {
@@ -116,24 +99,12 @@ export async function bulkDeleteErrorLogs(ids) {
 
 export async function exportErrorLogs(ids) {
   const res = await http.post('/api/audit/errors/export', { ids }, { responseType: 'blob' });
-  const blob = new Blob([res.data], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `error-logs-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  return new Blob([res.data], { type: 'application/json' });
 }
 
 export async function downloadErrorLogsExport() {
   const res = await http.get('/api/audit/errors/export', { responseType: 'blob' });
-  const blob = new Blob([res.data], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `error-logs-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  return new Blob([res.data], { type: 'application/json' });
 }
 
 /**
@@ -410,13 +381,7 @@ export async function bulkDeleteReports(ids) {
 
 export async function exportReportsJson(ids) {
   const res = await http.post('/api/reports/export/json', { ids }, { responseType: 'blob' });
-  const blob = new Blob([res.data], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `reports-export-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  return new Blob([res.data], { type: 'application/json' });
 }
 
 export async function createQrcode(reportIds, force = false) {
@@ -792,6 +757,30 @@ export async function listSalesOrders(params, options = {}) {
   return data;
 }
 
+/** 流程看板各阶段数量（与列表相同的可见范围与文本筛选；默认不按列表日期收窄） */
+export async function getSalesOrderFlowSummary(params, options = {}) {
+  const { data } = await http.get('/api/sales/orders/flow-summary', {
+    params,
+    silentProgress: options.silent === true
+  });
+  return data;
+}
+
+/** SLA 超期笔数（阈值来自服务端环境变量） */
+export async function getSalesOrderSlaSummary(params, options = {}) {
+  const { data } = await http.get('/api/sales/orders/sla-summary', {
+    params,
+    silentProgress: options.silent === true
+  });
+  return data;
+}
+
+/** 停用字段前：统计 data_json 中含该键的订单数 */
+export async function getSalesOrderFieldImpact(id) {
+  const { data } = await http.get(`/api/sales/order-fields/${encodeURIComponent(id)}/impact`);
+  return data;
+}
+
 export async function createSalesOrder(payload) {
   const { data } = await http.post('/api/sales/orders', payload);
   return data;
@@ -894,6 +883,31 @@ export async function listCustomerContracts(customerId) {
 
 export async function exportSalesOrdersXlsx(params) {
   const res = await http.get('/api/sales/orders/export/xlsx', { params, responseType: 'blob' });
+  return res.data;
+}
+
+/** 创建异步导出任务（筛选条件与列表 query 一致） */
+export async function createSalesOrderExportJob(payload, options = {}) {
+  const { data } = await http.post('/api/sales/orders/export/jobs', payload, {
+    timeout: 60000,
+    silentProgress: options.silent === true
+  });
+  return data;
+}
+
+export async function getSalesOrderExportJob(id, options = {}) {
+  const { data } = await http.get(`/api/sales/orders/export/jobs/${id}`, {
+    timeout: 30000,
+    silentProgress: options.silent === true
+  });
+  return data;
+}
+
+export async function downloadSalesOrderExportJobFile(id) {
+  const res = await http.get(`/api/sales/orders/export/jobs/${id}/download`, {
+    responseType: 'blob',
+    timeout: 120000
+  });
   return res.data;
 }
 
@@ -1027,20 +1041,17 @@ export async function fetchSalesContractDocumentBlob(contractId) {
   return data;
 }
 
-export async function downloadSalesContractDocument(contractId, filename) {
-  const data = await fetchSalesContractDocumentBlob(contractId);
-  const url = URL.createObjectURL(data);
-  try {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename || 'download';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+export async function downloadSalesContractDocument(contractId) {
+  return fetchSalesContractDocumentBlob(contractId);
+}
+
+export async function downloadSalesContractDocx(contractId) {
+  const { data } = await http.get(`/api/sales/contracts/${contractId}/export-docx`, {
+    responseType: 'blob',
+    timeout: 60000,
+    silentProgress: true
+  });
+  return data;
 }
 
 export async function listSalesProcessLogs(params) {
@@ -1146,13 +1157,7 @@ export async function downloadBackup() {
     const err = await res.json().catch(() => ({ error: '下载失败' }));
     throw new Error(err.error || '下载失败');
   }
-  const blob = await res.blob();
-  const objectUrl = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = objectUrl;
-  a.download = `backup_${new Date().toISOString().slice(0, 10)}.sql`;
-  a.click();
-  URL.revokeObjectURL(objectUrl);
+  return res.blob();
 }
 
 export async function restoreBackup(sql) {

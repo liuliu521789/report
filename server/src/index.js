@@ -54,6 +54,7 @@ import {
   ensureSalesContractVersioning,
   ensureSalesCustomerCodesWyFormat,
   ensureBackupJobsTable,
+  ensureSalesOrderExportJobsTable,
   ensureSupportContactSettingsTable,
   ensureAccountModuleHardeningColumns,
   ensureCompanySettingsColumns,
@@ -64,6 +65,7 @@ import { apiErrorI18nMiddleware } from './middleware/apiErrorI18n.js';
 import { enrichApiErrorBody } from '../../shared/apiErrorZh.js';
 import { validateProductionConfigOrExit } from './lib/productionConfig.js';
 import { startWecomNotifyWorker } from './lib/wecomNotifyWorker.js';
+import { startSalesOrderExportWorker } from './lib/salesOrderExportWorker.js';
 
 const port = Number(process.env.PORT || 3001);
 /** 与 admin Vite 开发服务器默认端口一致；API 不得与其共用 */
@@ -274,6 +276,7 @@ async function start() {
     await ensureReportStylesTable();
     await ensureQuickRoleUserColumns();
     await ensureSalesModuleTables();
+    await ensureSalesOrderExportJobsTable();
     await ensureSalesCustomerCodesWyFormat();
     await ensureSalesInternalModelsTable();
     await ensureSalesContractDocumentColumns();
@@ -311,6 +314,10 @@ async function start() {
     if (String(process.env.WECOM_NOTIFY_WORKER_DISABLED || '').toLowerCase() !== 'true') {
       const wms = Number(process.env.WECOM_NOTIFY_WORKER_MS || 5000);
       startWecomNotifyWorker(Number.isFinite(wms) && wms >= 2000 ? wms : 5000);
+    }
+    if (String(process.env.SALES_ORDER_EXPORT_WORKER_DISABLED || '').toLowerCase() !== 'true') {
+      const oems = Number(process.env.SALES_ORDER_EXPORT_WORKER_MS || 4000);
+      startSalesOrderExportWorker(Number.isFinite(oems) && oems >= 2000 ? oems : 4000);
     }
   });
   server.on('error', (err) => {

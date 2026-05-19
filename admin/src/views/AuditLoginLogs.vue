@@ -90,6 +90,7 @@
 import { bulkDeleteLoginLogs, exportLoginLogs, listLoginLogs } from '../api';
 import { formatDateTime } from '../utils/formatDateTime';
 import { isSuperAdmin, perm } from '../utils/permissions';
+import { startDownload } from '../composables/useDownloadProgress.js';
 
 export default {
   name: 'AuditLoginLogs',
@@ -181,8 +182,8 @@ export default {
       const ids = this.selectedIds();
       if (!ids.length) return;
       try {
-        await exportLoginLogs(ids);
-        this.$message.success('已开始下载');
+        const blob = await exportLoginLogs(ids);
+        startDownload({ request: blob, filename: `login-logs-${Date.now()}.json` });
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '导出失败'));
       }

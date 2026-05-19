@@ -1,13 +1,18 @@
+import fs from 'fs/promises';
+import path from 'path';
 import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
-import XLSX from 'xlsx';
 import QRCode from 'qrcode';
+import XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 import { getPool } from '../../db/pool.js';
 import { isSalesCustomerNgramFulltextReady } from '../../db/ensureSchema.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { logOperationFromReq } from '../../lib/audit.js';
+import { listQuerySchema } from '../../lib/salesOrderListQuerySchema.js';
+import { buildSalesOrdersExportXlsxBuffer, EXPORT_LIMIT as SALES_ORDER_EXPORT_LIMIT } from '../../lib/salesOrderExportBuild.js';
 import {
   loadOrderFieldDefinitions,
   validateOrderDataInput,
@@ -16,7 +21,6 @@ import {
   importHeaderSynonymsForField,
   splitLabelWarehouseCell
 } from '../../lib/salesOrderFields.js';
-import { formatOrderUploadTime } from '../../lib/salesOrderNotifyBody.js';
 import {
   SalesOrderFlowError,
   submitSalesOrderForFinanceReview,
@@ -46,7 +50,7 @@ import {
   fetchSalesContractRow,
   assertSalesContractVisible,
   financeOrderListScopeSql,
-  appendOrderListDateRange,
+  appendSalesOrderListFilters,
   assertFinanceOrderListScope,
   departmentSubtreeIds,
   assertMapsToAvailable,
@@ -55,6 +59,10 @@ import {
   getOrCreateCustomer,
   loadQcMap,
   enrichOrdersQc,
+  canSeeOrderListContract,
+  canSeeOrderListQcQrcode,
+  filterOrderFieldDefsForList,
+  redactOrderListRowForViewer,
   orderEditable,
   assertOrderDeleteAllowed,
   isOrderCreatedByCurrentUser,
@@ -65,6 +73,7 @@ import {
 } from './salesShared.js';
 import { uniquePositiveIds } from '../../lib/idList.js';
 import { syncCustomerDirectoryGroup } from '../../lib/salesCustomerDirectorySync.js';
+import { bumpOrderFieldSchemaVersion, readOrderFieldSchemaVersion } from '../../lib/salesOrderFieldSchemaVersion.js';
 
 export function createSalesOrdersRouter() {
   const router = Router();
@@ -73,6 +82,77 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 }
 });
+
+function mapImportRowPersistError(err) {
+  if (!err) return '导入处理失败，请稍后重试';
+  const code = err.code;
+  if (code === 'ER_DUP_ENTRY') return '订单号冲突或数据重复，请重试';
+  if (code === 'CUSTOMER_DISABLED') return '客户已停用，无法创建订单';
+  if (code === 'MISSING_CUSTOMER_FIELD') return err.message || '缺少客户字段配置';
+  if (code === 'ORDER_NO') return '生成订单号失败，请稍后重试';
+  const msg = String(err.message || err || '');
+  if (/foreign key/i.test(msg) || code === 'ER_NO_REFERENCED_ROW_2' || code === 'ER_ROW_IS_REFERENCED_2') {
+    return '关联数据无效，请检查客户信息等';
+  }
+  if (/duplicate/i.test(msg)) return '与已有数据冲突';
+  return '保存失败，请检查该行数据';
+}
+
+function orderDuplicateFingerprintKey(customerId, leg) {
+  return [
+    Number(customerId) || 0,
+    String(leg.product_code ?? ''),
+    String(leg.product_name ?? ''),
+    String(leg.product_model ?? ''),
+    String(leg.warehouse_model ?? ''),
+    Number(leg.quantity) || 0,
+    Number(leg.unit_price) || 0,
+    Number(leg.amount) || 0
+  ].join('\x1e');
+}
+
+/**
+ * 批量查询「同客户 + 关键业务列」已存在且未取消的订单，用于导入去重。
+ * @param {import('mysql2/promise').Pool} pool
+ * @param {number[][]} tuples 每项为 [customerId, code, name, model, wh, qty, price, amount]
+ */
+async function loadExistingDuplicateOrderBatch(pool, tuples, { createdByUid, seeAllOrders }) {
+  const out = new Map();
+  if (!tuples.length) return out;
+  const CHUNK = 80;
+  for (let i = 0; i < tuples.length; i += CHUNK) {
+    const chunk = tuples.slice(i, i + CHUNK);
+    const ph = chunk.map(() => '(?,?,?,?,?,?,?,?)').join(',');
+    const flat = chunk.flat();
+    let sql = `SELECT o.customer_id, o.product_code, o.product_name, o.product_model, o.warehouse_model,
+                      o.quantity, o.unit_price, o.amount, o.order_no, c.customer_name
+               FROM sales_orders o
+               INNER JOIN sales_customers c ON c.id = o.customer_id
+               WHERE o.status <> 'cancelled'`;
+    const args = [];
+    if (!seeAllOrders) {
+      sql += ' AND o.created_by = ?';
+      args.push(createdByUid);
+    }
+    sql += ` AND (o.customer_id, o.product_code, o.product_name, o.product_model, o.warehouse_model, o.quantity, o.unit_price, o.amount) IN (${ph})`;
+    args.push(...flat);
+    const [rows] = await pool.query(sql, args);
+    for (const dup of rows) {
+      const leg = {
+        product_code: dup.product_code,
+        product_name: dup.product_name,
+        product_model: dup.product_model,
+        warehouse_model: dup.warehouse_model,
+        quantity: dup.quantity,
+        unit_price: dup.unit_price,
+        amount: dup.amount
+      };
+      const k = orderDuplicateFingerprintKey(Number(dup.customer_id), leg);
+      if (!out.has(k)) out.set(k, dup);
+    }
+  }
+  return out;
+}
 
 function sendSalesOrderFlowError(res, err) {
   if (!(err instanceof SalesOrderFlowError)) return false;
@@ -109,7 +189,47 @@ router.get('/order-fields', async (req, res, next) => {
     const pool = getPool();
     const all = perm(req, 'order_management', 'order_field_config') && String(req.query.all) === '1';
     const items = await loadOrderFieldDefinitions(pool, { activeOnly: !all });
-    sendUnifiedSuccess(res, { items });
+    const schema_version = await readOrderFieldSchemaVersion(pool);
+    sendUnifiedSuccess(res, { items, schema_version });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/order-fields/:id/impact', async (req, res, next) => {
+  try {
+    if (!perm(req, 'order_management', 'order_field_config')) return sendUnifiedError(res, 403, 'FORBIDDEN');
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) return sendUnifiedError(res, 400, 'BAD_REQUEST');
+    const pool = getPool();
+    const [defRows] = await pool.query(
+      'SELECT id, field_key, label_zh, is_active, maps_to FROM sales_order_field_definitions WHERE id = ? LIMIT 1',
+      [id]
+    );
+    const def = defRows[0];
+    if (!def) return sendUnifiedError(res, 404, 'NOT_FOUND');
+    const fk = String(def.field_key || '').replace(/[^a-z0-9_]/gi, '');
+    let orderCountWithKey = 0;
+    if (fk) {
+      const jsonPath = `$.${fk}`;
+      const [c1] = await pool.query(
+        `SELECT COUNT(*) AS c FROM sales_orders
+         WHERE data_json IS NOT NULL AND JSON_CONTAINS_PATH(data_json, 'one', ?)`,
+        [jsonPath]
+      );
+      orderCountWithKey = Number(c1[0]?.c || 0);
+    }
+    sendUnifiedSuccess(res, {
+      field_key: def.field_key,
+      label_zh: def.label_zh,
+      is_active: !!def.is_active,
+      maps_to: def.maps_to || null,
+      order_count_with_data_json_key: orderCountWithKey,
+      hint:
+        orderCountWithKey > 0
+          ? '有历史订单的 data_json 仍包含该字段键；停用后新单不再使用该字段配置，列表展示以当前启用字段为准。'
+          : ''
+    });
   } catch (e) {
     next(e);
   }
@@ -358,6 +478,7 @@ router.post('/order-fields', async (req, res, next) => {
         body.maps_to || null
       ]
     );
+    await bumpOrderFieldSchemaVersion(pool);
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '新增订单字段',
@@ -427,6 +548,7 @@ router.patch('/order-fields/:id', async (req, res, next) => {
     if (!updates.length) return sendUnifiedSuccess(res, { ok: true });
     args.push(id);
     await pool.query(`UPDATE sales_order_field_definitions SET ${updates.join(', ')} WHERE id = ?`, args);
+    await bumpOrderFieldSchemaVersion(pool);
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '修改订单字段',
@@ -447,6 +569,7 @@ router.delete('/order-fields/:id', async (req, res, next) => {
     const id = Number(req.params.id);
     const pool = getPool();
     await pool.query('UPDATE sales_order_field_definitions SET is_active = 0 WHERE id = ?', [id]);
+    await bumpOrderFieldSchemaVersion(pool);
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '停用订单字段',
@@ -1395,28 +1518,99 @@ router.post('/messages/batch-delete', async (req, res, next) => {
   }
 });
 
-const listQuerySchema = z.object({
-  /** 精确按订单主键筛选（用于站内信跳转定位等） */
-  id: z.coerce.number().int().positive().optional(),
-  customer_name: z.string().optional(),
-  customer_code: z.string().optional(),
-  product_name: z.string().optional(),
-  product_code: z.string().optional(),
-  product_model: z.string().optional(),
-  warehouse_model: z.string().optional(),
-  order_no: z.string().optional(),
-  status: z.string().optional(),
-  sales_user_id: z.coerce.number().optional(),
-  date_from: z.string().optional(),
-  date_to: z.string().optional(),
-  page: z.coerce.number().min(1).default(1),
-  page_size: z.preprocess(
-    (v) => (v === undefined || v === null || v === '' ? 20 : v),
-    z.coerce.number().refine((n) => [10, 20, 50, 100, 200, 500].includes(n), { message: 'page_size' })
-  ),
-  sort: z.enum(['created_at_desc', 'created_at_asc', 'customer_name_desc', 'customer_name_asc']).default('created_at_desc'),
-  pending_finance_only: z.preprocess((v) => v === true || v === '1' || v === 'true', z.boolean().optional()),
-  pending_qc_only: z.preprocess((v) => v === true || v === '1' || v === 'true', z.boolean().optional())
+router.get('/orders/flow-summary', async (req, res, next) => {
+  try {
+    const canOrderQuery = perm(req, 'order_management', 'order_query') || perm(req, 'order_management', 'order_status_qc');
+    if (!canOrderQuery) return sendUnifiedError(res, 403, 'FORBIDDEN');
+    const pool = getPool();
+    const uid = req.user.userId;
+    const seeAll = canViewAllSalesOrders(req);
+    const raw = { ...req.query };
+    const applyDate = raw.apply_date_range === '1' || raw.apply_date_range === 'true';
+    if (!applyDate) {
+      delete raw.date_from;
+      delete raw.date_to;
+      delete raw.pending_finance_only;
+      delete raw.pending_qc_only;
+    }
+    const q = listQuerySchema.parse(raw);
+    let sql = `SELECT
+      SUM(CASE WHEN o.status = 'pending_review' AND o.submitted_for_review_at IS NULL THEN 1 ELSE 0 END) AS pending_submit,
+      SUM(CASE WHEN o.status = 'pending_review' AND o.submitted_for_review_at IS NOT NULL THEN 1 ELSE 0 END) AS pending_finance,
+      SUM(CASE WHEN o.status = 'pending_qc' THEN 1 ELSE 0 END) AS pending_qc,
+      SUM(CASE WHEN o.status = 'approved' THEN 1 ELSE 0 END) AS pending_ship,
+      SUM(CASE WHEN o.status = 'shipped' THEN 1 ELSE 0 END) AS shipped_open,
+      SUM(CASE WHEN o.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+      FROM sales_orders o
+      INNER JOIN sales_customers c ON c.id = o.customer_id
+      WHERE o.status <> 'cancelled'`;
+    const args = [];
+    const scoped = appendSalesOrderListFilters(sql, args, req, q, { uid, seeAll }, { skipDateRange: !applyDate });
+    sql = scoped.sql;
+    const [rows] = await pool.query(sql, args);
+    const r = rows[0] || {};
+    sendUnifiedSuccess(res, {
+      pending_submit: Number(r.pending_submit || 0),
+      pending_finance: Number(r.pending_finance || 0),
+      pending_qc: Number(r.pending_qc || 0),
+      pending_ship: Number(r.pending_ship || 0),
+      shipped_open: Number(r.shipped_open || 0),
+      rejected: Number(r.rejected || 0),
+      apply_date_range: applyDate
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/orders/sla-summary', async (req, res, next) => {
+  try {
+    const canOrderQuery = perm(req, 'order_management', 'order_query') || perm(req, 'order_management', 'order_status_qc');
+    if (!canOrderQuery) return sendUnifiedError(res, 403, 'FORBIDDEN');
+    const pool = getPool();
+    const uid = req.user.userId;
+    const seeAll = canViewAllSalesOrders(req);
+    const raw = { ...req.query };
+    const applyDate = raw.apply_date_range === '1' || raw.apply_date_range === 'true';
+    if (!applyDate) {
+      delete raw.date_from;
+      delete raw.date_to;
+      delete raw.pending_finance_only;
+      delete raw.pending_qc_only;
+    }
+    const q = listQuerySchema.parse(raw);
+    const financeH = Math.min(720, Math.max(1, Number(process.env.SALES_SLA_FINANCE_HOURS || 48)));
+    const qcH = Math.min(720, Math.max(1, Number(process.env.SALES_SLA_QC_HOURS || 48)));
+    const shipH = Math.min(720, Math.max(1, Number(process.env.SALES_SLA_SHIP_HOURS || 72)));
+    const completeH = Math.min(1440, Math.max(1, Number(process.env.SALES_SLA_COMPLETE_HOURS || 168)));
+    let sql = `SELECT
+      SUM(CASE WHEN o.status = 'pending_review' AND o.submitted_for_review_at IS NOT NULL
+        AND o.submitted_for_review_at < DATE_SUB(NOW(3), INTERVAL ? HOUR) THEN 1 ELSE 0 END) AS overdue_finance,
+      SUM(CASE WHEN o.status = 'pending_qc' AND o.finance_reviewed_at IS NOT NULL
+        AND o.finance_reviewed_at < DATE_SUB(NOW(3), INTERVAL ? HOUR) THEN 1 ELSE 0 END) AS overdue_qc,
+      SUM(CASE WHEN o.status = 'approved' AND COALESCE(o.qc_reviewed_at, o.finance_reviewed_at) IS NOT NULL
+        AND COALESCE(o.qc_reviewed_at, o.finance_reviewed_at) < DATE_SUB(NOW(3), INTERVAL ? HOUR) THEN 1 ELSE 0 END) AS overdue_ship,
+      SUM(CASE WHEN o.status = 'shipped' AND o.shipped_at IS NOT NULL
+        AND o.shipped_at < DATE_SUB(NOW(3), INTERVAL ? HOUR) THEN 1 ELSE 0 END) AS overdue_complete
+      FROM sales_orders o
+      INNER JOIN sales_customers c ON c.id = o.customer_id
+      WHERE o.status <> 'cancelled'`;
+    const args = [financeH, qcH, shipH, completeH];
+    const scoped = appendSalesOrderListFilters(sql, args, req, q, { uid, seeAll }, { skipDateRange: !applyDate });
+    sql = scoped.sql;
+    const [rows] = await pool.query(sql, args);
+    const r = rows[0] || {};
+    sendUnifiedSuccess(res, {
+      overdue_finance: Number(r.overdue_finance || 0),
+      overdue_qc: Number(r.overdue_qc || 0),
+      overdue_ship: Number(r.overdue_ship || 0),
+      overdue_complete: Number(r.overdue_complete || 0),
+      thresholds_hours: { finance: financeH, qc: qcH, ship: shipH, complete: completeH },
+      apply_date_range: applyDate
+    });
+  } catch (e) {
+    next(e);
+  }
 });
 
 router.get('/orders', async (req, res, next) => {
@@ -1428,64 +1622,35 @@ router.get('/orders', async (req, res, next) => {
     const uid = req.user.userId;
     const seeAll = canViewAllSalesOrders(req);
 
-    let sql = `SELECT o.*, c.customer_code, c.customer_name, u.username AS created_by_username,
-                      COALESCE(NULLIF(TRIM(u_ship.real_name), ''), NULLIF(TRIM(u_ship.username), ''), '') AS shipped_by_name
-               FROM sales_orders o
+    const fromJoinWhere = `FROM sales_orders o
                INNER JOIN sales_customers c ON c.id = o.customer_id
                LEFT JOIN users u ON u.id = o.created_by
                LEFT JOIN users u_ship ON u_ship.id = o.shipped_by
                WHERE 1=1`;
+
+    let sql = `SELECT o.id, o.order_no, o.customer_id, o.data_json,
+                      o.field_schema_version,
+                      o.product_code, o.product_name, o.product_model, o.warehouse_model,
+                      o.quantity, o.unit_price, o.amount, o.remark,
+                      o.status, o.submitted_for_review_at, o.finance_reviewed_at,
+                      o.finance_comment, o.qc_comment,
+                      o.created_by, o.created_at, o.row_version,
+                      o.qc_qrcode_id,
+                      c.customer_code, c.customer_name, u.username AS created_by_username,
+                      COALESCE(NULLIF(TRIM(u_ship.real_name), ''), NULLIF(TRIM(u_ship.username), ''), '') AS shipped_by_name
+               ${fromJoinWhere}`;
     const args = [];
+    const scoped = appendSalesOrderListFilters(sql, args, req, q, { uid, seeAll });
+    sql = scoped.sql;
+    // 注意：scoped.args 与上面的 args 为同一数组引用，已在 appendSalesOrderListFilters 内填好，勿先 clear 再 push(scoped.args)
 
-    if (!seeAll) {
-      sql += ' AND o.created_by = ?';
-      args.push(uid);
-    }
-    if (q.id) {
-      sql += ' AND o.id = ?';
-      args.push(q.id);
-    }
-    if (q.customer_name) {
-      sql += ' AND c.customer_name LIKE ?';
-      args.push(`%${q.customer_name}%`);
-    }
-    if (q.customer_code) {
-      sql += ' AND c.customer_code LIKE ?';
-      args.push(`%${q.customer_code}%`);
-    }
-    if (q.product_name) {
-      sql += ' AND o.product_name LIKE ?';
-      args.push(`%${q.product_name}%`);
-    }
-    if (q.product_code) {
-      sql += ' AND o.product_code LIKE ?';
-      args.push(`%${q.product_code}%`);
-    }
-    if (q.product_model) {
-      sql += ' AND o.product_model LIKE ?';
-      args.push(`%${q.product_model}%`);
-    }
-    if (q.warehouse_model) {
-      sql += ' AND o.warehouse_model LIKE ?';
-      args.push(`%${q.warehouse_model}%`);
-    }
-    if (q.order_no) {
-      sql += ' AND o.order_no LIKE ?';
-      args.push(`%${q.order_no}%`);
-    }
-    if (q.status) {
-      sql += ' AND o.status = ?';
-      args.push(q.status);
-    }
-    if (q.sales_user_id && seeAll) {
-      sql += ' AND o.created_by = ?';
-      args.push(q.sales_user_id);
-    }
-    sql = appendOrderListDateRange(sql, args, q, req);
-
-    const finScopeSql = financeOrderListScopeSql(req);
-    sql += finScopeSql.sql;
-    args.push(...finScopeSql.args);
+    /** 独立 COUNT，避免 `SELECT COUNT(*) FROM (长列表 SELECT …) t` 在部分 MySQL 下派生表优化报语法错 */
+    let countSql = `SELECT COUNT(*) AS c ${fromJoinWhere}`;
+    const countArgs = [];
+    const scopedCount = appendSalesOrderListFilters(countSql, countArgs, req, q, { uid, seeAll });
+    countSql = scopedCount.sql;
+    const [countRows] = await pool.query(countSql, countArgs);
+    const total = Number(countRows[0]?.c || 0);
 
     const orderBy =
       q.sort === 'created_at_asc'
@@ -1496,9 +1661,6 @@ router.get('/orders', async (req, res, next) => {
             ? 'c.customer_name DESC, o.created_at DESC'
             : 'o.created_at DESC';
 
-    const [countRows] = await pool.query(`SELECT COUNT(*) AS c FROM (${sql}) t`, args);
-    const total = Number(countRows[0]?.c || 0);
-
     sql += ` ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
     args.push(q.page_size, (q.page - 1) * q.page_size);
 
@@ -1506,7 +1668,7 @@ router.get('/orders', async (req, res, next) => {
 
     // 关联合同摘要：按订单找最近一份合同及其审核状态
     let contractByOrderId = new Map();
-    if (rows.length) {
+    if (rows.length && canSeeOrderListContract(req)) {
       const orderIds = [...new Set(rows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0))];
       if (orderIds.length) {
         const ph = orderIds.map(() => '?').join(',');
@@ -1543,23 +1705,33 @@ router.get('/orders', async (req, res, next) => {
       }
     }
 
-    const fieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
+    const listFieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
+    const listFieldDefsForViewer = filterOrderFieldDefsForList(req, listFieldDefs);
     const enriched = rows.map((r) => {
-      const { display_data, dataJson } = mergeRowDataJson(r, fieldDefs);
+      const { display_data, dataJson } = mergeRowDataJson(r, listFieldDefs);
       const c = contractByOrderId.get(Number(r.id)) || null;
-      return {
-        ...r,
-        display_data,
-        data_json: dataJson,
-        contract_id: c ? c.contract_id : null,
-        contract_status: c ? c.contract_status : null,
-        contract_last_reject_comment: c ? c.contract_last_reject_comment : null
-      };
+      return redactOrderListRowForViewer(
+        req,
+        {
+          ...r,
+          display_data,
+          data_json: dataJson,
+          contract_id: c ? c.contract_id : null,
+          contract_status: c ? c.contract_status : null,
+          contract_last_reject_comment: c ? c.contract_last_reject_comment : null
+        },
+        listFieldDefs
+      );
     });
-    const models = enriched.map((r) => r.product_model);
-    const qcMap = await loadQcMap(pool, models);
-    const items = await enrichOrdersQc(pool, enriched, qcMap);
-    sendUnifiedSuccess(res, { items, total, page: q.page, page_size: q.page_size, field_definitions: fieldDefs });
+    let items = enriched;
+    if (canSeeOrderListQcQrcode(req)) {
+      const models = enriched.map((r) => r.product_model);
+      const qcMap = await loadQcMap(pool, models);
+      items = await enrichOrdersQc(pool, enriched, qcMap);
+    }
+    const payload = { items, total, page: q.page, page_size: q.page_size };
+    if (q.include_field_definitions) payload.field_definitions = listFieldDefsForViewer;
+    sendUnifiedSuccess(res, payload);
   } catch (e) {
     next(e);
   }
@@ -2118,6 +2290,109 @@ router.get('/customers/:customerId/contracts', async (req, res, next) => {
   }
 });
 
+function snapshotRequesterForExportJob(req) {
+  const u = req.user || {};
+  return {
+    userId: u.userId,
+    accountType: u.accountType,
+    permissions: u.permissions,
+    username: u.username || ''
+  };
+}
+
+router.post('/orders/export/jobs', async (req, res, next) => {
+  try {
+    const canExport =
+      isSuper(req) ||
+      perm(req, 'data_management', 'data_export_all') ||
+      perm(req, 'data_management', 'data_export');
+    if (!canExport) return sendUnifiedError(res, 403, 'FORBIDDEN');
+    const merged = { ...(typeof req.query === 'object' ? req.query : {}), ...(req.body && typeof req.body === 'object' ? req.body : {}) };
+    const q = listQuerySchema.parse(merged);
+    const pool = getPool();
+    const uid = authenticatedNumericUserId(req);
+    if (uid == null) return sendUnifiedError(res, 401, 'UNAUTHORIZED');
+    const requester = snapshotRequesterForExportJob(req);
+    const [ins] = await pool.query(
+      `INSERT INTO sales_order_export_jobs (created_by, requester_json, filter_json, status)
+       VALUES (?, CAST(? AS JSON), CAST(? AS JSON), 'pending')`,
+      [uid, JSON.stringify(requester), JSON.stringify(q)]
+    );
+    const jobId = Number(ins.insertId);
+    sendUnifiedSuccess(res, { id: jobId, status: 'pending' }, '导出任务已创建');
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/orders/export/jobs/:id', async (req, res, next) => {
+  try {
+    const canExport =
+      isSuper(req) ||
+      perm(req, 'data_management', 'data_export_all') ||
+      perm(req, 'data_management', 'data_export');
+    if (!canExport) return sendUnifiedError(res, 403, 'FORBIDDEN');
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) return sendUnifiedError(res, 400, 'BAD_REQUEST');
+    const uid = req.user.userId;
+    const pool = getPool();
+    const [rows] = await pool.query(
+      `SELECT id, status, total_hit, row_count_exported, last_error, created_at, finished_at
+       FROM sales_order_export_jobs WHERE id = ? AND created_by = ? LIMIT 1`,
+      [id, uid]
+    );
+    const row = rows[0];
+    if (!row) return sendUnifiedError(res, 404, 'NOT_FOUND');
+    sendUnifiedSuccess(res, {
+      id: row.id,
+      status: row.status,
+      total_hit: row.total_hit != null ? Number(row.total_hit) : null,
+      row_count_exported: row.row_count_exported != null ? Number(row.row_count_exported) : null,
+      last_error: row.last_error || null,
+      created_at: row.created_at,
+      finished_at: row.finished_at
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/orders/export/jobs/:id/download', async (req, res, next) => {
+  try {
+    const canExport =
+      isSuper(req) ||
+      perm(req, 'data_management', 'data_export_all') ||
+      perm(req, 'data_management', 'data_export');
+    if (!canExport) return sendUnifiedError(res, 403, 'FORBIDDEN');
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) return sendUnifiedError(res, 400, 'BAD_REQUEST');
+    const uid = req.user.userId;
+    const pool = getPool();
+    const [rows] = await pool.query(
+      `SELECT id, status, file_path FROM sales_order_export_jobs WHERE id = ? AND created_by = ? LIMIT 1`,
+      [id, uid]
+    );
+    const row = rows[0];
+    if (!row) return sendUnifiedError(res, 404, 'NOT_FOUND');
+    if (row.status !== 'done') {
+      return sendUnifiedError(res, 409, 'EXPORT_NOT_READY', { message: '导出尚未完成或已失败，请稍后重试' });
+    }
+    const rel = String(row.file_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!rel || rel.includes('..')) return sendUnifiedError(res, 400, 'BAD_PATH');
+    const abs = path.join(process.cwd(), rel);
+    try {
+      await fs.access(abs);
+    } catch {
+      return sendUnifiedError(res, 410, 'EXPORT_FILE_MISSING', { message: '导出文件已过期或不存在' });
+    }
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="sales-orders-${id}.xlsx"`);
+    res.sendFile(abs);
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.get('/orders/export/xlsx', async (req, res, next) => {
   try {
     const canExport =
@@ -2127,131 +2402,40 @@ router.get('/orders/export/xlsx', async (req, res, next) => {
     if (!canExport) return sendUnifiedError(res, 403, 'FORBIDDEN');
     const q = listQuerySchema.parse(req.query);
     const pool = getPool();
-    const uid = req.user.userId;
-    const seeAll =
-      perm(req, 'data_management', 'data_export_all') || canViewAllSalesOrders(req);
-
-    let sql = `SELECT o.order_no, o.data_json, o.qc_qrcode_id, c.customer_code, c.customer_name, o.product_code, o.product_name, o.product_model, o.warehouse_model,
-                      o.quantity, o.unit_price, o.amount, o.remark, o.status, o.created_at, u.username AS sales_username,
-                      COALESCE(NULLIF(TRIM(u_ship.real_name), ''), NULLIF(TRIM(u_ship.username), ''), '') AS shipped_by_name
-               FROM sales_orders o
-               INNER JOIN sales_customers c ON c.id = o.customer_id
-               LEFT JOIN users u ON u.id = o.created_by
-               LEFT JOIN users u_ship ON u_ship.id = o.shipped_by
-               WHERE 1=1`;
-    const args = [];
-    if (!seeAll) {
-      sql += ' AND o.created_by = ?';
-      args.push(uid);
-    }
-    if (q.customer_name) {
-      sql += ' AND c.customer_name LIKE ?';
-      args.push(`%${q.customer_name}%`);
-    }
-    if (q.customer_code) {
-      sql += ' AND c.customer_code LIKE ?';
-      args.push(`%${q.customer_code}%`);
-    }
-    if (q.product_name) sql += ' AND o.product_name LIKE ?', args.push(`%${q.product_name}%`);
-    if (q.product_code) sql += ' AND o.product_code LIKE ?', args.push(`%${q.product_code}%`);
-    if (q.product_model) sql += ' AND o.product_model LIKE ?', args.push(`%${q.product_model}%`);
-    if (q.warehouse_model) sql += ' AND o.warehouse_model LIKE ?', args.push(`%${q.warehouse_model}%`);
-    if (q.order_no) sql += ' AND o.order_no LIKE ?', args.push(`%${q.order_no}%`);
-    if (q.status) sql += ' AND o.status = ?', args.push(q.status);
-    if (q.sales_user_id && seeAll) sql += ' AND o.created_by = ?', args.push(q.sales_user_id);
-    sql = appendOrderListDateRange(sql, args, q, req);
-    const finScopeEx = financeOrderListScopeSql(req);
-    sql += finScopeEx.sql;
-    args.push(...finScopeEx.args);
-    sql += ` ORDER BY o.created_at DESC LIMIT 5000`;
-
-    const [rows] = await pool.query(sql, args);
-    const fieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
-    const labelRow = [
-      '订单号',
-      ...fieldDefs.map((d) => d.label_zh),
-      '状态',
-      '销售人员',
-      '发货人',
-      '上传日期',
-      '质检报告二维码'
-    ];
-    const models = rows.map((r) => r.product_model);
-    const qcMap = await loadQcMap(pool, models);
-    const rowsWithQc = await enrichOrdersQc(pool, rows, qcMap);
-    const wsData = [
-      labelRow,
-      ...rowsWithQc.map((o) => {
-        const { dataJson } = mergeRowDataJson(o, fieldDefs);
-        const qcLabel = o.qc_public_url || '无可用报告';
-        const cells = fieldDefs.map((d) => dataJson[d.field_key] ?? '');
-        return [
-          o.order_no,
-          ...cells,
-          o.status,
-          o.sales_username,
-          o.shipped_by_name || '',
-          formatOrderUploadTime(o.created_at),
-          qcLabel
-        ];
-      })
-    ];
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    XLSX.utils.book_append_sheet(wb, ws, 'orders');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const { buffer, rowCount, totalHit } = await buildSalesOrdersExportXlsxBuffer(pool, req, q);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="sales-orders.xlsx"');
-    res.send(buf);
+    res.send(buffer);
     await logOperationFromReq(req, {
       module: '销售订单',
       action: '导出订单',
-      detail: { count: rows.length }
+      detail: { count: rowCount, total_hit: totalHit, truncated: totalHit > SALES_ORDER_EXPORT_LIMIT }
     });
   } catch (e) {
     next(e);
   }
 });
 
-/** 导入模板内 10 行测试数据（列随 fieldDefs 顺序与类型生成） */
-function buildSalesImportSampleRows(fieldDefs) {
-  const materialPool = ['原厂直供', '授权分销', '备货仓', '集采渠道', '临时调拨'];
-  const kangPool = ['是', '否', '待确认', '是', '否', '是', '否', '待确认', '是', '否'];
-  const rows = [];
-  for (let rowIdx = 0; rowIdx < 10; rowIdx++) {
-    const i = rowIdx + 1;
-    const day = Math.min(28, 4 + rowIdx);
-    const productModel = `KM-${2200 + rowIdx}`;
-    const warehouseModel = `${2200 + rowIdx}-WH`;
-    rows.push(
-      fieldDefs.map((d) => {
-        if (d.field_type === 'date') {
-          return `2026-01-${String(day).padStart(2, '0')}`;
-        }
-        if (d.field_key === 'customer_code') return `TC${String(100 + rowIdx).slice(-3)}`;
-        if (d.field_key === 'customer_name') return `测试厂家${String.fromCharCode(64 + i)}`;
-        if (d.field_key === 'product_code') return `PH-2026${String(i).padStart(2, '0')}`;
-        if (d.field_key === 'product_name') return `PVC线槽 ${10 + rowIdx * 3}×${6 + rowIdx}mm`;
-        if (d.field_key === 'product_model') return `${productModel}/${warehouseModel}`;
-        if (d.field_key === 'warehouse_model') return '';
-        if (d.field_key === 'quantity') {
-          const units = ['桶', '吨桶', '箱', '托', '件', '桶', '吨桶', '箱', '托', '件'];
-          return `${18 + rowIdx * 4}${units[rowIdx]}`;
-        }
-        if (d.field_key === 'unit_price') return Number((11.8 + rowIdx * 0.35).toFixed(2));
-        if (d.field_key === 'remark') return rowIdx % 4 === 0 ? '' : `测试备注-${i}`;
-        if (d.field_key === 'material_source') return materialPool[rowIdx % materialPool.length];
-        if (d.field_key === 'kangming') return kangPool[rowIdx];
-        if (d.field_key === 'remaining') return rowIdx % 3 === 0 ? '' : String(120 - rowIdx * 8);
-        if (d.field_key === 'order_date') {
-          return `2026-01-${String(day).padStart(2, '0')}`;
-        }
-        if (d.field_type === 'number' || d.field_type === 'positive_number') return 1 + rowIdx;
-        return `测试${i}`;
-      })
-    );
-  }
-  return rows;
+/** 导入模板内 1 行测试数据（黄色标注，列随 fieldDefs 顺序与类型生成） */
+function buildSalesImportSampleRow(fieldDefs) {
+  return fieldDefs.map((d) => {
+    if (d.field_type === 'date') return '2026-01-04';
+    if (d.field_key === 'customer_code') return 'TC001';
+    if (d.field_key === 'customer_name') return '测试厂家A';
+    if (d.field_key === 'product_code') return '123456';
+    if (d.field_key === 'product_name') return '200kg';
+    if (d.field_key === 'product_model') return 'KM-2200/2200-WH';
+    if (d.field_key === 'warehouse_model') return '';
+    if (d.field_key === 'quantity') return '18桶';
+    if (d.field_key === 'unit_price' || d.maps_to === 'unit_price') return 10000.00;
+    if (d.field_key === 'remark') return '';
+    if (d.field_key === 'material_source') return '是';
+    if (d.field_key === 'kangming') return '否';
+    if (d.field_key === 'remaining') return '10桶';
+    if (d.field_key === 'order_date') return '2026-01-04';
+    if (d.field_type === 'number' || d.field_type === 'positive_number') return 1;
+    return '测试1';
+  });
 }
 
 router.get('/orders/template/xlsx', async (req, res, next) => {
@@ -2263,20 +2447,48 @@ router.get('/orders/template/xlsx', async (req, res, next) => {
     const productModelDef = fieldDefs.find(d => d.field_key === 'product_model');
     const warehouseModelDef = fieldDefs.find(d => d.field_key === 'warehouse_model');
     if (productModelDef && warehouseModelDef) {
-      // 保留标签型号列，移除仓库型号列
       fieldDefs = fieldDefs.filter(d => d.field_key !== 'warehouse_model');
-      // 修改标签型号列的标题为"标签型号/仓库型号"
       productModelDef.label_zh = '标签型号/仓库型号';
     }
     const headers = fieldDefs.map((d) => d.label_zh);
-    const sampleRows = buildSalesImportSampleRows(fieldDefs);
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
-    XLSX.utils.book_append_sheet(wb, ws, 'template');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const sampleRow = buildSalesImportSampleRow(fieldDefs);
+    const colCount = headers.length;
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'SalesSystem';
+    const ws = wb.addWorksheet('template');
+
+    // 列宽
+    ws.columns = headers.map(() => ({ width: 16 }));
+
+    // 警告行（第1行）
+    const warnCell = ws.getCell(1, 1);
+    warnCell.value = '⚠ 请务必在导入系统前删除下方的测试数据行和本行提示语！';
+    warnCell.font = { bold: true, color: { argb: 'FFCC0000' }, size: 11 };
+    warnCell.alignment = { vertical: 'middle', horizontal: 'left' };
+    ws.mergeCells(1, 1, 1, colCount);
+
+    // 表头行（第2行）
+    const headerRow = ws.getRow(2);
+    headers.forEach((h, ci) => { headerRow.getCell(ci + 1).value = h; });
+    headerRow.font = { bold: true };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    // 测试数据行（第3行）—— 黄色背景
+    const sampleRowObj = ws.getRow(3);
+    sampleRow.forEach((v, ci) => { sampleRowObj.getCell(ci + 1).value = v; });
+    sampleRowObj.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFFF00' }
+      };
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="sales-import-template.xlsx"');
-    res.send(buf);
+    res.send(Buffer.from(buf));
   } catch (e) {
     next(e);
   }
@@ -2299,7 +2511,7 @@ router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next)
     const pool = getPool();
     const definitions = await loadOrderFieldDefinitions(pool, { activeOnly: true });
     if (!definitions.length) return sendUnifiedError(res, 400, 'NO_FIELDS_DEFINED');
-    const labels = definitions.map((d) => d.label_zh);
+    const requiredHeaderLabels = definitions.filter((d) => d.required).map((d) => d.label_zh);
     const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     if (!sheet) return sendUnifiedError(res, 400, 'EMPTY_SHEET');
@@ -2334,9 +2546,13 @@ router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next)
       }
       if (idx === undefined && def.field_key === 'warehouse_model' && productDefI >= 0) {
         const pIdx = columnIndexes[productDefI];
-        if (pIdx !== undefined) idx = pIdx;
+        if (typeof pIdx === 'number') idx = pIdx;
       }
       if (idx === undefined) {
+        if (!def.required) {
+          columnIndexes.push(null);
+          continue;
+        }
         let hint = '';
         if (def.field_key === 'order_date') {
           hint = '；上传表中的「日期」列即为发货日期，无需改名';
@@ -2345,7 +2561,7 @@ router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next)
         }
         return sendUnifiedError(res, 400, 'HEADER_MISMATCH', {
           message: `未找到与「${def.label_zh}」对应的表头列${hint}。请与模板列名一致或包含同义表头（可带 * 前缀，列顺序可任意）`,
-          expected: labels,
+          expected: requiredHeaderLabels,
           got: rawHeader.map((c) => String(c ?? '').trim())
         });
       }
@@ -2364,12 +2580,14 @@ router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next)
       const rowNum = ri + 1;
       const obj = {};
       definitions.forEach((d, j) => {
-        const cell = line[columnIndexes[j]];
+        const colI = columnIndexes[j];
+        const cell = typeof colI === 'number' ? line[colI] : undefined;
         obj[d.field_key] = coerceImportCell(cell, d.field_type);
       });
       if (
         productDefI >= 0 &&
         warehouseDefI >= 0 &&
+        typeof columnIndexes[productDefI] === 'number' &&
         columnIndexes[productDefI] === columnIndexes[warehouseDefI]
       ) {
         const raw = line[columnIndexes[productDefI]];
@@ -2402,94 +2620,121 @@ router.post('/orders/import/xlsx', upload.single('file'), async (req, res, next)
     const duplicates = [];
     let ok = 0;
     const seeAllOrders = canViewAllSalesOrders(req);
-    for (const { rowNum, data: obj } of prepared) {
-      const conn = await pool.getConnection();
-      try {
-        await conn.beginTransaction();
-        
-        // 检查数据库中是否已存在相同订单
-        const leg = dataJsonToLegacyColumns(definitions, obj);
-        const codeKey = definitions.find((d) => d.maps_to === 'customer_code')?.field_key;
-        const nameKey = definitions.find((d) => d.maps_to === 'customer_name')?.field_key;
-        const customerId = await getOrCreateCustomer(conn, {
-          customer_code: codeKey ? obj[codeKey] : '',
-          customer_name: nameKey ? obj[nameKey] : '',
-          userId: uid
-        });
-        
-        // 检查是否存在相同的订单
-        let duplicateSql = `SELECT o.id, o.order_no, o.product_name, o.product_model, o.product_code, c.customer_name 
-           FROM sales_orders o 
-           LEFT JOIN sales_customers c ON c.id = o.customer_id
-           WHERE o.customer_id = ? 
-           AND o.product_code = ? 
-           AND o.product_name = ? 
-           AND o.product_model = ? 
-           AND o.warehouse_model = ? 
-           AND o.quantity = ? 
-           AND o.unit_price = ? 
-           AND o.amount = ? 
-           AND o.status != 'cancelled'`;
-        const duplicateArgs = [
-          customerId,
-          leg.product_code || '',
-          leg.product_name || '',
-          leg.product_model || '',
-          leg.warehouse_model || '',
-          leg.quantity || 0,
-          leg.unit_price || 0,
-          leg.amount || 0
-        ];
-        if (!seeAllOrders) {
-          duplicateSql += ' AND o.created_by = ?';
-          duplicateArgs.push(uid);
-        }
-        duplicateSql += ' LIMIT 1';
+    const codeKey = definitions.find((d) => d.maps_to === 'customer_code')?.field_key;
+    const nameKey = definitions.find((d) => d.maps_to === 'customer_name')?.field_key;
 
-        const [existing] = await conn.query(
-          duplicateSql,
-          duplicateArgs
-        );
-        
-        if (existing.length > 0) {
-          const dup = existing[0];
+    const staged = [];
+    for (const { rowNum, data: obj } of prepared) {
+      const { errors: verr, data: normalized } = validateOrderDataInput(definitions, obj);
+      if (verr.length) {
+        errors.push({ row: rowNum, reason: verr.map((d) => `${d.label_zh}: ${d.message}`).join('；') });
+        continue;
+      }
+      const leg = dataJsonToLegacyColumns(definitions, normalized);
+      staged.push({ rowNum, data: obj, normalized, leg });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      const customerCache = new Map();
+      const resolved = [];
+      for (const s of staged) {
+        try {
+          const ckey = `${codeKey ? String(s.normalized[codeKey] ?? '') : ''}\t${nameKey ? String(s.normalized[nameKey] ?? '') : ''}`;
+          let customerId = customerCache.get(ckey);
+          if (customerId == null) {
+            customerId = await getOrCreateCustomer(conn, {
+              customer_code: codeKey ? s.normalized[codeKey] : '',
+              customer_name: nameKey ? s.normalized[nameKey] : '',
+              userId: uid
+            });
+            customerCache.set(ckey, customerId);
+          }
+          resolved.push({ ...s, customerId });
+        } catch (err) {
+          const reason =
+            err?.code === 'VALIDATION'
+              ? err.message
+              : err?.code === 'CUSTOMER_DISABLED'
+                ? '客户已停用，无法创建订单'
+                : mapImportRowPersistError(err);
+          errors.push({ row: s.rowNum, reason });
+        }
+      }
+
+      const tuples = resolved.map((r) => [
+        r.customerId,
+        r.leg.product_code || '',
+        r.leg.product_name || '',
+        r.leg.product_model || '',
+        r.leg.warehouse_model || '',
+        r.leg.quantity || 0,
+        r.leg.unit_price || 0,
+        r.leg.amount || 0
+      ]);
+
+      const dupMap = await loadExistingDuplicateOrderBatch(pool, tuples, { createdByUid: uid, seeAllOrders });
+      const sessionDupKeys = new Map();
+
+      for (const r of resolved) {
+        const k = orderDuplicateFingerprintKey(r.customerId, r.leg);
+        const importedCustomer = nameKey ? String(r.normalized[nameKey] ?? '').trim() : '';
+        const exDb = dupMap.get(k);
+        if (exDb) {
           duplicates.push({
-            row: rowNum,
-            imported_customer: dup.customer_name || '',
-            imported_product: leg.product_name || '',
-            imported_model: leg.product_model || '',
-            imported_batch_no: leg.product_code || '',
-            existing_order_no: dup.order_no || '',
-            existing_customer: dup.customer_name || '',
-            existing_product: dup.product_name || '',
-            existing_batch_no: dup.product_code || ''
+            row: r.rowNum,
+            imported_customer: importedCustomer || String(exDb.customer_name || ''),
+            imported_product: r.leg.product_name || '',
+            imported_model: r.leg.product_model || '',
+            imported_batch_no: r.leg.product_code || '',
+            existing_order_no: exDb.order_no || '',
+            existing_customer: String(exDb.customer_name || ''),
+            existing_product: exDb.product_name || '',
+            existing_batch_no: exDb.product_code || ''
           });
-          await conn.rollback();
-          conn.release();
           continue;
         }
-        
-        await insertOrderWithData(conn, {
-          userId: uid,
-          data: obj,
-          definitions,
-          statusRemark: 'Excel导入'
-        });
-        await conn.commit();
-        ok++;
-      } catch (err) {
-        await conn.rollback();
-        if (Array.isArray(err.details) && err.details.length) {
-          errors.push({
-            row: rowNum,
-            reason: err.details.map((d) => `${d.label_zh}: ${d.message}`).join('；')
+        const exSession = sessionDupKeys.get(k);
+        if (exSession) {
+          duplicates.push({
+            row: r.rowNum,
+            imported_customer: importedCustomer || String(exSession.customer_name || ''),
+            imported_product: r.leg.product_name || '',
+            imported_model: r.leg.product_model || '',
+            imported_batch_no: r.leg.product_code || '',
+            existing_order_no: exSession.order_no || '本批已导入',
+            existing_customer: String(exSession.customer_name || ''),
+            existing_product: r.leg.product_name || '',
+            existing_batch_no: r.leg.product_code || ''
           });
-        } else {
-          errors.push({ row: rowNum, reason: err.message || String(err) });
+          continue;
         }
-      } finally {
-        conn.release();
+        try {
+          const ins = await insertOrderWithData(conn, {
+            userId: uid,
+            data: r.data,
+            definitions,
+            statusRemark: 'Excel导入'
+          });
+          const customerLabel = nameKey ? String(r.normalized[nameKey] ?? '').trim() : '';
+          sessionDupKeys.set(k, {
+            order_no: ins.order_no,
+            customer_name: customerLabel
+          });
+          ok++;
+        } catch (err) {
+          if (Array.isArray(err.details) && err.details.length) {
+            errors.push({
+              row: r.rowNum,
+              reason: err.details.map((d) => `${d.label_zh}: ${d.message}`).join('；')
+            });
+          } else {
+            errors.push({ row: r.rowNum, reason: mapImportRowPersistError(err) });
+          }
+        }
       }
+    } finally {
+      conn.release();
     }
     await logOperationFromReq(req, {
       module: '销售订单',

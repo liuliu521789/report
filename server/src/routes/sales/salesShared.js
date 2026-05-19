@@ -208,12 +208,28 @@ export function financeOrderListScopeSql(req) {
 }
 
 /**
+ * 下一自然日 YYYY-MM-DD（与 `DATE_ADD(ymd, INTERVAL 1 DAY)` 在日期边界语义上等价）。
+ * 避免部分 MySQL/代理在预处理语句中对 `DATE_ADD(?, …)` 报 ER_PARSE_ERROR。
+ */
+function nextCalendarDayYmd(ymd) {
+  const s = String(ymd || '').trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return s;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo - 1, d + 1));
+  return dt.toISOString().slice(0, 10);
+}
+
+/**
  * 列表日期范围：默认按上传时间 created_at。
  * 勾选「仅待财务审核」：按提交审核时间 submitted_for_review_at。
  * 纯财务视图（仅有财务审单、无 order_input）：列表只含已提交过的订单，日期也按 submitted_for_review_at，
  * 避免「很久以前录入、今天才提交」的订单有通知但列表为空。
  */
-export function appendOrderListDateRange(sql, args, q, req) {
+export function appendOrderListDateRange(sql, args, q, req, opts = {}) {
+  if (opts.skipAll) return sql;
   const hasDateFrom = Boolean(q.date_from);
   const hasDateTo = Boolean(q.date_to);
   const shouldApplyDefaultRange =
@@ -225,26 +241,113 @@ export function appendOrderListDateRange(sql, args, q, req) {
   const start = hasDateFrom ? new Date(q.date_from) : new Date(end.getTime() - 30 * 86400000);
   const startStr = start.toISOString().slice(0, 10);
   const endStr = end.toISOString().slice(0, 10);
+  const endExclusive = nextCalendarDayYmd(endStr);
   if (q.pending_finance_only) {
     sql += " AND o.status = 'pending_review' AND o.submitted_for_review_at IS NOT NULL";
-    sql += ' AND o.submitted_for_review_at >= ? AND o.submitted_for_review_at < DATE_ADD(?, INTERVAL 1 DAY)';
-    args.push(startStr, endStr);
+    sql += ' AND o.submitted_for_review_at >= ? AND o.submitted_for_review_at < ?';
+    args.push(startStr, endExclusive);
   } else if (q.pending_qc_only) {
     sql += " AND o.status = 'pending_qc'";
-    sql += ' AND o.finance_reviewed_at >= ? AND o.finance_reviewed_at < DATE_ADD(?, INTERVAL 1 DAY)';
-    args.push(startStr, endStr);
+    sql += ' AND o.finance_reviewed_at >= ? AND o.finance_reviewed_at < ?';
+    args.push(startStr, endExclusive);
   } else if (isPureFinanceOrderScope(req)) {
-    sql += ' AND o.submitted_for_review_at >= ? AND o.submitted_for_review_at < DATE_ADD(?, INTERVAL 1 DAY)';
-    args.push(startStr, endStr);
+    sql += ' AND o.submitted_for_review_at >= ? AND o.submitted_for_review_at < ?';
+    args.push(startStr, endExclusive);
   } else if (isPureQcOrderScope(req)) {
     sql += " AND o.status = 'pending_qc'";
-    sql += ' AND o.finance_reviewed_at >= ? AND o.finance_reviewed_at < DATE_ADD(?, INTERVAL 1 DAY)';
-    args.push(startStr, endStr);
+    sql += ' AND o.finance_reviewed_at >= ? AND o.finance_reviewed_at < ?';
+    args.push(startStr, endExclusive);
   } else {
-    sql += ' AND o.created_at >= ? AND o.created_at < DATE_ADD(?, INTERVAL 1 DAY)';
-    args.push(startStr, endStr);
+    sql += ' AND o.created_at >= ? AND o.created_at < ?';
+    args.push(startStr, endExclusive);
   }
   return sql;
+}
+
+const FLOW_BUCKETS = new Set([
+  'pending_submit',
+  'pending_finance',
+  'pending_qc',
+  'pending_ship',
+  'shipped_open',
+  'rejected'
+]);
+
+/**
+ * 与 GET /orders 列表一致：可见范围 + 文本筛选 + 日期 + 财务范围 + 流程看板快捷筛（flow_bucket）。
+ * @param {import('express').Request} req
+ * @param {Record<string, unknown>} q 已 parse 的 listQuery
+ * @param {{ uid: number, seeAll: boolean }} scope
+ * @param {{ skipDateRange?: boolean }} [opts] skipDateRange：统计看板不按列表默认 30 天等日期收窄
+ * @returns {{ sql: string, args: unknown[] }} **args 与入参为同一数组**，已就地 push 占位值，调用方勿 `args.length = 0` 后再 `push(...scoped.args)`。
+ */
+export function appendSalesOrderListFilters(sql, args, req, q, { uid, seeAll }, opts = {}) {
+  if (!seeAll) {
+    sql += ' AND o.created_by = ?';
+    args.push(uid);
+  }
+  if (q.id) {
+    sql += ' AND o.id = ?';
+    args.push(q.id);
+  }
+  if (q.customer_name) {
+    sql += ' AND c.customer_name LIKE ?';
+    args.push(`%${q.customer_name}%`);
+  }
+  if (q.customer_code) {
+    sql += ' AND c.customer_code LIKE ?';
+    args.push(`%${q.customer_code}%`);
+  }
+  if (q.product_name) {
+    sql += ' AND o.product_name LIKE ?';
+    args.push(`%${q.product_name}%`);
+  }
+  if (q.product_code) {
+    sql += ' AND o.product_code LIKE ?';
+    args.push(`%${q.product_code}%`);
+  }
+  if (q.product_model) {
+    sql += ' AND o.product_model LIKE ?';
+    args.push(`%${q.product_model}%`);
+  }
+  if (q.warehouse_model) {
+    sql += ' AND o.warehouse_model LIKE ?';
+    args.push(`%${q.warehouse_model}%`);
+  }
+  if (q.order_no) {
+    sql += ' AND o.order_no LIKE ?';
+    args.push(`%${q.order_no}%`);
+  }
+
+  const fb = q.flow_bucket && FLOW_BUCKETS.has(String(q.flow_bucket)) ? String(q.flow_bucket) : '';
+  if (fb) {
+    if (fb === 'pending_submit') {
+      sql += " AND o.status = 'pending_review' AND o.submitted_for_review_at IS NULL";
+    } else if (fb === 'pending_finance') {
+      sql += " AND o.status = 'pending_review' AND o.submitted_for_review_at IS NOT NULL";
+    } else if (fb === 'pending_qc') {
+      sql += " AND o.status = 'pending_qc'";
+    } else if (fb === 'pending_ship') {
+      sql += " AND o.status = 'approved'";
+    } else if (fb === 'shipped_open') {
+      sql += " AND o.status = 'shipped'";
+    } else if (fb === 'rejected') {
+      sql += " AND o.status = 'rejected'";
+    }
+  } else if (q.status) {
+    sql += ' AND o.status = ?';
+    args.push(q.status);
+  }
+
+  if (q.sales_user_id && seeAll) {
+    sql += ' AND o.created_by = ?';
+    args.push(q.sales_user_id);
+  }
+  sql = appendOrderListDateRange(sql, args, q, req, { skipAll: opts.skipDateRange === true });
+  const finScopeSql = financeOrderListScopeSql(req);
+  sql += finScopeSql.sql;
+  args.push(...finScopeSql.args);
+  return { sql, args };
 }
 
 export function assertFinanceOrderListScope(req, row) {
@@ -391,6 +494,66 @@ export async function enrichOrdersQc(pool, rows, qcMap) {
     )
   );
   return baseRows.map((o, i) => ({ ...o, qc_thumb_data_url: thumbs[i] }));
+}
+
+export function canSeeOrderListUnitPrice(req) {
+  return perm(req, 'order_management', 'order_list_unit_price');
+}
+
+export function canSeeOrderListContract(req) {
+  return perm(req, 'order_management', 'order_list_contract');
+}
+
+export function canSeeOrderListQcQrcode(req) {
+  return perm(req, 'order_management', 'order_list_qc_qrcode');
+}
+
+/** 列表/导出：无「列表显示单价」权限时去掉 maps_to=unit_price 的字段列 */
+export function filterOrderFieldDefsForList(req, fieldDefs) {
+  if (canSeeOrderListUnitPrice(req)) return fieldDefs;
+  return fieldDefs.filter((d) => d.maps_to !== 'unit_price');
+}
+
+/** 列表 API 响应：按权限脱敏单价、合同摘要、质检二维码 */
+export function redactOrderListRowForViewer(req, row, fieldDefs) {
+  const showUnit = canSeeOrderListUnitPrice(req);
+  const showContract = canSeeOrderListContract(req);
+  const showQc = canSeeOrderListQcQrcode(req);
+  if (showUnit && showContract && showQc) return row;
+
+  const out = { ...row };
+  if (!showUnit) {
+    out.unit_price = null;
+    if (out.display_data && fieldDefs?.length) {
+      const dd = { ...out.display_data };
+      for (const d of fieldDefs) {
+        if (d.maps_to === 'unit_price') delete dd[d.field_key];
+      }
+      out.display_data = dd;
+    }
+    if (out.data_json && typeof out.data_json === 'object' && fieldDefs?.length) {
+      const dj = { ...out.data_json };
+      for (const d of fieldDefs) {
+        if (d.maps_to === 'unit_price') delete dj[d.field_key];
+      }
+      out.data_json = dj;
+    }
+  }
+  if (!showContract) {
+    out.contract_id = null;
+    out.contract_status = null;
+    out.contract_last_reject_comment = null;
+  }
+  if (!showQc) {
+    out.qc_qrcode_id = null;
+    out.qcQrcodeId = null;
+    out.qc_token = null;
+    out.qc_public_url = null;
+    out.qc_report_label = null;
+    out.qc_bound_manual = false;
+    out.qc_thumb_data_url = null;
+  }
+  return out;
 }
 
 export function orderEditable(row) {

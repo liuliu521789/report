@@ -245,6 +245,16 @@
                       <div class="tpl-insert-row mt6 table-ops">
                         <el-button size="small" @click="addVisualTableRow">＋ 增加行</el-button>
                         <el-button size="small" @click="removeVisualTableRow" :disabled="visual.tableRows.length <= 1">－ 减少行</el-button>
+                        <el-button size="small" type="primary" plain @click="recalcAllOrderLines">
+                          按单价重算整表
+                        </el-button>
+                        <el-button
+                          v-if="isContractMode && contractOrders.length"
+                          size="small"
+                          @click="fillOrderLinesFromContractOrders"
+                        >
+                          从关联订单带入
+                        </el-button>
                         <el-button v-if="!isContractMode" size="small" @click="editMode = 'raw'" icon=Edit>
                           去源码编辑插入占位符
                         </el-button>
@@ -260,19 +270,31 @@
                           </thead>
                           <tbody>
                             <tr v-for="(row, ri) in visual.tableRows" :key="'r-' + ri">
-                              <td v-for="(_cell, cj) in orderLineHeaders" :key="'c-' + ri + '-' + cj">
-                                <el-input v-model="visual.tableRows[ri][cj]" size="small" />
+                              <td
+                                v-for="(_cell, cj) in orderLineHeaders"
+                                :key="'c-' + ri + '-' + cj"
+                              >
+                                <el-input
+                                  v-model="visual.tableRows[ri][cj]"
+                                  size="small"
+                                  :placeholder="orderLineCellPlaceholder(cj)"
+                                  @input="onOrderLineCellInput(ri, cj)"
+                                  @change="onOrderLineCellChange(ri, cj)"
+                                />
+                              </td>
+                            </tr>
+                            <tr class="order-line-total-row">
+                              <td class="order-line-total-label">总金额</td>
+                              <td :colspan="orderLineHeaders.length - 1" class="order-line-total-value">
+                                <el-input
+                                  v-model="visual.tableTotalText"
+                                  placeholder="{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）"
+                                />
                               </td>
                             </tr>
                           </tbody>
                         </table>
                       </div>
-                      <div class="form-label mt8">表格内总金额（大写）</div>
-                      <el-input
-                        v-model="visual.tableTotalText"
-                        placeholder="留空则用占位符 {{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）"
-                        class="mt4"
-                      />
                     </template>
                     <template v-else>
                       <div class="form-label mt6">条款内容</div>
@@ -293,30 +315,31 @@
                     </div>
                   </div>
                 </div>
-                <div v-if="visual.showPartyBlock" class="form-row mt12">
-                  <div class="form-group">
-                    <div class="form-label">卖方信息</div>
-                    <el-input v-model="visual.sellerUnit" placeholder="单位（例如：开封物源化工有限公司）" class="mt6" />
-                    <el-input v-model="visual.sellerAddress" placeholder="地址" class="mt6" />
-                    <el-input v-model="visual.sellerContact" placeholder="联系人" class="mt6" />
-                    <el-input v-model="visual.sellerPhone" placeholder="电话" class="mt6" />
-                    <el-input v-model="visual.sellerFax" placeholder="传真" class="mt6" />
-                    <el-input v-model="visual.sellerBank" placeholder="开户银行" class="mt6" />
-                    <el-input v-model="visual.sellerAccount" placeholder="账号" class="mt6" />
-                    <el-input v-model="visual.sellerBankNo" placeholder="行号" class="mt6" />
+                <div v-if="visual.showPartyBlock" class="party-editor-box mt12">
+                  <div class="header-editor-col">
+                    <div class="form-label header-col-caption">卖方</div>
+                    <div v-for="(item, pi) in visual.partySellerItems" :key="'party-seller-' + pi" class="header-item-row">
+                      <el-input v-model="item.label" class="header-item-label" placeholder="字段名称" clearable />
+                      <span class="header-item-sep">：</span>
+                      <el-input v-model="item.value" class="header-item-value" :placeholder="partyValuePlaceholder(item)" clearable />
+                      <el-button type="danger" plain size="small" class="header-item-remove" @click="removePartyItem('seller', pi)">－</el-button>
+                    </div>
+                    <el-button size="small" class="mt6" @click="addPartyItem('seller')">＋ 添加卖方字段</el-button>
                   </div>
-                  <div class="form-group">
-                    <div class="form-label">买方信息</div>
-                    <el-input v-model="visual.buyerUnit" placeholder="单位（例如：昆明华信金属材料制造有限公司）" class="mt6" />
-                    <el-input v-model="visual.buyerAddress" placeholder="地址" class="mt6" />
-                    <el-input v-model="visual.buyerContact" placeholder="联系人" class="mt6" />
-                    <el-input v-model="visual.buyerPhone" placeholder="电话" class="mt6" />
-                    <el-input v-model="visual.buyerFax" placeholder="传真" class="mt6" />
-                    <el-input v-model="visual.buyerBank" placeholder="开户银行" class="mt6" />
-                    <el-input v-model="visual.buyerAccount" placeholder="账号" class="mt6" />
-                    <el-input v-model="visual.buyerTaxNo" placeholder="税号" class="mt6" />
+                  <div class="header-editor-col">
+                    <div class="form-label header-col-caption">买方</div>
+                    <div v-for="(item, pi) in visual.partyBuyerItems" :key="'party-buyer-' + pi" class="header-item-row">
+                      <el-input v-model="item.label" class="header-item-label" placeholder="字段名称" clearable />
+                      <span class="header-item-sep">：</span>
+                      <el-input v-model="item.value" class="header-item-value" :placeholder="partyValuePlaceholder(item)" clearable />
+                      <el-button type="danger" plain size="small" class="header-item-remove" @click="removePartyItem('buyer', pi)">－</el-button>
+                    </div>
+                    <el-button size="small" class="mt6" @click="addPartyItem('buyer')">＋ 添加买方字段</el-button>
                   </div>
                 </div>
+                <p v-if="visual.showPartyBlock" class="tpl-insert-hint mt6">
+                  可修改字段名称与内容；点「－」删除该行后，保存的合同正文中不再显示该项。留空的「单位」仍可按公司抬头/客户名称占位。
+                </p>
               </div>
 
               <el-collapse class="tpl-advanced-collapse">
@@ -326,7 +349,7 @@
                   </template>
                   <p class="tpl-advanced-p" v-pre>
                     占位符均为「双大括号 + 英文代号」。必须与按钮插入的拼写完全一致；卖方公司名称来自「企业信息」；买方信息来自客户档案；编号与签订日期在生成合同草稿时写入。
-                    订单明细表当前列：品名、型号、不含税单价（元）、单位（吨）、数量（桶）、不含税金额（元）、税率、税额（元）、价税合计（元）。生成时税额按 13% 推算；单位（吨）暂无订单字段时为「—」。
+                    订单明细表（编辑时）：品名、型号、单价（元）、不含税单价（元）、单位（吨）、数量（桶）、不含税金额（元）、税率、税额（元）、价税合计（元）。保存/落库的合同正文会自动去掉「单价」列。生成草稿时：订单 unit_price 视为含税单价（元/吨），税率默认 13%（可用订单 tax_rate / vat_rate，支持 0.13 或 13 或 13%）；不含税单价=单价÷(1+税率)，不含税金额=不含税单价×吨，价税合计=单价×吨，税额=价税合计−不含税金额；单位（吨）=数量×规格（千克列加 kg 等后缀时换算为吨），均为两位小数四舍五入。
                   </p>
                 </el-collapse-item>
               </el-collapse>
@@ -456,18 +479,44 @@ import {
   replaceSalesContractDocument,
   downloadSalesContractDocument
 } from '../api';
+import { startDownload } from '../composables/useDownloadProgress.js';
 import ContractVersionDiff from '../components/ContractVersionDiff.vue';
 import SignaturePad from '../components/SignaturePad.vue';
 import {
   BLANK_TPL_BODY,
   previewFillContractTemplate
 } from '../utils/contractTemplateDefaults';
-import { createDefaultVisual, CONTRACT_ORDER_LINE_HEADERS } from '../utils/contractVisualDefaults';
+import { createDefaultVisual, CONTRACT_ORDER_LINE_HEADERS, CONTRACT_ORDER_LINE_HEADERS_FINAL } from '../utils/contractVisualDefaults';
 import { parseContractHtmlToVisual } from '../utils/contractBodyToVisual';
+import {
+  applyContractVisualSnapshot,
+  buildContractVisualSnapshot,
+  contractVisualFromDataJson
+} from '../utils/contractVisualSnapshot';
+import {
+  buildTableTotalTextFromEditorRows,
+  editorRowsFromContractOrders,
+  enrichVisualOrderLinesFromContractOrders,
+  patchEditorOrderLineCalcColumns,
+  isOrderLineTriggerColumn,
+  ORDER_LINE_COL
+} from '../utils/contractOrderLineCalc';
 import {
   finalizeContractBodyForPreview,
   CONTRACT_PREVIEW_TITLE_FONT
 } from '../utils/contractPreviewHtml';
+import {
+  createEmptyPartyItem,
+  ensurePartyItemsOnVisual,
+  PARTY_FALLBACK_COMPANY,
+  PARTY_FALLBACK_CUSTOMER,
+  renderPartyItemsInnerHtml
+} from '../utils/contractPartyItems';
+import {
+  ORDER_LINES_CELL_NOWRAP,
+  ORDER_LINES_CELL_STYLE,
+  orderLinesTableOpenTag
+} from '../utils/contractOrderLinesTableStyle';
 
 export default {
   name: 'ContractTemplateEdit',
@@ -514,6 +563,9 @@ export default {
     orderLineHeaders() {
       return CONTRACT_ORDER_LINE_HEADERS;
     },
+    orderLineTotalDisplay() {
+      return (this.visual?.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
+    },
     numericContractId() {
       if (this.contractId == null || this.contractId === '') return null;
       const n = Number(this.contractId);
@@ -554,10 +606,15 @@ export default {
       if (!useVisual) return previewFillContractTemplate(html);
       const totalDisplay = String(this.visual?.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
       const withVisualLines = String(html || '')
-        .replaceAll('{{ORDER_LINES}}', this.buildVisualTableHtml())
+        .replaceAll(
+          '{{ORDER_LINES}}',
+          this.buildVisualTableHtml(this.isContractMode ? { forContractPersist: true } : {})
+        )
         .replaceAll('{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）', totalDisplay);
       if (this.isContractMode) {
-        return finalizeContractBodyForPreview(withVisualLines, this.contractOrders, vars);
+        return finalizeContractBodyForPreview(withVisualLines, [], vars, {
+          skipOrderLinesFromOrders: true
+        });
       }
       return previewFillContractTemplate(withVisualLines);
     }
@@ -581,11 +638,20 @@ export default {
       handler() {
         if (this.editMode !== 'visual' && !this.isContractMode) return;
         if (this.isContractMode && this.contractParseFailed) return;
-        if (this.editMode === 'visual' || this.isContractMode) {
+        if (this.isContractMode) {
+          this.syncContractBodyHtmlFromVisual();
+        } else if (this.editMode === 'visual') {
           this.form.body_html = this.visualToBodyHtml();
         }
       }
     }
+  },
+  beforeUnmount() {
+    if (!this._orderLineRecalcTimers) return;
+    for (const t of Object.values(this._orderLineRecalcTimers)) {
+      clearTimeout(t);
+    }
+    this._orderLineRecalcTimers = null;
   },
   methods: {
     perm,
@@ -739,11 +805,21 @@ export default {
         if (!parsed) {
           parsed = parseContractHtmlToVisual(`${TPL_OUTER_WRAP}${html}</div>`, base);
         }
+        const visualSnap = contractVisualFromDataJson(c.data_json);
+        if (parsed && visualSnap) {
+          parsed = applyContractVisualSnapshot(parsed, visualSnap);
+        } else if (!parsed && visualSnap) {
+          parsed = applyContractVisualSnapshot(createDefaultVisual(), visualSnap);
+        }
         if (parsed) {
           this.contractParseFailed = false;
           this.visual = parsed;
+          this.normalizePartyVisual();
+          this.ensureTableRowSpecsLength();
+          enrichVisualOrderLinesFromContractOrders(this.visual, this.contractOrders);
           this.editMode = 'visual';
-          this.form = { name: title, body_html: this.visualToBodyHtml() };
+          this.form.name = title;
+          this.syncContractBodyHtmlFromVisual();
         } else {
           this.contractParseFailed = true;
           this.visual = createDefaultVisual();
@@ -784,11 +860,13 @@ export default {
       }
       if (parsed) {
         this.visual = parsed;
+        this.normalizePartyVisual();
         this.editMode = 'visual';
         this.form.body_html = this.visualToBodyHtml();
         return true;
       }
       this.visual = createDefaultVisual();
+      this.normalizePartyVisual();
       this.editMode = 'raw';
       this.form.body_html = h;
       return false;
@@ -918,13 +996,109 @@ export default {
     removeVisualTableColumn() {
       // 订单明细表列与后端生成合同保持一致，列数固定
     },
+    isOrderLineTriggerColumn,
+    orderLineCellPlaceholder(cj) {
+      if (cj === ORDER_LINE_COL.GROSS_UNIT) return '含税单价/吨';
+      if (cj === ORDER_LINE_COL.QTY) return '桶数';
+      if (cj === ORDER_LINE_COL.PRODUCT_NAME) return '品名';
+      if (cj === ORDER_LINE_COL.MODEL) return '型号';
+      if (cj === ORDER_LINE_COL.NET_UNIT) return '不含税单价';
+      if (cj === ORDER_LINE_COL.TONS) return '吨';
+      if (cj === ORDER_LINE_COL.NET_AMOUNT) return '不含税金额';
+      if (cj === ORDER_LINE_COL.TAX_RATE) return '如 13%';
+      if (cj === ORDER_LINE_COL.TAX_AMOUNT) return '税额';
+      if (cj === ORDER_LINE_COL.TOTAL) return '价税合计';
+      return '';
+    },
+    onOrderLineCellInput(ri, cj) {
+      if (this.contractParseFailed) return;
+      if (!isOrderLineTriggerColumn(cj)) return;
+      this.scheduleOrderLineRowRecalc(ri, cj);
+    },
+    onOrderLineCellChange(ri, cj) {
+      if (this.contractParseFailed) return;
+      if (!isOrderLineTriggerColumn(cj)) return;
+      this.flushOrderLineRowRecalc(ri);
+      this.recalcOrderLineRow(ri, cj);
+    },
+    scheduleOrderLineRowRecalc(ri, editedCol) {
+      if (!this._orderLineRecalcTimers) this._orderLineRecalcTimers = {};
+      const key = `${ri}:${editedCol}`;
+      clearTimeout(this._orderLineRecalcTimers[key]);
+      this._orderLineRecalcTimers[key] = setTimeout(() => {
+        delete this._orderLineRecalcTimers[key];
+        this.recalcOrderLineRow(ri, editedCol);
+      }, 200);
+    },
+    flushOrderLineRowRecalc(ri) {
+      if (!this._orderLineRecalcTimers) return;
+      for (const k of Object.keys(this._orderLineRecalcTimers)) {
+        if (k.startsWith(`${ri}:`)) {
+          clearTimeout(this._orderLineRecalcTimers[k]);
+          delete this._orderLineRecalcTimers[k];
+        }
+      }
+    },
+    recalcOrderLineRow(ri, editedCol = null) {
+      if (this.contractParseFailed) return;
+      const specs = this.visual.tableRowSpecs || [];
+      const row = this.visual.tableRows?.[ri];
+      if (!row) return;
+      const patched = patchEditorOrderLineCalcColumns(row, {
+        orderSpecText: specs[ri],
+        editedCol
+      });
+      this.visual.tableRows.splice(ri, 1, patched);
+      const totalText = buildTableTotalTextFromEditorRows(this.visual.tableRows);
+      if (totalText) {
+        this.visual.tableTotalText = totalText;
+      }
+    },
+    recalcAllOrderLines() {
+      if (this.contractParseFailed) return;
+      const specs = this.visual.tableRowSpecs || [];
+      this.visual.tableRows = (this.visual.tableRows || []).map((row, ri) =>
+        patchEditorOrderLineCalcColumns(row, {
+          orderSpecText: specs[ri],
+          editedCol: ORDER_LINE_COL.GROSS_UNIT
+        })
+      );
+      this.visual.tableTotalText = buildTableTotalTextFromEditorRows(this.visual.tableRows);
+      this.$message.success('已按单价重算');
+    },
+    fillOrderLinesFromContractOrders() {
+      const { rows, orderSpecs } = editorRowsFromContractOrders(this.contractOrders);
+      if (!rows.length) {
+        this.$message.warning('关联订单缺少单价或数量，无法带入');
+        return;
+      }
+      this.visual.tableRows = rows;
+      this.visual.tableRowSpecs = orderSpecs;
+      this.visual.tableTotalText = buildTableTotalTextFromEditorRows(rows);
+      this.$message.success('已从关联订单填入并重算');
+    },
+    ensureTableRowSpecsLength() {
+      const n = (this.visual.tableRows || []).length;
+      const specs = Array.isArray(this.visual.tableRowSpecs) ? [...this.visual.tableRowSpecs] : [];
+      while (specs.length < n) specs.push('');
+      if (specs.length > n) specs.length = n;
+      this.visual.tableRowSpecs = specs;
+    },
     addVisualTableRow() {
       const cols = this.orderLineHeaders.length || 1;
-      this.visual.tableRows.push(Array.from({ length: cols }, () => ''));
+      this.ensureTableRowSpecsLength();
+      const row = patchEditorOrderLineCalcColumns(Array.from({ length: cols }, () => ''), {
+        editedCol: ORDER_LINE_COL.GROSS_UNIT
+      });
+      this.visual.tableRows.push(row);
+      this.visual.tableRowSpecs.push('');
     },
     removeVisualTableRow() {
       if (this.visual.tableRows.length <= 1) return;
       this.visual.tableRows.pop();
+      if (Array.isArray(this.visual.tableRowSpecs) && this.visual.tableRowSpecs.length) {
+        this.visual.tableRowSpecs.pop();
+      }
     },
     insertClause(index) {
       const i = Number(index);
@@ -945,40 +1119,70 @@ export default {
       if (arr.length <= 1) return;
       arr.splice(index, 1);
     },
-    buildVisualTableHtml() {
+    normalizePartyVisual() {
+      this.visual = ensurePartyItemsOnVisual(this.visual);
+    },
+    partyValuePlaceholder(item) {
+      if (item?.fallback === PARTY_FALLBACK_COMPANY) return '留空则使用公司抬头';
+      if (item?.fallback === PARTY_FALLBACK_CUSTOMER) return '留空则使用客户名称';
+      return '留空则不在合同中显示';
+    },
+    addPartyItem(side) {
+      this.normalizePartyVisual();
+      const key = side === 'buyer' ? 'partyBuyerItems' : 'partySellerItems';
+      if (!Array.isArray(this.visual[key])) this.visual[key] = [];
+      this.visual[key].push(createEmptyPartyItem());
+    },
+    removePartyItem(side, index) {
+      this.normalizePartyVisual();
+      const key = side === 'buyer' ? 'partyBuyerItems' : 'partySellerItems';
+      const arr = this.visual[key] || [];
+      arr.splice(index, 1);
+    },
+    /** 合同编辑：将可视化订单表写入 body_html（落库/预览与左侧表单一致） */
+    syncContractBodyHtmlFromVisual() {
+      if (!this.isContractMode || this.contractParseFailed) return;
+      const bodyWithPlaceholder = this.visualToBodyHtml();
+      const totalDisplay =
+        String(this.visual?.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
+      this.form.body_html = String(bodyWithPlaceholder || '')
+        .replaceAll('{{ORDER_LINES}}', this.buildVisualTableHtml({ forContractPersist: true }))
+        .replaceAll('{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）', totalDisplay);
+    },
+    buildVisualTableHtml(opts = {}) {
+      const persist = !!opts.forContractPersist;
       const v = this.visual || {};
       const esc = (s) => String(s ?? '');
-      const headers = this.orderLineHeaders.map((h) => esc(h).trim());
+      const headers = (persist ? CONTRACT_ORDER_LINE_HEADERS_FINAL : this.orderLineHeaders).map((h) => esc(h).trim());
       if (!headers.length) return '';
       const head = headers
-        .map(
-          (h, i) =>
-            `<th style="border:1px solid #000;padding:4px 6px;text-align:center${i < 2 ? ';white-space:nowrap' : ''}">${
-              h || '未命名列'
-            }</th>`
-        )
+        .map((h, i) => {
+          const st = i < 2 ? ORDER_LINES_CELL_NOWRAP : ORDER_LINES_CELL_STYLE;
+          return `<th style="${st}">${h || '未命名列'}</th>`;
+        })
         .join('');
       const body = (v.tableRows || [])
         .map((row) => {
+          let r = row || [];
+          if (persist && r.length === CONTRACT_ORDER_LINE_HEADERS.length) {
+            r = r.filter((_, i) => i !== 2);
+          }
           const cells = headers
-            .map(
-              (_, ci) =>
-                `<td style="border:1px solid #000;padding:4px 6px;text-align:center${
-                  ci < 2 ? ';white-space:nowrap' : ''
-                }">${esc(row?.[ci])}</td>`
-            )
+            .map((_, ci) => {
+              const st = ci < 2 ? ORDER_LINES_CELL_NOWRAP : ORDER_LINES_CELL_STYLE;
+              return `<td style="${st}">${esc(r?.[ci])}</td>`;
+            })
             .join('');
           return `<tr>${cells}</tr>`;
         })
         .join('');
       const totalDisp =
         String(v.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
-      const cell =
-        'border:1px solid #000;padding:4px 6px;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35';
-      const totalRow = `<tr><td style="${cell};text-align:center">总金额</td><td colspan="8" style="${cell};text-align:left">${esc(
+      const colspan = Math.max(1, headers.length - 1);
+      const totalRow = `<tr><td style="${ORDER_LINES_CELL_STYLE}">总金额</td><td colspan="${colspan}" style="${ORDER_LINES_CELL_STYLE};text-align:left">${esc(
         totalDisp
       )}</td></tr>`;
-      return `<table style="width:100%;border-collapse:collapse;border:1px solid #000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35"><thead><tr>${head}</tr></thead><tbody>${body}${totalRow}</tbody></table>`;
+      return `${orderLinesTableOpenTag()}<thead><tr>${head}</tr></thead><tbody>${body}${totalRow}</tbody></table>`;
     },
     visualToBodyHtml() {
       const v = this.visual || {};
@@ -995,22 +1199,9 @@ export default {
       const headerCompany = esc(v.headerCompanyZh).trim() || '{{COMPANY_NAME_ZH}}';
       const headerTitle = esc(v.headerTitleZh).trim() || '销售合同';
       const linesTable = '{{ORDER_LINES}}';
-      const sellerUnit = esc(v.sellerUnit).trim() || '{{COMPANY_NAME_ZH}}';
-      const buyerUnit = esc(v.buyerUnit).trim() || '{{CUSTOMER_NAME}}';
-      const sellerAddress = esc(v.sellerAddress).trim();
-      const sellerContact = esc(v.sellerContact).trim();
-      const sellerPhone = esc(v.sellerPhone).trim();
-      const sellerFax = esc(v.sellerFax).trim();
-      const sellerBank = esc(v.sellerBank).trim();
-      const sellerAccount = esc(v.sellerAccount).trim();
-      const sellerBankNo = esc(v.sellerBankNo).trim();
-      const buyerAddress = esc(v.buyerAddress).trim();
-      const buyerContact = esc(v.buyerContact).trim();
-      const buyerPhone = esc(v.buyerPhone).trim();
-      const buyerFax = esc(v.buyerFax).trim();
-      const buyerBank = esc(v.buyerBank).trim();
-      const buyerAccount = esc(v.buyerAccount).trim();
-      const buyerTaxNo = esc(v.buyerTaxNo).trim();
+      ensurePartyItemsOnVisual(v);
+      const sellerInner = renderPartyItemsInnerHtml(v.partySellerItems, esc);
+      const buyerInner = renderPartyItemsInnerHtml(v.partyBuyerItems, esc);
 
       const mapHeaderSide = (items) =>
         (items || []).map((item, idx) => {
@@ -1050,27 +1241,13 @@ export default {
     <td style="width:50%;vertical-align:top;border:1px solid #000;padding:5px 8px">
       <div class="party-col-title">卖方</div>
       <div style="line-height:1.35">
-        单位：${sellerUnit}<br>
-        地址：${sellerAddress}<br>
-        联系人：${sellerContact}<br>
-        电话：${sellerPhone}<br>
-        传真：${sellerFax}<br>
-        开户银行：${sellerBank}<br>
-        账号：${sellerAccount}<br>
-        行号：${sellerBankNo}
+        ${sellerInner}
       </div>
     </td>
     <td style="width:50%;vertical-align:top;border:1px solid #000;padding:5px 8px">
       <div class="party-col-title">买方</div>
       <div style="line-height:1.35">
-        单位：${buyerUnit}<br>
-        地址：${buyerAddress}<br>
-        联系人：${buyerContact}<br>
-        电话：${buyerPhone}<br>
-        传真：${buyerFax}<br>
-        开户银行：${buyerBank}<br>
-        账号：${buyerAccount}<br>
-        税号：${buyerTaxNo}
+        ${buyerInner}
       </div>
     </td>
   </tr>
@@ -1110,29 +1287,44 @@ export default {
         }
         return;
       }
+      if (this.isContractMode) {
+        this.saving = true;
+        try {
+          if (!this.contractParseFailed) {
+            this.syncContractBodyHtmlFromVisual();
+          }
+          if (!this.form.name?.trim()) {
+            this.$message.warning('请填写合同标题');
+            return;
+          }
+          if (!this.contractParseFailed && !this.form.body_html?.trim()) {
+            this.$message.warning('请填写合同正文');
+            return;
+          }
+          const payload = { title: this.form.name.trim() };
+          if (!this.contractParseFailed) {
+            payload.body_html = this.form.body_html;
+            payload.contract_visual = buildContractVisualSnapshot(this.visual);
+          }
+          await patchSalesContract(this.numericContractId, payload);
+          if (!this.contractParseFailed) {
+            await this.loadContractOne();
+          }
+          this.$message.success('已保存');
+        } catch (e) {
+          this.$message.error(this.$apiUserMsg(e, '保存失败'));
+        } finally {
+          this.saving = false;
+        }
+        return;
+      }
       if (!this.form.name?.trim() || !this.form.body_html?.trim()) {
-        this.$message.warning(this.isContractMode ? '请填写合同标题与正文' : '请填写模板名称与正文');
+        this.$message.warning('请填写模板名称与正文');
         return;
       }
       this.saving = true;
       try {
-        if (this.isContractMode) {
-          if (this.contractParseFailed) {
-            /* 保持数据库原文，仅更新标题；勿用空可视化模板覆盖 */
-          } else if (this.editMode === 'visual') {
-            // 合同场景保存时需要落库“当前填写的明细表”，不能只保存 {{ORDER_LINES}} 占位符
-            const bodyWithPlaceholder = this.visualToBodyHtml();
-            const totalDisplay = String(this.visual?.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
-            this.form.body_html = String(bodyWithPlaceholder || '')
-              .replaceAll('{{ORDER_LINES}}', this.buildVisualTableHtml())
-              .replaceAll('{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）', totalDisplay);
-          }
-          await patchSalesContract(this.numericContractId, {
-            title: this.form.name.trim(),
-            body_html: this.form.body_html
-          });
-          this.$message.success('已保存');
-        } else if (this.isNew) {
+        if (this.isNew) {
           const r = await createContractTemplate({
             name: this.form.name.trim(),
             body_html: this.form.body_html
@@ -1175,10 +1367,8 @@ export default {
     async downloadUploadContractFile() {
       if (!this.numericContractId) return;
       try {
-        await downloadSalesContractDocument(
-          this.numericContractId,
-          this.uploadContractDocName || '合同文件'
-        );
+        const blob = await downloadSalesContractDocument(this.numericContractId);
+        startDownload({ request: blob, filename: this.uploadContractDocName || '合同文件' });
       } catch {
         this.$message.error('下载失败');
       }
@@ -1354,7 +1544,7 @@ export default {
   font-size: 16px;
   line-height: 1.5;
   color: #000;
-  text-align: justify;
+  text-align: left;
 }
 .preview-a4 :deep(h1),
 .preview-a4 :deep(h2),
@@ -1369,10 +1559,14 @@ export default {
 .preview-a4 :deep(p) {
   text-indent: 2em;
   margin: 0.5em 0;
+  text-align: justify;
 }
 .preview-a4 :deep(table) {
   width: 100%;
   border-collapse: collapse;
+}
+.preview-a4 :deep(table.contract-order-lines) {
+  width: 100%;
 }
 .preview-a4 :deep(.contract-header-meta) {
   width: auto;
@@ -1394,6 +1588,11 @@ export default {
   text-align: center;
   font-size: 16px;
   word-break: break-word;
+}
+.preview-a4 :deep(table.contract-order-lines th),
+.preview-a4 :deep(table.contract-order-lines td) {
+  padding: 5px 10px;
+  white-space: nowrap;
 }
 .preview-a4 :deep(.party-table) {
   page-break-inside: avoid;
@@ -1467,6 +1666,15 @@ export default {
   background: #fff;
   padding: 10px;
 }
+.party-editor-box {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
 .header-editor-col {
   min-width: 0;
 }
@@ -1476,9 +1684,13 @@ export default {
   gap: 6px;
   margin-bottom: 8px;
 }
-.header-item-label {
+.header-editor-box .header-item-label {
   width: 180px;
   flex: 0 0 180px;
+}
+.party-editor-box .header-item-label {
+  width: 112px;
+  flex: 0 0 112px;
 }
 .header-item-sep {
   color: #64748b;
@@ -1534,6 +1746,22 @@ export default {
   box-shadow: none;
   border: 1px solid #dbe1ea;
 }
+.table-form-editor .order-line-total-row td {
+  font-weight: 700;
+  background: #f0f9ff;
+  border-top: 2px solid #94a3b8;
+}
+.table-form-editor .order-line-total-label {
+  text-align: center;
+  white-space: nowrap;
+}
+.table-form-editor .order-line-total-value {
+  padding: 4px 6px;
+}
+.table-form-editor .order-line-total-value :deep(.el-input__wrapper) {
+  box-shadow: none;
+  border: 1px solid #dbe1ea;
+}
 .tpl-advanced-collapse {
   margin-top: 8px;
   border: none;
@@ -1586,7 +1814,8 @@ export default {
   .preview-a4-scaler {
     --a4-scale: 0.46;
   }
-  .header-editor-box {
+  .header-editor-box,
+  .party-editor-box {
     grid-template-columns: 1fr;
   }
 }

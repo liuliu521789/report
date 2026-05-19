@@ -1,5 +1,8 @@
 import { previewFillContractTemplate } from './contractTemplateDefaults';
 import { buildContractOrderLinesHtml } from './contractOrderLinesBuild';
+import { prepareOrderRowForContractHtml } from './salesOrderDisplayMerge';
+import { amountToRmbUppercase } from './chineseMoney';
+import { tonsFromQtyAndSpec } from './salesOrderTonAmount';
 
 /** 标题：方正小标宋 二号（22px） */
 export const CONTRACT_PREVIEW_TITLE_FONT =
@@ -9,6 +12,47 @@ export const CONTRACT_PREVIEW_BODY_FONT = 'FangSong_GB2312,仿宋_GB2312,仿宋,
 
 function escapeRegExp(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function appendSemicolonStyles(base, addition) {
+  const a = String(base || '').trim();
+  const b = String(addition || '').trim();
+  if (!b) return a;
+  if (!a) return b;
+  return `${a.replace(/;+\s*$/, '')};${b}`;
+}
+
+/**
+ * HTML 另存 .doc 时：WPS 对「collapse + 双列无框」表易画贯穿竖线；float/div 在 WPS 里又常不成两列。
+ * 保留真实 table 两列，仅用 separate + cellspacing 拉开列间距（略增间隙，换稳定），不改库 body_html。
+ */
+function prepareContractHeaderMetaTableForWordExport(html) {
+  const raw = String(html || '');
+  if (!raw.includes('contract-header-meta')) return raw;
+  if (typeof DOMParser === 'undefined') return raw;
+  const wrapId = 'word-export-header-meta-root';
+  let doc;
+  try {
+    doc = new DOMParser().parseFromString(`<div id="${wrapId}">${raw}</div>`, 'text/html');
+  } catch {
+    return raw;
+  }
+  const root = doc.getElementById(wrapId);
+  if (!root || doc.querySelector('parsererror')) return raw;
+  const tableExtra =
+    'border-collapse:separate;border-spacing:0;width:auto;max-width:100%;border:none;outline:none';
+  const cellExtra = 'border:0 none;text-align:left;vertical-align:top';
+  const tables = [...root.querySelectorAll('table.contract-header-meta')];
+  for (const table of tables) {
+    table.setAttribute('border', '0');
+    table.setAttribute('cellpadding', '0');
+    table.setAttribute('cellspacing', '10');
+    table.setAttribute('style', appendSemicolonStyles(table.getAttribute('style'), tableExtra));
+    for (const cell of table.querySelectorAll('td, th')) {
+      cell.setAttribute('style', appendSemicolonStyles(cell.getAttribute('style'), cellExtra));
+    }
+  }
+  return root.innerHTML;
 }
 
 function ensureSalesContractTitleBelowCompany(html, contractVars = null) {
@@ -42,9 +86,38 @@ function ensureSalesContractTitleBelowCompany(html, contractVars = null) {
  * 若提供 contractVars（来自合同+客户+企业的真实字段），则先替换对应 {{KEY}}，最后仅对仍保留的占位符套示例值。
  * @param {Record<string, string|number>} [contractVars] 例如 CUSTOMER_NAME、CONTRACT_NO、COMPANY_NAME_ZH
  */
-export function finalizeContractBodyForPreview(bodyHtml, orders = [], contractVars = null) {
+export function finalizeContractBodyForPreview(bodyHtml, orders = [], contractVars = null, previewOptions = {}) {
   let s = String(bodyHtml || '');
-  s = s.split('{{ORDER_LINES}}').join(buildContractOrderLinesHtml(orders));
+  // 正文已嵌入订单明细表时勿用关联订单重算，否则会覆盖用户在合同里手改的内容
+  const skipOrderLines =
+    previewOptions.skipOrderLinesFromOrders === true || !s.includes('{{ORDER_LINES}}');
+  if (!skipOrderLines) {
+    s = s
+      .split('{{ORDER_LINES}}')
+      .join(
+        buildContractOrderLinesHtml(orders, {
+          definitions: previewOptions.orderFieldDefinitions
+        })
+      );
+  }
+  if (!skipOrderLines && orders?.length && s.includes('{{AMOUNT_TOTAL')) {
+    const defs = previewOptions.orderFieldDefinitions;
+    let sum = 0;
+    for (const raw of orders) {
+      const o = defs?.length ? prepareOrderRowForContractHtml(raw, defs) : raw;
+      const d = o?.display_data || {};
+      const grossUnit = Number(o?.unit_price ?? d?.unit_price);
+      const tons = tonsFromQtyAndSpec(o?.quantity ?? d?.quantity, o?.product_name ?? d?.product_name ?? '');
+      if (Number.isFinite(grossUnit) && grossUnit > 0 && tons != null && tons > 0) {
+        sum += grossUnit * tons;
+      }
+    }
+    sum = Math.round(sum * 100) / 100;
+    if (sum > 0) {
+      s = s.replaceAll('{{AMOUNT_TOTAL_CN}}', amountToRmbUppercase(sum));
+      s = s.replaceAll('{{AMOUNT_TOTAL}}', sum.toFixed(2));
+    }
+  }
   if (contractVars && typeof contractVars === 'object') {
     for (const [key, val] of Object.entries(contractVars)) {
       if (key === 'ORDER_LINES') continue;
@@ -69,13 +142,17 @@ const CONTRACT_PREVIEW_PAGE_MARGIN_MM = { top: 25.4, right: 25.4, bottom: 25.4, 
 export function getContractPreviewPrintWindowStyleCss() {
   const { top, right, bottom, left } = CONTRACT_PREVIEW_PAGE_MARGIN_MM;
   return `html,body{margin:0;padding:0;background:#fff;}
-body{font-family:${CONTRACT_PREVIEW_BODY_FONT};font-size:16px;line-height:1.5;color:#000;text-align:justify;}
+body{font-family:${CONTRACT_PREVIEW_BODY_FONT};font-size:16px;line-height:1.5;color:#000;text-align:left;}
 h1,h2,h3,.contract-title{font-family:${CONTRACT_PREVIEW_TITLE_FONT};font-size:22px;font-weight:normal;text-align:center;letter-spacing:2px;}
-p{text-indent:2em;margin:0.5em 0;}
+p{text-indent:2em;margin:0.5em 0;text-align:justify;}
 table{border-collapse:collapse;width:100%;}
+table.contract-order-lines{width:100%!important;}
+table.contract-order-lines th,table.contract-order-lines td{padding:5px 10px!important;white-space:nowrap;}
 th,td{border:1px solid #000;padding:6px 8px;text-align:center;font-size:16px;font-family:${CONTRACT_PREVIEW_BODY_FONT};}
 .contract-header-meta{width:auto!important;max-width:100%;margin-left:auto!important;margin-right:auto!important;border:none!important;}
 .contract-header-meta td,.contract-header-meta th{border:none!important;text-align:left!important;vertical-align:top;}
+table.contract-header-meta{border-collapse:separate!important;border-spacing:0!important;width:auto!important;max-width:100%!important;border:none!important;}
+table.contract-header-meta td,table.contract-header-meta th{border:0 none!important;text-align:left!important;vertical-align:top!important;}
 .party-table{page-break-inside:avoid;break-inside:avoid;font-size:14px;line-height:1.35;}
 .party-table tr{page-break-inside:avoid;break-inside:avoid;}
 .party-table td{text-align:left;font-size:14px!important;line-height:1.35!important;padding:5px 8px!important;}
@@ -101,13 +178,17 @@ export function getContractPreviewExportStyleCss() {
 }
 div.WordSection1{page:WordSection1;}
 html,body{width:100%;margin:0;padding:0;background:#fff;}
-body{font-family:${CONTRACT_PREVIEW_BODY_FONT};font-size:16px;line-height:1.5;color:#000;text-align:justify;}
+body{font-family:${CONTRACT_PREVIEW_BODY_FONT};font-size:16px;line-height:1.5;color:#000;text-align:left;}
 h1,h2,h3,.contract-title{font-family:${CONTRACT_PREVIEW_TITLE_FONT};font-size:22px;font-weight:normal;text-align:center;letter-spacing:2px;}
-p{text-indent:2em;margin:0.5em 0;}
+p{text-indent:2em;margin:0.5em 0;text-align:justify;}
 table{border-collapse:collapse;width:100%;}
+table.contract-order-lines{width:100%!important;}
+table.contract-order-lines th,table.contract-order-lines td{padding:5px 10px!important;white-space:nowrap;}
 th,td{border:1px solid #000;padding:6px 8px;text-align:center;font-size:16px;font-family:${CONTRACT_PREVIEW_BODY_FONT};}
 .contract-header-meta{width:auto!important;max-width:100%;margin-left:auto!important;margin-right:auto!important;border:none!important;}
 .contract-header-meta td,.contract-header-meta th{border:none!important;text-align:left!important;vertical-align:top;}
+table.contract-header-meta{border-collapse:separate!important;border-spacing:0!important;width:auto!important;max-width:100%!important;border:none!important;}
+table.contract-header-meta td,table.contract-header-meta th{border:0 none!important;text-align:left!important;vertical-align:top!important;}
 .party-table{page-break-inside:avoid;break-inside:avoid;font-size:14px;line-height:1.35;}
 .party-table tr{page-break-inside:avoid;break-inside:avoid;}
 .party-table td{text-align:left;font-size:14px!important;line-height:1.35!important;padding:5px 8px!important;}
@@ -204,7 +285,8 @@ export function downloadHtmlAsWordDoc(innerHtml, filename) {
         : `${String(filename).replace(/\.(html?|docx)$/i, '')}.doc`
       : '合同.doc';
   const css = getContractPreviewExportStyleCss();
-  const html = `<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><meta name="ProgId" content="Word.Document">${wordDocumentDirectiveXml()}<style>${css}</style></head><body><div class="WordSection1"><div class="print-wrap">${innerHtml || ''}</div></div></body></html>`;
+  const bodyInner = prepareContractHeaderMetaTableForWordExport(innerHtml);
+  const html = `<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><meta name="ProgId" content="Word.Document">${wordDocumentDirectiveXml()}<style>${css}</style></head><body><div class="WordSection1"><div class="print-wrap">${bodyInner || ''}</div></div></body></html>`;
   const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
   const url = URL.createObjectURL(blob);
   try {

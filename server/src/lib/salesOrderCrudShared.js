@@ -12,7 +12,7 @@ export async function generateUniqueOrderNo(conn) {
   throw e;
 }
 
-export async function insertOrderWithData(conn, { userId, data, definitions, statusRemark = '新建订单' }) {
+export async function insertOrderWithData(conn, { userId, data, definitions, statusRemark = '新建订单', fieldSchemaVersion } = {}) {
   const { errors, data: normalized } = validateOrderDataInput(definitions, data);
   if (errors.length) {
     const e = new Error('VALIDATION_FAILED');
@@ -34,9 +34,16 @@ export async function insertOrderWithData(conn, { userId, data, definitions, sta
     userId
   });
   const orderNo = await generateUniqueOrderNo(conn);
+  let schemaVer = fieldSchemaVersion;
+  if (schemaVer == null || !Number.isFinite(Number(schemaVer))) {
+    const [vs] = await conn.query(
+      'SELECT COALESCE(order_field_schema_version, 1) AS v FROM sales_settings WHERE id = 1 LIMIT 1'
+    );
+    schemaVer = Number(vs[0]?.v || 1);
+  }
   const [ins] = await conn.query(
-    `INSERT INTO sales_orders (order_no, customer_id, product_code, product_name, product_model, warehouse_model, quantity, unit_price, amount, remark, data_json, status, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), 'pending_review', ?)`,
+    `INSERT INTO sales_orders (order_no, customer_id, product_code, product_name, product_model, warehouse_model, quantity, unit_price, amount, remark, data_json, field_schema_version, status, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, 'pending_review', ?)`,
     [
       orderNo,
       customerId,
@@ -49,6 +56,7 @@ export async function insertOrderWithData(conn, { userId, data, definitions, sta
       leg.amount,
       leg.remark,
       JSON.stringify(normalized),
+      schemaVer,
       userId
     ]
   );

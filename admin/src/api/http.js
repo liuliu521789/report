@@ -84,7 +84,6 @@ http.interceptors.request.use((config) => {
   const url = String(config.url || '');
   const isAnonymousAuth =
     url.includes('/api/auth/login') ||
-    url.includes('/api/auth/captcha') ||
     url.includes('/api/auth/bootstrap-admin');
   const token = p ? useAuthStore().token : localStorage.getItem('token');
   if (token && !isAnonymousAuth) {

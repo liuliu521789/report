@@ -190,6 +190,7 @@ import { getCompanySettings, getQuickRoleUsers, listUsersLite, updateCompanySett
 import { useAuthStore } from '../stores/auth';
 import { isSuperAdmin, perm } from '../utils/permissions';
 import { absoluteApiOrigin } from '../utils/absoluteApiOrigin.js';
+import { startDownload } from '../composables/useDownloadProgress.js';
 
 export default {
   name: 'CompanySettings',
@@ -339,8 +340,12 @@ export default {
     async onBackup() {
       this.backingUp = true;
       try {
-        await downloadBackup();
-        this.$message.success('备份下载完成');
+        const blob = await downloadBackup();
+        startDownload({
+          request: blob,
+          filename: `backup_${new Date().toISOString().slice(0, 10)}.sql`,
+          onSuccess: () => { this.$message.success('备份下载完成'); }
+        });
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '备份失败'));
       } finally {

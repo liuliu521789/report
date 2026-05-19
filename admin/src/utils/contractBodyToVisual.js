@@ -1,4 +1,18 @@
-import { CONTRACT_ORDER_LINE_HEADERS } from './contractVisualDefaults';
+import {
+  CONTRACT_ORDER_LINE_HEADERS,
+  CONTRACT_ORDER_LINE_HEADERS_FINAL
+} from './contractVisualDefaults';
+import { grossUnitFromNetAndTaxRate } from './contractOrderLineCalc.js';
+import {
+  ensurePartyItemsOnVisual,
+  PARTY_FALLBACK_COMPANY,
+  PARTY_FALLBACK_CUSTOMER
+} from './contractPartyItems.js';
+import {
+  ORDER_LINES_CELL_NOWRAP,
+  ORDER_LINES_CELL_STYLE,
+  orderLinesTableOpenTag
+} from './contractOrderLinesTableStyle.js';
 
 function normText(s) {
   return String(s || '')
@@ -18,21 +32,29 @@ function normHeaderCell(s) {
  * `visualToBodyHtml` 仍会写回 `{{ORDER_LINES}}`。
  */
 function stubOrderLinesTableHtmlForParse() {
-  const CELL = 'border:1px solid #000;padding:4px 6px;text-align:center';
-  const CELL_NW = `${CELL};white-space:nowrap`;
-  const TABLE_STYLE =
-    'width:100%;border-collapse:collapse;border:1px solid #000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35';
-  const ths = CONTRACT_ORDER_LINE_HEADERS.map((h, i) => `<th style="${i < 2 ? CELL_NW : CELL}">${h}</th>`).join('');
-  const tds = CONTRACT_ORDER_LINE_HEADERS.map((_, i) => `<td style="${i < 2 ? CELL_NW : CELL}"></td>`).join('');
-  const totalRow = `<tr><td style="${CELL}">总金额</td><td colspan="8" style="${CELL};text-align:left">{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）</td></tr>`;
-  return `<table style="${TABLE_STYLE}"><thead><tr>${ths}</tr></thead><tbody><tr>${tds}</tr>${totalRow}</tbody></table>`;
+  const ths = CONTRACT_ORDER_LINE_HEADERS.map((h, i) =>
+    `<th style="${i < 2 ? ORDER_LINES_CELL_NOWRAP : ORDER_LINES_CELL_STYLE}">${h}</th>`
+  ).join('');
+  const tds = CONTRACT_ORDER_LINE_HEADERS.map((_, i) =>
+    `<td style="${i < 2 ? ORDER_LINES_CELL_NOWRAP : ORDER_LINES_CELL_STYLE}"></td>`
+  ).join('');
+  const colspan = CONTRACT_ORDER_LINE_HEADERS.length - 1;
+  const totalRow = `<tr><td style="${ORDER_LINES_CELL_STYLE}">总金额</td><td colspan="${colspan}" style="${ORDER_LINES_CELL_STYLE};text-align:left">{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）</td></tr>`;
+  return `${orderLinesTableOpenTag()}<thead><tr>${ths}</tr></thead><tbody><tr>${tds}</tr>${totalRow}</tbody></table>`;
 }
 
-/** 跳过空段落（模板生成/富文本常在条款标题与表格之间插入空 p），避免无法识别为可视化版式 */
+/** 跳过空段落与纯空白文本节点，避免标题与订单表之间的换行导致解析失败 */
 function indexAfterEmptyParagraphs(kids, start) {
   let j = start;
   while (j < kids.length) {
     const n = kids[j];
+    if (n.nodeType === 3) {
+      if (!normText(n.textContent)) {
+        j++;
+        continue;
+      }
+      break;
+    }
     if (n.tagName === 'P' && normText(n.textContent) === '') {
       j++;
       continue;
@@ -40,6 +62,24 @@ function indexAfterEmptyParagraphs(kids, start) {
     break;
   }
   return j;
+}
+
+function padOrderLineRow(row) {
+  const editorN = CONTRACT_ORDER_LINE_HEADERS.length;
+  const finalN = CONTRACT_ORDER_LINE_HEADERS_FINAL.length;
+  const r = [...(row || [])];
+  if (r.length === editorN || r.length === finalN) return normalizeOrderLineRows([r])[0];
+  if (r.length === finalN - 1) return normalizeOrderLineRows([r])[0];
+  const out = Array.from({ length: editorN }, (_, i) => r[i] ?? '');
+  return out;
+}
+
+function normalizeParsedOrderRows(rows) {
+  const editorN = CONTRACT_ORDER_LINE_HEADERS.length;
+  const finalN = CONTRACT_ORDER_LINE_HEADERS_FINAL.length;
+  const valid = (rows || []).filter((r) => r && r.length > 0);
+  if (!valid.length) return [Array(editorN).fill('')];
+  return valid.map((r) => padOrderLineRow(r));
 }
 
 function contractHeaderTableFromKid(el) {
@@ -106,8 +146,11 @@ function isOrderLinesTable(el) {
     if (!firstRow) return false;
     ths = [...firstRow.querySelectorAll('th, td')].map((cell) => normHeaderCell(cell.textContent));
   }
-  if (ths.length !== CONTRACT_ORDER_LINE_HEADERS.length) return false;
-  return CONTRACT_ORDER_LINE_HEADERS.every((h, i) => ths[i] === normHeaderCell(h));
+  const finalH = CONTRACT_ORDER_LINE_HEADERS_FINAL.map((h) => normHeaderCell(h));
+  const editorH = CONTRACT_ORDER_LINE_HEADERS.map((h) => normHeaderCell(h));
+  if (ths.length === finalH.length && finalH.every((h, i) => ths[i] === h)) return true;
+  if (ths.length === editorH.length && editorH.every((h, i) => ths[i] === h)) return true;
+  return false;
 }
 
 function isPartyBlockTable(el) {
@@ -127,7 +170,7 @@ function isTotalSummaryRow(tr) {
   }
   if (tds.length === 1) return true;
   const colspan = parseInt(tds[0]?.getAttribute('colspan') || '1', 10);
-  return colspan >= CONTRACT_ORDER_LINE_HEADERS.length;
+  return colspan >= CONTRACT_ORDER_LINE_HEADERS_FINAL.length - 1;
 }
 
 /** 拆出数据行与表内总金额行（新结构）；旧表无总金额行时 totalFromTable 为空 */
@@ -161,46 +204,47 @@ function parseOrderTableWithTotal(table) {
 }
 
 function normalizeOrderLineRows(rows) {
-  const colCount = CONTRACT_ORDER_LINE_HEADERS.length;
-  const valid = (rows || []).filter((r) => r && r.length === colCount);
-  if (valid.length) return valid;
-  return [Array(colCount).fill('')];
+  const editorN = CONTRACT_ORDER_LINE_HEADERS.length;
+  const finalN = CONTRACT_ORDER_LINE_HEADERS_FINAL.length;
+  const valid = (rows || []).filter((r) => r && (r.length === editorN || r.length === finalN));
+  if (!valid.length) return [Array(editorN).fill('')];
+  return valid.map((r) => {
+    if (r.length === editorN) return [...r];
+    const grossCell = grossUnitFromNetAndTaxRate(r[2], r[6]);
+    const out = [...r];
+    out.splice(2, 0, grossCell);
+    return out;
+  });
 }
 
-const SELLER_FIELD = {
-  单位: 'sellerUnit',
-  地址: 'sellerAddress',
-  联系人: 'sellerContact',
-  电话: 'sellerPhone',
-  传真: 'sellerFax',
-  开户银行: 'sellerBank',
-  账号: 'sellerAccount',
-  行号: 'sellerBankNo'
-};
-
-const BUYER_FIELD = {
-  单位: 'buyerUnit',
-  地址: 'buyerAddress',
-  联系人: 'buyerContact',
-  电话: 'buyerPhone',
-  传真: 'buyerFax',
-  开户银行: 'buyerBank',
-  账号: 'buyerAccount',
-  税号: 'buyerTaxNo'
-};
-
-function applyPartyTd(td, keyMap, visual) {
-  const divs = td.querySelectorAll(':scope > div');
-  if (divs.length < 2) return;
+function parsePartyTdToItems(td, side) {
+  const items = [];
+  const divs = td?.querySelectorAll?.(':scope > div');
+  if (!divs || divs.length < 2) return items;
   const html = divs[1].innerHTML;
   const parts = html.split(/<br\s*\/?>/i);
   for (const part of parts) {
     const cleaned = normText(part.replace(/<[^>]+>/g, ''));
     if (!cleaned) continue;
     const { label, value } = splitFirstColon(cleaned);
-    const vk = keyMap[label];
-    if (vk) visual[vk] = value;
+    if (!label) continue;
+    const item = { label, value };
+    if (label === '单位') {
+      if (value === '{{COMPANY_NAME_ZH}}') {
+        item.value = '';
+        item.fallback = PARTY_FALLBACK_COMPANY;
+      } else if (value === '{{CUSTOMER_NAME}}') {
+        item.value = '';
+        item.fallback = PARTY_FALLBACK_CUSTOMER;
+      } else if (side === 'seller' && !value) {
+        item.fallback = PARTY_FALLBACK_COMPANY;
+      } else if (side === 'buyer' && !value) {
+        item.fallback = PARTY_FALLBACK_CUSTOMER;
+      }
+    }
+    items.push(item);
   }
+  return items;
 }
 
 const KNOWN_CONTRACT_TITLES = [
@@ -336,7 +380,6 @@ export function parseContractHtmlToVisual(html, base) {
 
       if (isTitleOnlyClauseP(el) && next && isOrderLinesTable(next)) {
         const { rows, totalFromTable } = parseOrderTableWithTotal(next);
-        if (rows.some((r) => r.length !== CONTRACT_ORDER_LINE_HEADERS.length)) return null;
 
         let tableTotalText = visual.tableTotalText;
         if (totalFromTable) {
@@ -349,14 +392,14 @@ export function parseContractHtmlToVisual(html, base) {
             const m = tx.match(/总金额[（(]大写[）)]*[：:]\s*(.+)$/);
             tableTotalText = m ? m[1].trim() : tx.replace(/^.*?[：:]\s*/, '').trim();
             idx = afterIdx + 1;
-            visual.tableRows = normalizeOrderLineRows(rows);
+            visual.tableRows = normalizeParsedOrderRows(rows);
             visual.tableTotalText = tableTotalText;
             newClauses.push({ title: titleText, body: '', useTable: true });
             continue;
           }
         }
 
-        visual.tableRows = normalizeOrderLineRows(rows);
+        visual.tableRows = normalizeParsedOrderRows(rows);
         visual.tableTotalText = tableTotalText;
         newClauses.push({ title: titleText, body: '', useTable: true });
         idx = tableIdx + 1;
@@ -377,8 +420,8 @@ export function parseContractHtmlToVisual(html, base) {
       /* 正文经手改后，条款标题行可能不成「仅 strong」结构，订单表会被误跳过；在此补一条明细条款 */
       if (!newClauses.some((c) => c.useTable)) {
         const { rows, totalFromTable } = parseOrderTableWithTotal(el);
-        if (!rows.some((r) => r.length !== CONTRACT_ORDER_LINE_HEADERS.length)) {
-          visual.tableRows = normalizeOrderLineRows(rows);
+        if (rows.length) {
+          visual.tableRows = normalizeParsedOrderRows(rows);
           let advance = 1;
           if (totalFromTable) {
             visual.tableTotalText = totalFromTable;
@@ -409,7 +452,11 @@ export function parseContractHtmlToVisual(html, base) {
     idx++;
   }
 
-  if (!newClauses.some((c) => c.useTable)) return null;
+  const hasTableData = (visual.tableRows || []).some((r) => r && r.some((c) => normText(c)));
+  if (!newClauses.some((c) => c.useTable)) {
+    if (!hasTableData) return null;
+    newClauses.unshift({ title: DEFAULT_ORDER_CLAUSE_TITLE, body: '', useTable: true });
+  }
   visual.clauses = newClauses;
 
   if (idx < kids.length && isPartyBlockTable(kids[idx])) {
@@ -418,12 +465,14 @@ export function parseContractHtmlToVisual(html, base) {
     const row = partyTable.querySelector('tr');
     const tds = row ? row.querySelectorAll(':scope > td') : [];
     if (tds.length >= 2) {
-      applyPartyTd(tds[0], SELLER_FIELD, visual);
-      applyPartyTd(tds[1], BUYER_FIELD, visual);
+      const sellerItems = parsePartyTdToItems(tds[0], 'seller');
+      const buyerItems = parsePartyTdToItems(tds[1], 'buyer');
+      if (sellerItems.length) visual.partySellerItems = sellerItems;
+      if (buyerItems.length) visual.partyBuyerItems = buyerItems;
     }
   } else {
     visual.showPartyBlock = false;
   }
 
-  return visual;
+  return ensurePartyItemsOnVisual(visual);
 }

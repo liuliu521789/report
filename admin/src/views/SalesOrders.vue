@@ -1,66 +1,59 @@
 <template>
   <div class="sales-orders">
-    <el-card class="toolbar-card" shadow="never">
-      <div class="toolbar">
-        <div class="left">
-          <el-input v-model="filters.customer_name" placeholder="客户名称" clearable class="field-input" @keyup.enter="load" />
-          <el-input v-model="filters.customer_code" placeholder="客户编号" clearable class="field-input-sm" @keyup.enter="load" />
-          <el-input v-model="filters.product_name" placeholder="商品名称" clearable class="field-input-sm" @keyup.enter="load" />
-          <el-input v-model="filters.product_model" placeholder="标签型号" clearable class="field-input-sm" @keyup.enter="load" />
-          <el-input v-model="filters.warehouse_model" placeholder="仓库型号" clearable class="field-input-sm" @keyup.enter="load" />
-          <el-input v-model="filters.order_no" placeholder="订单号" clearable class="field-input" @keyup.enter="load" />
-          <el-select v-model="filters.status" placeholder="订单状态" clearable class="field-select" @change="load">
-            <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
-          </el-select>
-          <el-date-picker
-            v-model="dateRange"
-            type="daterange"
-            range-separator="至"
-            :start-placeholder="orderDateRangeStartPh"
-            :end-placeholder="orderDateRangeEndPh"
-            value-format="YYYY-MM-DD"
-            class="field-date"
-            @change="load"
-          />
-          <el-checkbox v-if="perm('order_management', 'order_status_finance')" v-model="filters.pending_finance_only" @change="load">
-            仅待财务审核
-          </el-checkbox>
-          <el-checkbox v-if="perm('order_management', 'order_status_qc')" v-model="filters.pending_qc_only" @change="load">
-            仅待质检审核
-          </el-checkbox>
+     <el-card class="toolbar-card" shadow="never">
+       <div class="toolbar">
+          <div class="left">
+            <el-input v-model="filters.searchValue" placeholder="输入搜索内容" clearable @keyup.enter="load" class="search-bar">
+              <template #prepend>
+                <el-select v-model="filters.searchField" placeholder="搜索" style="width:110px">
+                  <el-option label="客户名称" value="customer_name" />
+                  <el-option label="客户编号" value="customer_code" />
+                  <el-option label="标签型号" value="product_model" />
+                  <el-option label="仓库型号" value="warehouse_model" />
+                  <el-option label="订单号" value="order_no" />
+                </el-select>
+              </template>
+            </el-input>
+           <el-select v-model="filters.status" placeholder="订单状态" clearable class="field-select" @change="onStatusFilterChange">
+             <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
+           </el-select>
+           <el-date-picker
+             v-model="dateRange"
+             type="daterange"
+             range-separator="至"
+             :start-placeholder="orderDateRangeStartPh"
+             :end-placeholder="orderDateRangeEndPh"
+             value-format="YYYY-MM-DD"
+             class="field-date"
+             @change="load"
+           />
           <el-button type="primary" @click="load" icon=Search>查询</el-button>
-          <el-button @click="resetFilters" icon=Refresh>重置</el-button>
+          </div>
         </div>
-        <div class="right">
-          <el-button v-if="perm('order_management', 'order_input')" @click="downloadTpl" icon=Download size="small">下载导入模板</el-button>
-          <el-upload
-            v-if="perm('order_management', 'order_input')"
-            :show-file-list="false"
-            accept=".xlsx,.xls"
-            :before-upload="onImportFile"
-          >
-            <el-button icon=UploadFilled size="small">Excel 导入</el-button>
-          </el-upload>
-          <el-button
-            v-if="perm('order_management', 'order_field_config')"
-            @click="openFieldManage"
-            size="small"
-          >表单字段</el-button>
-          <el-button
-            v-if="canExport"
-            :loading="exporting"
-            @click="exportXlsx"
-            icon=Download size="small">导出 Excel</el-button>
-          <el-button v-if="perm('order_management', 'order_input')" type="primary" @click="openCreate" size="small">手动录入</el-button>
-          <el-button v-if="showMessages" @click="messagesOpen = true" size="small">
-            站内信
-            <el-badge v-if="unreadCount" :value="unreadCount" class="ml4" />
-          </el-button>
-        </div>
-      </div>
       <div class="batch-actions">
-        <span class="selected-tip" v-if="selected.length > 0">已选 {{ selected.length }} 条</span>
-        <el-divider v-if="selected.length > 0" direction="vertical" />
+        <span class="selected-tip" v-if="effectiveSelected.length > 0">已选 {{ effectiveSelected.length }} 条</span>
+        <el-divider v-if="effectiveSelected.length > 0" direction="vertical" />
+        <el-upload
+          v-if="perm('order_management', 'order_input')"
+          :show-file-list="false"
+          accept=".xlsx,.xls"
+          :before-upload="onImportFile"
+        >
+          <el-button type="primary" icon=UploadFilled>Excel 导入</el-button>
+        </el-upload>
+        <el-button
+          v-if="canExport"
+          :loading="exporting"
+          @click="exportXlsx"
+          type="primary"
+          plain
+          icon=Download>导出 Excel</el-button>
+        <el-button v-if="perm('order_management', 'order_input')" @click="downloadTpl" icon=Download>下载导入模板</el-button>
+        <el-button
+          v-if="perm('order_management', 'order_field_config')"
+          @click="openFieldManage"
+        >表单字段</el-button>
+        <el-button v-if="perm('order_management', 'order_input')" type="primary" @click="openCreate">手动录入</el-button>
         <el-tooltip
           placement="top"
           :disabled="batchSubmitTipDisabled"
@@ -71,7 +64,6 @@
               v-if="perm('order_management', 'order_submit')"
               type="primary"
               plain
-              size="small"
               :disabled="batchSubmitDisabled"
               @click="batchSubmitReview"
              icon=Check>
@@ -83,7 +75,6 @@
           v-if="perm('order_management', 'order_status_finance')"
           type="warning"
           plain
-          size="small"
           :disabled="batchFinanceReviewableList.length === 0"
           @click="openFinanceBatch"
         >
@@ -93,7 +84,6 @@
           v-if="perm('order_management', 'order_status_qc')"
           type="warning"
           plain
-          size="small"
           :disabled="batchQcReviewableList.length === 0"
           @click="openQcReviewBatch"
         >
@@ -103,7 +93,6 @@
           v-if="batchShipActionVisible"
           type="primary"
           plain
-          size="small"
           :disabled="batchShippableList.length === 0"
           @click="openShipBatch"
         >
@@ -119,7 +108,6 @@
               v-if="perm('order_management', 'order_delete')"
               type="danger"
               plain
-              size="small"
               :disabled="batchDeleteDisabled"
               @click="batchDeleteOrders"
              icon=Delete>
@@ -130,8 +118,7 @@
         <el-button
           v-if="perm('contract_management', 'contract_generate')"
           type="success"
-          size="small"
-          :disabled="selected.length === 0"
+          :disabled="effectiveSelected.length === 0"
           @click="openContractGen"
         >生成合同</el-button>
       </div>
@@ -139,24 +126,62 @@
 
     <div class="table-wrap">
       <div class="table-list-toolbar">
-        <el-popover placement="bottom-start" :width="220" trigger="click">
-          <template #reference>
-            <el-button>
-              列显示
-              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+        <div
+          v-if="perm('order_management', 'order_query')"
+          v-loading="flowSlaLoading"
+          class="table-list-toolbar__flow-sla"
+        >
+          <div class="table-list-toolbar__left">
+            <el-button
+              :type="!filters.flow_bucket ? 'primary' : 'default'"
+              plain
+              size="small"
+              @click="clearFlowBucketFilter"
+            >
+              全部
             </el-button>
-          </template>
-          <div class="order-list-column-picker">
-            <div class="order-list-column-picker__title">部分列默认隐藏；勾选「发货人」可关闭独立列（状态角标仍会尽量带出姓名）</div>
-            <el-checkbox v-model="orderListColVisible.orderNo">订单号</el-checkbox>
-            <el-checkbox v-model="orderListColVisible.sales">销售</el-checkbox>
-            <el-checkbox v-model="orderListColVisible.shipper">发货人</el-checkbox>
-            <el-checkbox v-model="orderListColVisible.uploadedAt">上传日期</el-checkbox>
+            <el-button
+              v-for="b in flowBoardBuckets"
+              :key="b.key"
+              :type="filters.flow_bucket === b.key ? 'primary' : 'default'"
+              plain
+              size="small"
+              class="flow-board__chip"
+              @click="toggleFlowBucket(b.key)"
+            >
+              {{ b.label }}
+              <strong class="flow-board__num">{{ flowSummary[b.key] ?? 0 }}</strong>
+            </el-button>
+            <el-checkbox
+              v-model="flowBoardRespectDate"
+              size="small"
+              class="flow-board-respect-date"
+              @change="refreshFlowSlaBoard"
+            >
+              统计随上方日期范围
+            </el-checkbox>
           </div>
-        </el-popover>
-        <el-checkbox v-model="ordersVirtualTable" size="small" class="ml8" @change="onOrdersVirtualToggle">
-          虚拟滚动（大数据）
-        </el-checkbox>
+        </div>
+        <div class="table-list-toolbar__right">
+          <el-popover placement="bottom-start" :width="220" trigger="click">
+            <template #reference>
+              <el-button>
+                列显示
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+            </template>
+            <div class="order-list-column-picker">
+              <div class="order-list-column-picker__title">部分列默认隐藏；勾选「发货人」可关闭独立列（状态角标仍会尽量带出姓名）</div>
+              <el-checkbox v-model="orderListColVisible.orderNo">订单号</el-checkbox>
+              <el-checkbox v-model="orderListColVisible.sales">销售</el-checkbox>
+              <el-checkbox v-model="orderListColVisible.shipper">发货人</el-checkbox>
+              <el-checkbox v-model="orderListColVisible.uploadedAt">上传日期</el-checkbox>
+            </div>
+          </el-popover>
+          <el-checkbox v-model="ordersVirtualTable" size="small" class="ml8" @change="onOrdersVirtualTableChange">
+            虚拟滚动（大数据）
+          </el-checkbox>
+        </div>
       </div>
       <div class="table-inner" :class="{ 'table-inner--v2': ordersVirtualTable }">
         <template v-if="ordersVirtualTable">
@@ -165,7 +190,7 @@
             :closable="false"
             show-icon
             class="orders-v2-hint"
-            title="虚拟列表模式下不展示行勾选、合同与二维码缩略图；适合单次加载数百至上千行。需要批量操作请关闭此项。"
+            title="虚拟列表模式下仍可通过首列勾选做批量操作；勾选状态按订单 id 保留。合同与二维码缩略图仍不展示以减轻渲染压力。"
           />
           <el-auto-resizer>
             <template #default="{ height, width }">
@@ -199,6 +224,7 @@
           v-if="showOrderRowSelection"
           type="selection"
           width="48"
+          :reserve-selection="true"
           :selectable="orderRowSelectable"
         />
         <el-table-column
@@ -223,7 +249,7 @@
           show-overflow-tooltip
         />
         <el-table-column
-          v-for="col in fieldDefinitions"
+          v-for="col in orderListFieldDefinitions"
           :key="col.field_key"
           :prop="'display_data.' + col.field_key"
           min-width="72"
@@ -280,7 +306,7 @@
             {{ $dt(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="合同" width="100" align="center">
+        <el-table-column v-if="showOrderListContractCol" label="合同" width="100" align="center">
           <template #default="{ row }">
             <div class="contract-cell">
               <template v-if="row.contract_id">
@@ -341,7 +367,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="质检二维码" width="100" align="center">
+        <el-table-column v-if="showOrderListQcCol" label="质检二维码" width="100" align="center">
           <template #default="{ row }">
             <div class="qc-cell">
               <div v-if="row.qc_thumb_data_url" class="qc-thumb-wrap">
@@ -485,6 +511,7 @@
     <el-dialog v-model="formOpen" :title="form.id ? '修改订单' : '录入订单'" width="560px" @close="resetForm">
       <p class="form-hint">
         订单号由系统自动生成，保存后出现。发货日期为您在表格/表单中填写的业务日期；上传日期在首次保存时由系统自动记录，列表中可查看。
+        金额（价税合计）= 含税单价（元/吨）× 吨数；吨数 = 数量 × 规格（规格含 kg/千克/公斤 时按千克换算为吨）。修改数量、规格或单价后金额会自动重算。
       </p>
       <el-form :model="formData" label-width="120px">
         <el-form-item
@@ -498,20 +525,20 @@
             v-if="col.field_type === 'text'"
             v-model="formData[col.field_key]"
             clearable
-            @input="clearFieldError(col.field_key)"
+            @input="onOrderFormFieldInput(col)"
           />
           <el-input
             v-else-if="col.field_type === 'textarea'"
             v-model="formData[col.field_key]"
             type="textarea"
             rows="2"
-            @input="clearFieldError(col.field_key)"
+            @input="onOrderFormFieldInput(col)"
           />
           <el-input
             v-else-if="col.field_type === 'date'"
             v-model="formData[col.field_key]"
             placeholder="YYYY-MM-DD"
-            @input="clearFieldError(col.field_key)"
+            @input="onOrderFormFieldInput(col)"
           />
           <el-input-number
             v-else-if="col.field_type === 'number' || col.field_type === 'positive_number'"
@@ -519,7 +546,7 @@
             :min="col.field_type === 'positive_number' ? 0.0001 : undefined"
             :precision="4"
             class="w-full"
-            @change="clearFieldError(col.field_key)"
+            @change="onOrderFormNumberChange(col)"
           />
         </el-form-item>
       </el-form>
@@ -746,7 +773,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="fieldManageOpen" title="录入表单字段管理" width="720px" @open="loadFieldDefinitionsAll">
+    <el-dialog v-model="fieldManageOpen" :title="fieldManageDialogTitle" width="720px" @open="loadFieldDefinitionsAll">
       <el-button type="primary" size="small" class="mb8" @click="openNewField" icon=Plus>新增字段</el-button>
       <el-table :data="fieldAllList" border size="small" max-height="360">
         <el-table-column prop="field_key" label="字段键" width="120" />
@@ -913,6 +940,26 @@
         />
       </el-scrollbar>
     </el-drawer>
+
+    <el-dialog
+      v-model="importDupDialogVisible"
+      :title="importDupDialogTitle"
+      width="900px"
+      destroy-on-close
+      @closed="onImportDupDialogClosed"
+    >
+      <p v-if="importDupSummary" class="import-dup-summary muted">{{ importDupSummary }}</p>
+      <el-table :data="importDupRows" border max-height="62vh" size="small">
+        <el-table-column label="导入行" width="100">
+          <template #default="{ row }">第 {{ row.row }} 行</template>
+        </el-table-column>
+        <el-table-column prop="imported_customer" label="客户" min-width="140" show-overflow-tooltip />
+        <el-table-column prop="imported_product" label="产品" min-width="140" show-overflow-tooltip />
+        <el-table-column prop="imported_model" label="型号" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="imported_batch_no" label="批号" min-width="100" show-overflow-tooltip />
+        <el-table-column prop="existing_order_no" label="重复订单号" min-width="140" show-overflow-tooltip />
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -936,9 +983,11 @@ import {
   listSalesOrderStatusLogs,
   listSalesOrderEditLogs,
   listCustomerContracts,
-  exportSalesOrdersXlsx,
   downloadSalesImportTemplate,
   importSalesOrdersXlsx,
+  createSalesOrderExportJob,
+  getSalesOrderExportJob,
+  downloadSalesOrderExportJobFile,
   generateSalesContract,
   bindSalesOrderContract,
   listContractTemplates,
@@ -950,25 +999,28 @@ import {
   createSalesOrderField,
   updateSalesOrderField,
   deleteSalesOrderField,
+  getSalesOrderFlowSummary,
+  getSalesOrderFieldImpact,
   listSalesQrcodeBindCandidates,
   patchSalesOrderQcQrcode,
   getSalesContract,
   fetchSalesContractDocumentBlob,
-  downloadSalesContractDocument
+  downloadSalesContractDocument,
+  downloadSalesContractDocx
 } from '../api';
 import mammoth from 'mammoth';
 import SalesStatusPill from '../components/SalesStatusPill.vue';
 import WordDocumentIcon from '../components/WordDocumentIcon.vue';
 import {
   finalizeContractBodyForPreview,
-  downloadHtmlAsWordDoc,
   printHtmlDocumentInHiddenIframe,
   printContractPreviewFromHtml,
   escapeHtmlText
 } from '../utils/contractPreviewHtml';
 import { resolveInternalMessageRoute } from '../utils/internalMessageNavigate';
 import { h } from 'vue';
-import { ElButton } from 'element-plus';
+import { ElButton, ElCheckbox } from 'element-plus';
+import { startDownload } from '../composables/useDownloadProgress.js';
 import { zhMessageForApiError } from '../../../shared/apiErrorZh.js';
 import { orderFlowStatusZh } from '../utils/salesStatusDisplay';
 import { useAuthStore } from '../stores/auth';
@@ -977,6 +1029,9 @@ import {
   buildSalesOrderQueryParams,
   loadSalesOrderList
 } from '../composables/useSalesOrderList';
+import { grossAmountFromRowDisplayData, grossAmountFromQtySpecUnitPrice, roundOrderDecimal4 } from '../utils/salesOrderTonAmount';
+
+const SALES_ORDER_EXPORT_LIMIT = 5000;
 
 export default {
   name: 'SalesOrders',
@@ -1071,6 +1126,12 @@ export default {
       previewContractId: null,
       contractPreviewTitle: '合同预览',
       exporting: false,
+      importDupDialogVisible: false,
+      importDupRows: [],
+      importDupSummary: '',
+      /** 虚拟列表模式下按 id 勾选（与 items 行对象解耦） */
+      v2SelectedIds: [],
+      v2SelectedSnapshots: {},
       messagesOpen: false,
       messages: [],
       /** all | notice | todo | system */
@@ -1084,6 +1145,20 @@ export default {
       inboxAutoRefreshTimer: null,
       /** @type {(() => void) | null} */
       pageVisibilityHandler: null,
+      /** 列表上方流程阶段筛选：与 GET /orders 的 flow_bucket 键一致 */
+      flowBoardBuckets: [
+        { key: 'pending_submit', label: '待提交' },
+        { key: 'pending_finance', label: '待财务' },
+        { key: 'pending_qc', label: '待质检' },
+        { key: 'pending_ship', label: '待发货' },
+        { key: 'shipped_open', label: '已发货' },
+        { key: 'rejected', label: '已驳回' }
+      ],
+      flowSummary: {},
+      flowBoardRespectDate: false,
+      flowSlaLoading: false,
+      /** 来自 sales_settings.order_field_schema_version */
+      fieldSchemaVersion: null,
       qcBindOpen: false,
       qcBindOrder: null,
       qcBindItems: [],
@@ -1111,6 +1186,32 @@ export default {
   computed: {
     isSuper() {
       return isSuperAdmin();
+    },
+    showOrderListUnitPrice() {
+      return perm('order_management', 'order_list_unit_price');
+    },
+    showOrderListContractCol() {
+      return perm('order_management', 'order_list_contract');
+    },
+    showOrderListQcCol() {
+      return perm('order_management', 'order_list_qc_qrcode');
+    },
+    /** 列表动态列（录入表单仍用 fieldDefinitions） */
+    orderListFieldDefinitions() {
+      if (this.showOrderListUnitPrice) return this.fieldDefinitions;
+      return (this.fieldDefinitions || []).filter((d) => d.maps_to !== 'unit_price');
+    },
+    showFieldSchemaVersionBadge() {
+      return (
+        this.fieldSchemaVersion != null &&
+        (perm('order_management', 'order_query') ||
+          perm('order_management', 'order_input') ||
+          perm('order_management', 'order_field_config'))
+      );
+    },
+    fieldManageDialogTitle() {
+      const v = this.fieldSchemaVersion;
+      return v != null ? `录入表单字段管理（方案 v${v}）` : '录入表单字段管理';
     },
     canExport() {
       return (
@@ -1148,39 +1249,65 @@ export default {
       );
     },
     genOrderIdCount() {
-      return this.genOrderIds.length ? this.genOrderIds.length : this.selected.length;
+      return this.genOrderIds.length ? this.genOrderIds.length : this.effectiveSelected.length;
+    },
+    effectiveSelected() {
+      if (this.ordersVirtualTable) {
+        return this.v2SelectedIds.map((id) => this.v2SelectedSnapshots[id]).filter(Boolean);
+      }
+      return this.selected || [];
+    },
+    importDupDialogTitle() {
+      const n = this.importDupRows?.length || 0;
+      return n ? `检测到 ${n} 条与已有订单重复` : '重复订单明细';
     },
     batchSubmittableList() {
-      return this.selected.filter((r) => this.canSubmit(r));
+      return this.effectiveSelected.filter((r) => this.canSubmit(r));
     },
     batchSubmitDisabled() {
-      if (!this.selected.length) return true;
-      return this.batchSubmittableList.length === 0 || this.batchSubmittableList.length !== this.selected.length;
+      if (!this.effectiveSelected.length) return true;
+      return this.batchSubmittableList.length === 0 || this.batchSubmittableList.length !== this.effectiveSelected.length;
     },
     batchSubmitTipDisabled() {
-      return !perm('order_management', 'order_submit') || !this.selected.length || !this.batchSubmitDisabled;
+      return !perm('order_management', 'order_submit') || !this.effectiveSelected.length || !this.batchSubmitDisabled;
     },
     batchShippableList() {
-      return this.selected.filter((r) => this.canShip(r));
+      return this.effectiveSelected.filter((r) => this.canShip(r));
     },
     batchFinanceReviewableList() {
-      return this.selected.filter((r) => this.canFinanceReview(r));
+      return this.effectiveSelected.filter((r) => this.canFinanceReview(r));
     },
     batchQcReviewableList() {
-      return this.selected.filter((r) => this.canQcReview(r));
+      return this.effectiveSelected.filter((r) => this.canQcReview(r));
     },
     batchDeletableList() {
-      return this.selected.filter((r) => this.canDelete(r));
+      return this.effectiveSelected.filter((r) => this.canDelete(r));
     },
     batchDeleteDisabled() {
-      if (!this.selected.length) return true;
-      return this.batchDeletableList.length === 0 || this.batchDeletableList.length !== this.selected.length;
+      if (!this.effectiveSelected.length) return true;
+      return this.batchDeletableList.length === 0 || this.batchDeletableList.length !== this.effectiveSelected.length;
     },
     batchDeleteTipDisabled() {
-      return !perm('order_management', 'order_delete') || !this.selected.length || !this.batchDeleteDisabled;
+      return !perm('order_management', 'order_delete') || !this.effectiveSelected.length || !this.batchDeleteDisabled;
     },
     ordersV2Columns() {
       const cols = [];
+      if (this.showOrderRowSelection) {
+        cols.push({
+          key: '__pick',
+          dataKey: 'id',
+          title: '',
+          width: 52,
+          align: 'center',
+          cellRenderer: ({ rowData }) =>
+            h(ElCheckbox, {
+              size: 'small',
+              modelValue: this.v2SelectedIds.includes(rowData.id),
+              disabled: !this.orderRowSelectable(rowData),
+              'onUpdate:modelValue': (v) => this.onV2RowPick(rowData, !!v)
+            })
+        });
+      }
       if (this.orderListColVisible.orderNo) {
         cols.push({
           key: 'order_no',
@@ -1213,7 +1340,7 @@ export default {
             )
         });
       }
-      for (const col of this.fieldDefinitions) {
+      for (const col of this.orderListFieldDefinitions) {
         const key = col.field_key;
         cols.push({
           key,
@@ -1390,11 +1517,11 @@ export default {
     },
     orderDateRangeStartPh() {
       if (this.orderDateRangeUsesFinancePassedAt) return '财务通过开始';
-      return this.orderDateRangeUsesSubmittedAt ? '提交审核开始' : '上传开始';
+      return this.orderDateRangeUsesSubmittedAt ? '提交审核开始' : '开始时间';
     },
     orderDateRangeEndPh() {
       if (this.orderDateRangeUsesFinancePassedAt) return '财务通过结束';
-      return this.orderDateRangeUsesSubmittedAt ? '提交审核结束' : '上传结束';
+      return this.orderDateRangeUsesSubmittedAt ? '提交审核结束' : '结束时间';
     },
     filteredMessages() {
       const list = this.messages || [];
@@ -1411,17 +1538,22 @@ export default {
     '$route.query.focus_order_id'() {
       this.applyFocusOrderFromRoute();
       this.load();
+    },
+    pageSize() {
+      this.maybeAutoEnableVirtualTable();
+    },
+    'fieldDefinitions.length'() {
+      this.maybeAutoEnableVirtualTable();
     }
   },
   mounted() {
     this.applyQuickViewFromRoute();
     this.applyFocusOrderFromRoute();
-    if (!this.isBlockedByPasswordPolicy()) this.load();
-    // 移除纯财务用户默认选中「仅待财务审核」的逻辑
-    if (!perm('order_management', 'order_query') && perm('order_management', 'order_input')) {
-      listSalesOrderFields()
-        .then((d) => {
-          this.fieldDefinitions = d.items || [];
+    if (!this.isBlockedByPasswordPolicy()) {
+      this.ensureOrderFieldDefinitions()
+        .then(() => {
+          this.maybeAutoEnableVirtualTable();
+          this.load();
         })
         .catch(() => {});
     }
@@ -1434,13 +1566,19 @@ export default {
     this.ordersAutoRefreshTimer = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if (this.isBlockedByPasswordPolicy()) return;
-      if (perm('order_management', 'order_query')) this.load({ silent: true });
+      if (perm('order_management', 'order_query')) {
+        this.load({ silent: true });
+        this.refreshFlowSlaBoard({ silent: true });
+      }
     }, 2000);
     this.pageVisibilityHandler = () => {
       if (document.visibilityState !== 'visible') return;
       if (this.isBlockedByPasswordPolicy()) return;
       if (this.showMessages) this.refreshMessages();
-      if (perm('order_management', 'order_query')) this.load({ silent: true });
+      if (perm('order_management', 'order_query')) {
+        this.load({ silent: true });
+        this.refreshFlowSlaBoard({ silent: true });
+      }
     };
     document.addEventListener('visibilitychange', this.pageVisibilityHandler);
   },
@@ -1562,7 +1700,9 @@ export default {
           return;
         }
         const vars = this.salesContractPreviewVars(c);
-        this.contractPreviewHtml = finalizeContractBodyForPreview(c?.body_html, d?.orders || [], vars);
+        this.contractPreviewHtml = finalizeContractBodyForPreview(c?.body_html, d?.orders || [], vars, {
+          orderFieldDefinitions: this.fieldDefinitions
+        });
         this.contractPreviewMode = 'html';
       } catch {
         this.$message.error('加载失败');
@@ -1587,11 +1727,11 @@ export default {
     },
     async downloadOrderContractPreviewFile() {
       if (!this.previewContractId) return;
+      const id = this.previewContractId;
+      const name = this.contractPreviewDocName || '合同文件.docx';
       try {
-        await downloadSalesContractDocument(
-          this.previewContractId,
-          this.contractPreviewDocName || '合同文件'
-        );
+        const blob = await downloadSalesContractDocx(id);
+        startDownload({ request: blob, filename: name });
       } catch {
         this.$message.error('下载失败');
       }
@@ -1603,13 +1743,13 @@ export default {
         const d = await getSalesContract(id);
         const c = d?.contract;
         if (c?.contract_source === 'upload') {
-          await downloadSalesContractDocument(id, c.document_original_filename || '合同文件');
+          const blob = await downloadSalesContractDocument(id);
+          startDownload({ request: blob, filename: c.document_original_filename || '合同文件' });
           return;
         }
-        const vars = this.salesContractPreviewVars(c);
-        const html = finalizeContractBodyForPreview(c?.body_html, d?.orders || [], vars);
         const no = (c?.contract_no || `contract-${id}`).replace(/[/\\?%*:|"<>]/g, '-');
-        downloadHtmlAsWordDoc(html, `${no}.doc`);
+        const blob = await downloadSalesContractDocx(id);
+        startDownload({ request: blob, filename: `${no}.docx` });
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '下载失败'));
       }
@@ -1837,7 +1977,71 @@ export default {
       this.page = 1;
       this.load();
     },
+    flowSlaQueryParams() {
+      const respect = this.flowBoardRespectDate === true;
+      const hasDate = Array.isArray(this.dateRange) && this.dateRange.length === 2;
+      const p = {
+        customer_name: this.filters.customer_name || undefined,
+        customer_code: this.filters.customer_code || undefined,
+        product_name: this.filters.product_name || undefined,
+        product_model: this.filters.product_model || undefined,
+        warehouse_model: this.filters.warehouse_model || undefined,
+        product_code: this.filters.product_code || undefined,
+        order_no: this.filters.order_no || undefined,
+        apply_date_range: respect && hasDate ? '1' : '0'
+      };
+      if (respect && hasDate) {
+        p.date_from = this.dateRange[0];
+        p.date_to = this.dateRange[1];
+      }
+      return p;
+    },
+    async refreshFlowSlaBoard(options = {}) {
+      if (!perm('order_management', 'order_query')) return;
+      if (this.isBlockedByPasswordPolicy()) return;
+      const silent = options.silent === true;
+      if (!silent) this.flowSlaLoading = true;
+      try {
+        const p = this.flowSlaQueryParams();
+        const f = await getSalesOrderFlowSummary(p, { silent });
+        this.flowSummary = f || {};
+      } catch (e) {
+        if (!silent) this.$message.error(this.$apiUserMsg(e, '加载流程摘要失败'));
+      } finally {
+        this.flowSlaLoading = false;
+      }
+    },
+    toggleFlowBucket(key) {
+      const next = this.filters.flow_bucket === key ? '' : key;
+      this.filters.flow_bucket = next;
+      if (next) {
+        this.filters.status = '';
+        this.filters.pending_finance_only = false;
+        this.filters.pending_qc_only = false;
+      }
+      this.page = 1;
+      this.load();
+    },
+    clearFlowBucketFilter() {
+      this.filters.flow_bucket = '';
+      this.page = 1;
+      this.load();
+    },
+    onStatusFilterChange() {
+      if (this.filters.status) this.filters.flow_bucket = '';
+      this.page = 1;
+      this.load();
+    },
+    onPendingFinanceChange() {
+      if (this.filters.pending_finance_only) this.filters.flow_bucket = '';
+      this.load();
+    },
+    onPendingQcChange() {
+      if (this.filters.pending_qc_only) this.filters.flow_bucket = '';
+      this.load();
+    },
     applyQuickViewFromRoute() {
+      this.filters.flow_bucket = '';
       const view = this.$route?.query?.view;
       if (view) {
         if (view === 'sales') {
@@ -1907,12 +2111,21 @@ export default {
         });
         this.items = d.items || [];
         this.total = d.total || 0;
-        if (d.field_definitions?.length) this.fieldDefinitions = d.field_definitions;
+        if (this.ordersVirtualTable) {
+          const snap = { ...this.v2SelectedSnapshots };
+          for (const it of this.items || []) {
+            if (this.v2SelectedIds.includes(it.id)) snap[it.id] = { ...it };
+          }
+          this.v2SelectedSnapshots = snap;
+        }
         // 定时静默刷新会用新对象替换列表行；若不同步选中行，selection 仍指向旧引用，条件（如是否已提交）会过期，导致批量操作的笔数与结果错乱
         const selIds = new Set(
           (this.selected || []).map((r) => r && r.id).filter((id) => id != null)
         );
-        const nextSelected = (this.items || []).filter((r) => selIds.has(r.id));
+        const byId = new Map((this.items || []).map((r) => [r.id, r]));
+        const nextSelected = Array.from(selIds)
+          .map((id) => byId.get(id) || (this.selected || []).find((r) => r && r.id === id))
+          .filter(Boolean);
         this.ordersTableSelectionSync = true;
         this.selected = nextSelected;
         await this.$nextTick();
@@ -1936,6 +2149,9 @@ export default {
         await this.$nextTick();
         this.ordersTableSelectionSync = false;
         await this.maybeScrollToFocusOrder();
+        if (perm('order_management', 'order_query')) {
+          this.refreshFlowSlaBoard({ silent: true });
+        }
       }
     },
     canEditOrderQc(row) {
@@ -2019,6 +2235,11 @@ export default {
       }
     },
     displayCell(row, key) {
+      const def = this.fieldDefinitions.find((d) => d.field_key === key);
+      if (def?.maps_to === 'amount' && this.fieldDefinitions?.length) {
+        const calc = grossAmountFromRowDisplayData(row, this.fieldDefinitions);
+        if (calc != null) return String(calc);
+      }
       const v = row.display_data?.[key];
       if (v === undefined || v === null || v === '') return '—';
       return v;
@@ -2036,6 +2257,7 @@ export default {
       this.formErrors = {};
       this.formData = this.initEmptyFormData();
       this.formOpen = true;
+      this.$nextTick(() => this.syncFormAmountFromTonsPricing());
     },
     openEdit(row) {
       const rv = Number(row.row_version);
@@ -2043,6 +2265,7 @@ export default {
       this.formErrors = {};
       this.formData = { ...this.initEmptyFormData(), ...(row.display_data || {}) };
       this.formOpen = true;
+      this.$nextTick(() => this.syncFormAmountFromTonsPricing());
     },
     handleEditClick(row) {
       if (this.canEdit(row)) {
@@ -2070,11 +2293,7 @@ export default {
         if (!res.ok) throw new Error('BAD_RESPONSE');
         const blob = await res.blob();
         const ext = (blob.type || '').includes('jpeg') ? 'jpg' : 'png';
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `order-${row.order_no || row.id}-qrcode.${ext}`;
-        a.click();
-        URL.revokeObjectURL(a.href);
+        startDownload({ request: blob, filename: `order-${row.order_no || row.id}-qrcode.${ext}` });
       } catch {
         this.$message.error('下载失败');
       }
@@ -2089,10 +2308,42 @@ export default {
         this.formErrors = next;
       }
     },
+    onOrderFormFieldInput(col) {
+      this.clearFieldError(col.field_key);
+      this.maybeSyncOrderAmountFromDeps(col.maps_to);
+    },
+    onOrderFormNumberChange(col) {
+      this.clearFieldError(col.field_key);
+      this.maybeSyncOrderAmountFromDeps(col.maps_to);
+    },
+    /** 数量、规格、单价变化时重算金额（价税合计） */
+    maybeSyncOrderAmountFromDeps(mapsTo) {
+      if (!this.formOpen) return;
+      if (mapsTo === 'quantity' || mapsTo === 'product_name' || mapsTo === 'unit_price') {
+        this.$nextTick(() => this.syncFormAmountFromTonsPricing());
+      }
+    },
+    syncFormAmountFromTonsPricing() {
+      if (!this.formOpen || !this.fieldDefinitions?.length) return;
+      const fk = (m) => this.fieldDefinitions.find((d) => d.maps_to === m)?.field_key;
+      const kq = fk('quantity');
+      const ks = fk('product_name');
+      const ku = fk('unit_price');
+      const ka = fk('amount');
+      if (!ka || !kq || !ks || !ku) return;
+      const g = grossAmountFromQtySpecUnitPrice(this.formData[kq], this.formData[ks], this.formData[ku]);
+      if (g == null) return;
+      const next = roundOrderDecimal4(g);
+      const cur = this.formData[ka];
+      if (cur !== next && Number(cur) !== next) {
+        this.formData[ka] = next;
+      }
+    },
     resetForm() {
       this.formErrors = {};
     },
     async saveForm() {
+      this.syncFormAmountFromTonsPricing();
       this.formErrors = {};
       const payload = { data: {} };
       for (const col of this.fieldDefinitions) {
@@ -2131,15 +2382,103 @@ export default {
         this.saving = false;
       }
     },
-    onOrdersVirtualToggle() {
+    clearOrderSelection() {
       this.selected = [];
+      this.v2SelectedIds = [];
+      this.v2SelectedSnapshots = {};
+    },
+    onImportDupDialogClosed() {
+      this.importDupRows = [];
+      this.importDupSummary = '';
+    },
+    openImportDupDialog(rows) {
+      this.importDupRows = Array.isArray(rows) ? rows : [];
+      this.importDupSummary =
+        this.importDupRows.length > 0
+          ? '以下数据来自系统检测结果，仅作文本展示；若内容含特殊字符亦为纯文本，不会作为网页代码执行。'
+          : '';
+      this.importDupDialogVisible = true;
+    },
+    async ensureOrderFieldDefinitions() {
+      const can =
+        perm('order_management', 'order_query') ||
+        perm('order_management', 'order_input') ||
+        perm('order_management', 'order_field_config') ||
+        perm('order_management', 'order_status_qc');
+      if (!can) return;
+      try {
+        const d = await listSalesOrderFields({});
+        this.fieldDefinitions = d.items || [];
+        if (d.schema_version != null && d.schema_version !== '') {
+          const n = Number(d.schema_version);
+          this.fieldSchemaVersion = Number.isFinite(n) ? n : d.schema_version;
+        }
+      } catch {
+        /* ignore */
+      }
+    },
+    maybeAutoEnableVirtualTable() {
+      const nCol = (this.fieldDefinitions && this.fieldDefinitions.length) || 0;
+      if (this.pageSize >= 100 || nCol >= 14) {
+        if (!this.ordersVirtualTable) this.ordersVirtualTable = true;
+      }
+    },
+    onV2RowPick(row, on) {
+      if (!this.orderRowSelectable(row)) return;
+      const id = row.id;
+      const ids = new Set(this.v2SelectedIds);
+      const snap = { ...this.v2SelectedSnapshots };
+      if (on) {
+        ids.add(id);
+        snap[id] = { ...row };
+      } else {
+        ids.delete(id);
+        delete snap[id];
+      }
+      this.v2SelectedIds = Array.from(ids);
+      this.v2SelectedSnapshots = snap;
+    },
+    onOrdersVirtualTableChange() {
+      if (this.ordersVirtualTable) {
+        const nextIds = new Set(this.v2SelectedIds);
+        const snap = { ...this.v2SelectedSnapshots };
+        for (const r of this.selected || []) {
+          if (r && r.id != null) {
+            nextIds.add(r.id);
+            snap[r.id] = { ...r };
+          }
+        }
+        this.v2SelectedIds = Array.from(nextIds);
+        this.v2SelectedSnapshots = snap;
+        this.ordersTableSelectionSync = true;
+        this.selected = [];
+        this.$nextTick(() => {
+          try {
+            this.$refs.ordersTable?.clearSelection?.();
+          } catch {
+            /* ignore */
+          }
+          this.ordersTableSelectionSync = false;
+        });
+      } else {
+        this.syncV2PickToElTable();
+      }
+    },
+    syncV2PickToElTable() {
+      const tb = this.$refs.ordersTable;
+      const ids = this.v2SelectedIds || [];
       this.ordersTableSelectionSync = true;
+      this.selected = [];
       this.$nextTick(() => {
         try {
-          this.$refs.ordersTable?.clearSelection?.();
+          tb?.clearSelection?.();
         } catch {
           /* ignore */
         }
+        for (const row of this.items || []) {
+          if (ids.includes(row.id)) tb?.toggleRowSelection?.(row, true);
+        }
+        this.selected = (this.items || []).filter((r) => ids.includes(r.id));
         this.ordersTableSelectionSync = false;
       });
     },
@@ -2150,6 +2489,10 @@ export default {
       try {
         const d = await listSalesOrderFields({ all: '1' });
         this.fieldAllList = d.items || [];
+        if (d.schema_version != null && d.schema_version !== '') {
+          const n = Number(d.schema_version);
+          this.fieldSchemaVersion = Number.isFinite(n) ? n : d.schema_version;
+        }
       } catch {
         this.fieldAllList = [];
       }
@@ -2179,15 +2522,30 @@ export default {
       this.fieldEditOpen = true;
     },
     async removeFieldRow(row) {
+      let confirmText = '停用该字段？历史订单数据仍保留。';
+      if (perm('order_management', 'order_field_config')) {
+        try {
+          const imp = await getSalesOrderFieldImpact(row.id);
+          const n = Number(imp?.order_count_with_data_json_key || 0);
+          if (n > 0) {
+            const fk = imp?.field_key || row.field_key || '';
+            confirmText = `有 ${n} 条订单的扩展数据仍包含字段键「${fk}」。停用后新单不再使用该配置，列表以当前启用字段为准。\n\n仍要停用吗？历史订单数据仍保留。`;
+          }
+        } catch {
+          /* 影响接口失败时不阻断停用 */
+        }
+      }
       try {
-        await this.$confirm('停用该字段？历史订单数据仍保留。', '提示', { type: 'warning' });
+        await this.$confirm(confirmText, '提示', { type: 'warning' });
       } catch {
         return;
       }
       try {
         await deleteSalesOrderField(row.id);
         this.$message.success('已停用');
+        await this.ensureOrderFieldDefinitions();
         await this.loadFieldDefinitionsAll();
+        this.maybeAutoEnableVirtualTable();
         this.load();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
@@ -2221,7 +2579,9 @@ export default {
         }
         this.$message.success('已保存');
         this.fieldEditOpen = false;
+        await this.ensureOrderFieldDefinitions();
         await this.loadFieldDefinitionsAll();
+        this.maybeAutoEnableVirtualTable();
         this.load();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '保存失败'));
@@ -2292,7 +2652,7 @@ export default {
       try {
         await deleteSalesOrder(row.id);
         this.$message.success('已删除');
-        this.selected = [];
+        this.clearOrderSelection();
         this.load();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '删除失败'));
@@ -2317,7 +2677,7 @@ export default {
         } else {
           this.$message.success(`已删除 ${r.ok} 条`);
         }
-        this.selected = [];
+        this.clearOrderSelection();
         this.load();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '删除失败'));
@@ -2385,7 +2745,7 @@ export default {
         } else {
           this.$message.success(`已提交 ${r.ok} 笔`);
         }
-        this.selected = [];
+        this.clearOrderSelection();
         this.load();
         this.refreshMessages();
       } catch (e) {
@@ -2629,7 +2989,7 @@ export default {
         }
         this.shipOpen = false;
         this.resetShipDialog();
-        this.selected = [];
+        this.clearOrderSelection();
         this.load();
         this.refreshMessages();
       } catch (e) {
@@ -2664,12 +3024,7 @@ export default {
     async downloadTpl() {
       try {
         const blob = await downloadSalesImportTemplate();
-        const url = URL.createObjectURL(new Blob([blob]));
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'sales-import-template.xlsx';
-        a.click();
-        URL.revokeObjectURL(url);
+        startDownload({ request: blob, filename: 'sales-import-template.xlsx' });
       } catch (e) {
         this.$message.error('下载失败');
       }
@@ -2680,49 +3035,17 @@ export default {
         
         // 显示与已有订单重复的数据详情
         if (r.duplicates?.length) {
-          const dupTable = `
-            <div style="width:100%; max-height:70vh; overflow-y:auto;">
-              <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                <thead>
-                  <tr style="background:#f5f7fa;">
-                    <th style="border:1px solid #dcdfe6; padding:10px; text-align:left;">导入行</th>
-                    <th style="border:1px solid #dcdfe6; padding:10px; text-align:left;">客户</th>
-                    <th style="border:1px solid #dcdfe6; padding:10px; text-align:left;">产品</th>
-                    <th style="border:1px solid #dcdfe6; padding:10px; text-align:left;">型号</th>
-                    <th style="border:1px solid #dcdfe6; padding:10px; text-align:left;">批号</th>
-                    <th style="border:1px solid #dcdfe6; padding:10px; text-align:left;">重复订单号</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${r.duplicates.map((d) => `
-                    <tr style="hover:background:#f0f9eb;">
-                      <td style="border:1px solid #dcdfe6; padding:10px;">第${d.row}行</td>
-                      <td style="border:1px solid #dcdfe6; padding:10px;">${d.imported_customer || '未知'}</td>
-                      <td style="border:1px solid #dcdfe6; padding:10px;">${d.imported_product || '未知'}</td>
-                      <td style="border:1px solid #dcdfe6; padding:10px;">${d.imported_model || '未知'}</td>
-                      <td style="border:1px solid #dcdfe6; padding:10px;">${d.imported_batch_no || '未知'}</td>
-                      <td style="border:1px solid #dcdfe6; padding:10px;">${d.existing_order_no || '未知'}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            </div>
-          `;
-          
-          await this.$alert(dupTable, `检测到 ${r.duplicates.length} 条与已有订单重复`, {
-            confirmButtonText: '我知道了',
-            dangerouslyUseHTMLString: true,
-            customClass: 'import-duplicate-alert',
-            width: '900px'
-          });
+          this.openImportDupDialog(r.duplicates);
         }
-        
+
         if (r.errors?.length) {
           this.$message.warning(`成功 ${r.ok} 条，失败 ${r.errors.length} 条`);
           // eslint-disable-next-line no-console
           console.warn(r.errors);
         } else if (!r.duplicates?.length) {
           this.$message.success(`导入成功 ${r.ok} 条`);
+        } else if (r.ok > 0) {
+          this.$message.success(`导入成功 ${r.ok} 条（${r.duplicates.length} 条与已有订单重复已跳过）`);
         }
         if (r.ok > 0) this.page = 1;
         this.load();
@@ -2765,32 +3088,93 @@ export default {
       return false;
     },
     async exportXlsx() {
+      if (!this.total) {
+        this.$message.warning('没有可导出的数据');
+        return;
+      }
+      if (this.total > SALES_ORDER_EXPORT_LIMIT) {
+        try {
+          await this.$confirm(
+            `当前筛选共 ${this.total} 条，单次最多导出 ${SALES_ORDER_EXPORT_LIMIT} 条；将仅导出按上传时间倒序的前 ${SALES_ORDER_EXPORT_LIMIT} 条。建议缩小日期范围或增加筛选条件。是否继续？`,
+            '导出条数限制',
+            { type: 'warning' }
+          );
+        } catch {
+          return;
+        }
+      }
       this.exporting = true;
       try {
-        const blob = await exportSalesOrdersXlsx(this.queryParams());
-        const url = URL.createObjectURL(new Blob([blob]));
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `sales-orders-${Date.now()}.xlsx`;
-        a.click();
-        URL.revokeObjectURL(url);
+        const params = this.queryParams();
+        const created = await createSalesOrderExportJob(params, { silent: true });
+        const jobId = created?.id ?? created?.data?.id;
+        if (!jobId) {
+          this.$message.error('创建导出任务失败');
+          return;
+        }
+        const pollMs = 1500;
+        const maxWait = 300000;
+        let waited = 0;
+        while (waited < maxWait) {
+          const st = await getSalesOrderExportJob(jobId, { silent: true });
+          const status = st?.status ?? st?.data?.status;
+          if (status === 'done') break;
+          if (status === 'failed') {
+            this.$message.error(st?.last_error || st?.data?.last_error || '导出失败');
+            return;
+          }
+          await new Promise((r) => setTimeout(r, pollMs));
+          waited += pollMs;
+        }
+        const finalSt = await getSalesOrderExportJob(jobId, { silent: true });
+        if ((finalSt?.status ?? finalSt?.data?.status) !== 'done') {
+          this.$message.warning('导出任务处理较慢，请稍后刷新页面或重试导出');
+          return;
+        }
+        const blob = await downloadSalesOrderExportJobFile(jobId);
+        const hit = finalSt?.total_hit ?? finalSt?.data?.total_hit;
+        const n = finalSt?.row_count_exported ?? finalSt?.data?.row_count_exported;
+        let msg;
+        if (hit != null && n != null && Number(hit) > Number(n)) {
+          msg = `已下载 ${n} 条（命中 ${hit} 条，已按单次上限截取）`;
+        } else {
+          msg = `已下载 ${n != null ? n : ''} 条`.trim() || '导出完成';
+        }
+        startDownload({
+          request: blob,
+          filename: `sales-orders-${Date.now()}.xlsx`,
+          onSuccess: () => { this.$message.success(msg); }
+        });
       } catch (e) {
-        this.$message.error('导出失败');
+        this.$message.error(this.$apiUserMsg(e, '导出失败'));
       } finally {
         this.exporting = false;
       }
     },
     async openContractGen() {
-      if (!this.selected.length) {
+      if (!this.effectiveSelected.length) {
         this.$message.warning('请先勾选订单');
         return;
       }
-      const cids = [...new Set(this.selected.map((r) => r.customer_id))];
-      if (cids.length !== 1) {
+      const already = this.effectiveSelected.filter((r) => r.contract_id);
+      if (already.length) {
+        this.$message.warning(
+          `已选中有 ${already.length} 条订单已关联合同，请取消勾选后再生成`
+        );
+        return;
+      }
+      // BIGINT 等在接口里可能是 number 或 string；用数值统一后再去重，避免同一客户被误判为多个
+      const normCustomerId = (v) => {
+        if (v == null || v === '') return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : String(v).trim();
+      };
+      const cids = [...new Set(this.effectiveSelected.map((r) => normCustomerId(r.customer_id)))];
+      if (cids.length !== 1 || cids[0] == null) {
         this.$message.warning('请选择同一客户的订单');
         return;
       }
-      await this.prepareContractGenDialog(this.selected.map((r) => r.id));
+      await this.prepareContractGenDialog(this.effectiveSelected.map((r) => r.id));
     },
     async runGenerate() {
       if (!this.genUseBlankTemplate && !this.genTemplateId) {
@@ -2800,7 +3184,7 @@ export default {
       this.genLoading = true;
       try {
         const orderIds =
-          this.genOrderIds.length > 0 ? this.genOrderIds : this.selected.map((x) => x.id);
+          this.genOrderIds.length > 0 ? this.genOrderIds : this.effectiveSelected.map((x) => x.id);
         const payload = {
           orderIds,
           fromBlank: this.genUseBlankTemplate === true
@@ -2920,6 +3304,13 @@ export default {
 .toolbar-card {
   margin-bottom: 12px;
 }
+.flow-board__chip .flow-board__num {
+  margin-left: 4px;
+  font-weight: 700;
+}
+.flow-board-respect-date {
+  margin-left: 4px;
+}
 .toolbar {
   display: flex;
   justify-content: space-between;
@@ -2936,9 +3327,11 @@ export default {
 .left {
   flex: 1;
   min-width: 0;
+  flex-wrap: nowrap;
 }
 .right {
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 .batch-actions {
   display: flex;
@@ -2965,9 +3358,11 @@ export default {
 }
 .field-select {
   width: 130px;
+  flex-shrink: 0;
 }
 .field-date {
   width: 260px;
+  flex-shrink: 0;
 }
 .batch-del-tooltip-host {
   display: inline-block;
@@ -2987,7 +3382,7 @@ export default {
 .table-wrap {
   background: #fff;
   padding: 12px;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid #e2e8f0;
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
   flex: 1;
@@ -2997,12 +3392,36 @@ export default {
 }
 .table-list-toolbar {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 12px;
   margin-bottom: 12px;
   flex-shrink: 0;
   padding-bottom: 10px;
   border-bottom: 1px solid #eef2f7;
+}
+.table-list-toolbar__flow-sla {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.table-list-toolbar__left {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 100%;
+}
+.table-list-toolbar__right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 .order-list-column-picker {
   display: flex;
@@ -3189,7 +3608,22 @@ export default {
   .sales-orders {
     height: calc(100vh - 88px);
   }
-  .toolbar {
+.search-bar {
+  min-width: 160px;
+  max-width: 240px;
+  flex-shrink: 1;
+}
+.search-bar .el-input-group__prepend {
+  padding: 0;
+  background: transparent;
+}
+.search-bar .el-input-group__prepend .el-select {
+  width: 110px;
+}
+.search-bar .el-input-group__prepend .el-select .el-input__wrapper {
+  border-radius: 0;
+}
+.toolbar {
     flex-direction: column;
     align-items: stretch;
   }
@@ -3202,7 +3636,8 @@ export default {
   .left .field-input,
   .left .field-input-sm,
   .left .field-select,
-  .left .field-date {
+  .left .field-date,
+  .left .search-bar {
     width: 100% !important;
     min-width: 0;
   }
@@ -3226,6 +3661,16 @@ export default {
     gap: 6px;
     margin-bottom: 8px;
     padding-bottom: 8px;
+  }
+  .table-list-toolbar__flow-sla {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .table-list-toolbar__right {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
   }
 }
 
@@ -3555,7 +4000,7 @@ export default {
   font-size: 16px;
   line-height: 1.5;
   color: #000;
-  text-align: justify;
+  text-align: left;
 }
 .contract-preview-html :deep(h1),
 .contract-preview-html :deep(h2),
@@ -3570,6 +4015,7 @@ export default {
 .contract-preview-html :deep(p) {
   text-indent: 2em;
   margin: 0.5em 0;
+  text-align: justify;
 }
 .contract-preview-html :deep(table) {
   border-collapse: collapse;

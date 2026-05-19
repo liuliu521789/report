@@ -303,6 +303,7 @@ import {
 } from '../api';
 import { perm, isSuperAdmin } from '../utils/permissions';
 import { Search, UploadFilled } from '@element-plus/icons-vue';
+import { startDownload } from '../composables/useDownloadProgress.js';
 
 export default {
   name: 'CustomerManagement',
@@ -613,22 +614,17 @@ export default {
         fallback
       );
     },
-    triggerDownload(blob, filename) {
-      const url = URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    },
     async exportSelected() {
       if (!this.canExport || this.multipleSelection.length === 0) return;
       const ids = this.multipleSelection.map((item) => item.id);
       this.exporting = true;
       try {
         const blob = await exportCustomers({ ids: ids.join(',') });
-        this.triggerDownload(blob, `sales-customers-selected-${Date.now()}.xlsx`);
-        this.$message.success(`已导出 ${ids.length} 条客户`);
+        startDownload({
+          request: blob,
+          filename: `sales-customers-selected-${Date.now()}.xlsx`,
+          onSuccess: () => { this.$message.success(`已导出 ${ids.length} 条客户`); }
+        });
       } catch (e) {
         const msg = await this.exportBlobErrorMessage(e, '导出失败');
         this.$message.error(msg);
@@ -645,8 +641,11 @@ export default {
         if (q) params.q = q;
         params.customer_group = this.activeSource;
         const blob = await exportCustomers(params);
-        this.triggerDownload(blob, `sales-customers-${Date.now()}.xlsx`);
-        this.$message.success('导出完成');
+        startDownload({
+          request: blob,
+          filename: `sales-customers-${Date.now()}.xlsx`,
+          onSuccess: () => { this.$message.success('导出完成'); }
+        });
       } catch (e) {
         const msg = await this.exportBlobErrorMessage(e, '导出失败');
         this.$message.error(msg);

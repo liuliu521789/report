@@ -11,17 +11,33 @@ const PLACEHOLDER_KEYS = [
   'CUSTOMER_PHONE'
 ];
 
-const ORDER_LINES_TABLE_STYLE_MARK =
-  'width:100%;border-collapse:collapse;border:1px solid #000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.35';
+import {
+  CONTRACT_ORDER_LINES_TABLE_CLASS,
+  ORDER_LINES_TABLE_STYLE
+} from './contractOrderLinesTableStyle.js';
 
 /** 旧模板在表格外仍有「总金额」段落时，与表内合计重复，生成后去掉紧跟订单明细表后的该段 */
 function stripLegacyOrderTotalParagraph(html) {
-  const escaped = ORDER_LINES_TABLE_STYLE_MARK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(
-    `(<table style="${escaped}">[\\s\\S]*?</table>)\\s*<p[^>]*>[\\s\\S]*?总金额(（大写）)?[：:][\\s\\S]*?</p>`,
-    'i'
-  );
-  return String(html ?? '').replace(re, '$1');
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = [
+    new RegExp(
+      `(<table[^>]*class="[^"]*${CONTRACT_ORDER_LINES_TABLE_CLASS}[^"]*"[^>]*>[\\s\\S]*?</table>)\\s*<p[^>]*>[\\s\\S]*?总金额(（大写）)?[：:][\\s\\S]*?</p>`,
+      'i'
+    ),
+    new RegExp(
+      `(<table style="${esc(ORDER_LINES_TABLE_STYLE)}">[\\s\\S]*?</table>)\\s*<p[^>]*>[\\s\\S]*?总金额(（大写）)?[：:][\\s\\S]*?</p>`,
+      'i'
+    ),
+    new RegExp(
+      '(<table style="width:100%;border-collapse:collapse;border:1px solid #000[^"]*">[\\s\\S]*?</table>)\\s*<p[^>]*>[\\s\\S]*?总金额(（大写）)?[：:][\\s\\S]*?</p>',
+      'i'
+    )
+  ];
+  let s = String(html ?? '');
+  for (const re of patterns) {
+    s = s.replace(re, '$1');
+  }
+  return s;
 }
 
 function escapeRegExp(str) {

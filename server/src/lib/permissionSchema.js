@@ -121,7 +121,10 @@ export const PERMISSION_MODULES = [
       { key: 'order_view_status_logs', label: '状态日志', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'sales_admin') },
       { key: 'order_cancel', label: '取消', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'sales_admin') },
       { key: 'order_delete', label: '删除', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'sales_admin') },
-      { key: 'order_field_config', label: '字段配置', defaults: ROLE_DEFAULT('documentary', 'sales_admin') }
+      { key: 'order_field_config', label: '字段配置', defaults: ROLE_DEFAULT('documentary', 'sales_admin') },
+      { key: 'order_list_unit_price', label: '列表显示单价', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'sales_admin') },
+      { key: 'order_list_contract', label: '列表显示合同', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
+      { key: 'order_list_qc_qrcode', label: '列表显示质检二维码', defaults: ROLE_DEFAULT('sales', 'documentary', 'qc', 'sales_admin') }
     ]
   },
   {

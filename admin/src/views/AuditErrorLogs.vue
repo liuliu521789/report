@@ -73,6 +73,7 @@
 import { bulkDeleteErrorLogs, exportErrorLogs, listErrorLogs } from '../api';
 import { formatDateTime } from '../utils/formatDateTime';
 import { isSuperAdmin, perm } from '../utils/permissions';
+import { startDownload } from '../composables/useDownloadProgress.js';
 
 export default {
   name: 'AuditErrorLogs',
@@ -163,8 +164,8 @@ export default {
       const ids = this.selectedIds();
       if (!ids.length) return;
       try {
-        await exportErrorLogs(ids);
-        this.$message.success('已开始下载');
+        const blob = await exportErrorLogs(ids);
+        startDownload({ request: blob, filename: `error-logs-${Date.now()}.json` });
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '导出失败'));
       }

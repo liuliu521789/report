@@ -40,13 +40,5 @@ export async function downloadBackup(id) {
   const disposition = String(res.headers?.['content-disposition'] || '');
   const matched = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
   const filename = matched?.[1] ? decodeURIComponent(matched[1]) : `backup_${id}.tar.gz`;
-  const objectUrl = URL.createObjectURL(res.data);
-  const a = document.createElement('a');
-  a.href = objectUrl;
-  a.download = filename;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(objectUrl);
+  return { blob: res.data, filename };
 }

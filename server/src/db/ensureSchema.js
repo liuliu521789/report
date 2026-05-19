@@ -57,6 +57,27 @@ CREATE TABLE IF NOT EXISTS backup_jobs (
 ) ENGINE=InnoDB;
 `;
 
+/** 与 migrations/050_sales_order_export_jobs.sql 一致 */
+const DDL_SALES_ORDER_EXPORT_JOBS = `
+CREATE TABLE IF NOT EXISTS sales_order_export_jobs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  created_by BIGINT UNSIGNED NOT NULL,
+  requester_json JSON NOT NULL,
+  filter_json JSON NOT NULL,
+  status ENUM('pending', 'running', 'done', 'failed') NOT NULL DEFAULT 'pending',
+  total_hit INT UNSIGNED NULL DEFAULT NULL,
+  row_count_exported INT UNSIGNED NULL DEFAULT NULL,
+  last_error VARCHAR(512) NULL DEFAULT NULL,
+  file_path VARCHAR(768) NULL DEFAULT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  finished_at DATETIME(3) NULL DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_so_export_jobs_user_created (created_by, created_at),
+  KEY idx_so_export_jobs_status_created (status, created_at),
+  CONSTRAINT fk_so_export_jobs_user FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+`;
+
 /** 与 migrations/007_support_contact_settings.sql、schema.sql 一致 */
 const DDL_SUPPORT_CONTACT_SETTINGS = `
 CREATE TABLE IF NOT EXISTS support_contact_settings (
@@ -84,6 +105,11 @@ export async function ensureReportStylesTable() {
 export async function ensureBackupJobsTable() {
   const pool = getPool();
   await pool.query(DDL_BACKUP_JOBS);
+}
+
+export async function ensureSalesOrderExportJobsTable() {
+  const pool = getPool();
+  await pool.query(DDL_SALES_ORDER_EXPORT_JOBS);
 }
 
 export async function ensureSupportContactSettingsTable() {
@@ -708,7 +734,21 @@ export async function ensureSalesModuleTables() {
   );
   await ensureBuiltinCategoryPermissionDefaults(pool);
   await ensureSalesOrdersRowVersionColumn(pool);
+  await ensureSalesOrderFieldSchemaVersionColumns(pool);
   await ensureSalesCustomersNgramFulltextIndex(pool);
+}
+
+async function ensureSalesOrderFieldSchemaVersionColumns(pool) {
+  if (!(await columnExists(pool, 'sales_settings', 'order_field_schema_version'))) {
+    await pool.query(
+      'ALTER TABLE sales_settings ADD COLUMN order_field_schema_version INT UNSIGNED NOT NULL DEFAULT 1 AFTER last_order_seq'
+    );
+  }
+  if (!(await columnExists(pool, 'sales_orders', 'field_schema_version'))) {
+    await pool.query(
+      "ALTER TABLE sales_orders ADD COLUMN field_schema_version INT UNSIGNED NULL DEFAULT NULL COMMENT '创建时字段定义全局版本' AFTER data_json"
+    );
+  }
 }
 
 /** 订单乐观锁版本号；并发编辑时 PATCH 需携带期望的 row_version */

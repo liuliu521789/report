@@ -219,6 +219,11 @@ export function importHeaderSynonymsForField(fieldDef) {
       push(s);
     }
   }
+  if (fieldDef.maps_to === 'unit_price') {
+    for (const s of ['价格', '含税单价', '不含税单价', '销售单价']) {
+      push(s);
+    }
+  }
   return out;
 }
 
@@ -278,6 +283,10 @@ export async function ensureCanonicalOrderFieldDefinitions(pool) {
   await p.query(
     `UPDATE sales_order_field_definitions SET is_active = 0 WHERE field_key IN ('customer_code', 'unit_price')`
   );
+  /** 列表/导出表头：将映射到单价的「价格」统一为「单价」 */
+  await p.query(
+    `UPDATE sales_order_field_definitions SET label_zh = '单价' WHERE maps_to = 'unit_price' AND TRIM(label_zh) = '价格'`
+  );
 }
 
 /** 旧行无 data_json 时，从列补全 */
@@ -322,6 +331,25 @@ export function parseQuantityToLegacyNumber(raw) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+/** 规格文本中首个正数；含 kg/千克/公斤 时按千克→吨因子，否则为可与数量相乘的吨/桶系数 */
+export function specNumericToTonFactor(specText) {
+  const raw = String(specText ?? '');
+  const n = parseQuantityToLegacyNumber(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (/千克|公斤|kg/i.test(raw)) return n / 1000;
+  return n;
+}
+
+/** 单位（吨）= 数量 × 规格因子，四舍五入两位小数；无法计算时返回 null */
+export function tonsFromQtyAndSpec(qtyRaw, specText) {
+  const q = parseQuantityToLegacyNumber(qtyRaw);
+  const factor = specNumericToTonFactor(specText);
+  if (!Number.isFinite(q) || q <= 0 || factor == null) return null;
+  const tons = q * factor;
+  if (!Number.isFinite(tons) || tons <= 0) return null;
+  return Math.round(tons * 100) / 100;
+}
+
 export function dataJsonToLegacyColumns(definitions, dataJson) {
   const dj = { ...(dataJson || {}) };
   const byMap = {};
@@ -338,8 +366,13 @@ export function dataJsonToLegacyColumns(definitions, dataJson) {
     byMap.amount !== undefined &&
     byMap.amount !== '' &&
     Number.isFinite(amount);
+  const tons = tonsFromQtyAndSpec(byMap.quantity, byMap.product_name);
   if (!amountExplicit) {
-    amount = roundOrderDecimal4(quantity * unitPrice);
+    if (tons != null && tons > 0 && unitPrice > 0) {
+      amount = roundOrderDecimal4(unitPrice * tons);
+    } else {
+      amount = roundOrderDecimal4(quantity * unitPrice);
+    }
   } else {
     amount = roundOrderDecimal4(amount);
   }
@@ -413,6 +446,77 @@ export function mergeRowDataJson(row, definitions) {
     display[d.field_key] = base[d.field_key] ?? '';
   }
   return { dataJson: base, display_data: display };
+}
+
+/**
+ * 合同明细计算用：把 data_json 活跃字段展开到行顶层的 quantity、unit_price、product_name 等（与 maps_to 一致），
+ * 并附带 display_data。避免仅依赖物理列而漏掉动态表单里的单价/规格。
+ */
+function pickUnitPriceFromBase(base, definitions, display_data) {
+  const tryNum = (v) => {
+    const n = Number(v);
+    return v != null && v !== '' && Number.isFinite(n) && n > 0 ? n : null;
+  };
+  for (const d of definitions || []) {
+    if (d.maps_to === 'unit_price') {
+      const n = tryNum(base?.[d.field_key]);
+      if (n != null) return n;
+    }
+  }
+  const priceDef = (definitions || []).find(
+    (d) => /价格|单价|售价|price/i.test(d.label_zh || '') && d.maps_to !== 'unit_price'
+  );
+  if (priceDef) {
+    const fromDisplay = tryNum(display_data?.[priceDef.field_key]);
+    if (fromDisplay != null) return fromDisplay;
+    const fromBase = tryNum(base?.[priceDef.field_key]);
+    if (fromBase != null) return fromBase;
+  }
+  for (const k of ['unit_price', 'price', 'unitPrice']) {
+    const n = tryNum(base?.[k]);
+    if (n != null) return n;
+  }
+  return null;
+}
+
+export function prepareOrderRowForContractHtml(row, definitions) {
+  if (!row || !definitions?.length) return row;
+  const { dataJson: base, display_data } = mergeRowDataJson(row, definitions);
+  const keyFor = (m) => definitions.find((d) => d.maps_to === m)?.field_key;
+  const pick = (mapsTo, fallback) => {
+    const key = keyFor(mapsTo);
+    if (
+      key != null &&
+      display_data[key] !== undefined &&
+      display_data[key] !== null &&
+      String(display_data[key]).trim() !== ''
+    ) {
+      return display_data[key];
+    }
+    if (fallback !== undefined && fallback !== null && String(fallback).trim() !== '') {
+      return fallback;
+    }
+    return undefined;
+  };
+  let unitPrice = pick('unit_price', row.unit_price);
+  if (unitPrice == null || Number(unitPrice) <= 0) {
+    const fromBase = pickUnitPriceFromBase(base, definitions, display_data);
+    if (fromBase != null) unitPrice = fromBase;
+  }
+  const out = {
+    ...row,
+    display_data,
+    quantity: pick('quantity', row.quantity),
+    product_name: pick('product_name', row.product_name),
+    product_model: pick('product_model', row.product_model),
+    unit_price: unitPrice,
+    amount: pick('amount', row.amount)
+  };
+  const tr = pick('tax_rate', row.tax_rate);
+  const vr = pick('vat_rate', row.vat_rate);
+  if (tr !== undefined) out.tax_rate = tr;
+  if (vr !== undefined) out.vat_rate = vr;
+  return out;
 }
 
 /** 为订单行补充 customer_name（表行可能仅有 customer_id） */

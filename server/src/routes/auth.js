@@ -2,7 +2,6 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import QRCode from 'qrcode';
-import svgCaptcha from 'svg-captcha';
 
 import { getPool } from '../db/pool.js';
 import { hashPassword, passwordNeedsRehash, verifyPassword } from '../services/password.js';
@@ -18,26 +17,6 @@ import { loginIpLimiter, loginUsernameLimiter } from '../middleware/rateLimit.js
 export const router = Router();
 
 const TOTP_ISSUER = 'QC-Report';
-const CAPTCHA_EXPIRES = '5m';
-const CAPTCHA_AFTER_FAILS = 3;
-
-function signCaptchaToken(code) {
-  return jwt.sign(
-    { typ: 'captcha', code: String(code || '').toLowerCase() },
-    process.env.JWT_SECRET,
-    { expiresIn: CAPTCHA_EXPIRES }
-  );
-}
-
-function verifyCaptchaToken(captchaToken, captchaCode) {
-  try {
-    const payload = jwt.verify(String(captchaToken || ''), process.env.JWT_SECRET);
-    if (payload?.typ !== 'captcha') return false;
-    return String(payload.code || '') === String(captchaCode || '').trim().toLowerCase();
-  } catch {
-    return false;
-  }
-}
 
 function signPendingTotp({ userId, purpose }) {
   return jwt.sign(
@@ -178,30 +157,13 @@ async function issueSessionToken(req, pool, user, settings) {
 
 const loginSchema = z.object({
   username: z.string().min(1).max(64),
-  password: z.string().min(1).max(128),
-  captchaToken: z.string().max(4096).optional(),
-  captchaCode: z.string().max(16).optional()
-});
-
-router.get('/captcha', loginIpLimiter(), async (_req, res) => {
-  const c = svgCaptcha.create({
-    size: 4,
-    noise: 2,
-    color: true,
-    width: 120,
-    height: 40,
-    ignoreChars: '0o1ilI'
-  });
-  res.json({
-    captchaToken: signCaptchaToken(c.text),
-    svg: c.data
-  });
+  password: z.string().min(1).max(128)
 });
 
 router.post('/login', loginIpLimiter(), loginUsernameLimiter(), async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
-  const { username, password, captchaToken, captchaCode } = parsed.data;
+  const { username, password } = parsed.data;
   const pool = getPool();
   const settings = await getSecuritySettings(pool);
   const ip = clientIp(req);
@@ -249,17 +211,6 @@ router.post('/login', loginIpLimiter(), loginUsernameLimiter(), async (req, res)
     return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
   }
 
-  const needCaptcha = Number(user.failed_login_count || 0) >= CAPTCHA_AFTER_FAILS;
-  if (needCaptcha) {
-    const hasCaptchaInput = String(captchaToken || '').trim() && String(captchaCode || '').trim();
-    if (!hasCaptchaInput) {
-      return res.status(400).json({ error: 'CAPTCHA_REQUIRED', needCaptcha: true });
-    }
-    if (!verifyCaptchaToken(captchaToken, captchaCode)) {
-      return res.status(400).json({ error: 'CAPTCHA_INVALID', needCaptcha: true });
-    }
-  }
-
   let lockedUntil = user.locked_until ? new Date(user.locked_until) : null;
   if (lockedUntil && lockedUntil <= new Date()) {
     await pool.query('UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = ?', [user.id]);
@@ -282,11 +233,11 @@ router.post('/login', loginIpLimiter(), loginUsernameLimiter(), async (req, res)
         [0, lockedUntilSql, user.id]
       );
       await fail(`密码错误，已连续失败${max}次，账号锁定`);
-      return res.status(401).json({ error: 'INVALID_CREDENTIALS', locked: true, needCaptcha: true });
+      return res.status(401).json({ error: 'INVALID_CREDENTIALS', locked: true });
     }
     await pool.query('UPDATE users SET failed_login_count = ? WHERE id = ?', [fails, user.id]);
     await fail('密码错误');
-    return res.status(401).json({ error: 'INVALID_CREDENTIALS', needCaptcha: fails >= CAPTCHA_AFTER_FAILS });
+    return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
   }
 
   await pool.query('UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = ?', [user.id]);

@@ -55,6 +55,7 @@ import {
   rotateBackupEncryption,
   verifyBackupRecoverability
 } from '../api/backup.js';
+import { startDownload } from '../composables/useDownloadProgress.js';
 export default {
   name: 'Backups',
   data() {
@@ -167,7 +168,8 @@ export default {
       this.actionLoadingId = row.id;
       this.actionType = 'download';
       try {
-        await downloadBackup(row.id);
+        const { blob, filename } = await downloadBackup(row.id);
+        startDownload({ request: blob, filename });
       } catch (e) {
         this.$message.error(e?.message || '下载失败');
       } finally {

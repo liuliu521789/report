@@ -86,6 +86,7 @@
 import { bulkDeleteAuditOperations, exportAuditOperations, listAuditOperations } from '../api';
 import { formatDateTime } from '../utils/formatDateTime';
 import { isSuperAdmin, perm } from '../utils/permissions';
+import { startDownload } from '../composables/useDownloadProgress.js';
 
 export default {
   name: 'AuditOperationLogs',
@@ -178,8 +179,8 @@ export default {
       const ids = this.selectedIds();
       if (!ids.length) return;
       try {
-        await exportAuditOperations(ids);
-        this.$message.success('已开始下载');
+        const blob = await exportAuditOperations(ids);
+        startDownload({ request: blob, filename: `operation-logs-${Date.now()}.json` });
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '导出失败'));
       }

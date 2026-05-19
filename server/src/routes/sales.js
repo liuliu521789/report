@@ -28,6 +28,7 @@ import {
 import { amountToRmbUppercase } from '../lib/chineseMoney.js';
 import { buildContractOrderLinesHtml } from '../lib/contractOrderLines.js';
 import { resolveCustomerLegalNameForContract } from '../lib/salesCustomerContractName.js';
+import { loadOrderFieldDefinitions, prepareOrderRowForContractHtml, tonsFromQtyAndSpec } from '../lib/salesOrderFields.js';
 import { RECOMMENDED_CONTRACT_BODY_HTML } from '../lib/contractRecommendedBody.js';
 import {
   createContractVersion,
@@ -37,6 +38,7 @@ import {
   approveStep
 } from '../lib/contractVersion.js';
 import { resolveContractUploadFilePath } from '../lib/salesContractUploadPath.js';
+import { generateContractDocx } from '../lib/contractDocxExport.js';
 import { userDisplayLabel } from '../lib/userDisplayLabel.js';
 
 import { createSalesOrdersRouter } from './sales/ordersRouter.js';
@@ -319,11 +321,24 @@ router.post('/contracts/generate', async (req, res, next) => {
     );
     if (orders.length !== body.order_ids.length) return res.status(400).json({ error: 'ORDER_NOT_FOUND' });
     const cid = orders[0].customer_id;
-    if (!orders.every((o) => o.customer_id === cid)) return res.status(400).json({ error: 'CUSTOMER_MISMATCH' });
+    // mysql2 等对 BIGINT 可能返回 string；与前端勾选逻辑一致，按数值比较同一客户
+    if (!orders.every((o) => Number(o.customer_id) === Number(cid))) {
+      return res.status(400).json({ error: 'CUSTOMER_MISMATCH' });
+    }
     if (!isSuper(req)) {
       for (const o of orders) {
         if (!isOrderCreatedByCurrentUser(o, req)) return res.status(403).json({ error: 'FORBIDDEN' });
       }
+    }
+    const [existingLinks] = await pool.query(
+      `SELECT order_id FROM sales_contract_orders WHERE order_id IN (${placeholders})`,
+      body.order_ids
+    );
+    if (existingLinks.length) {
+      return res.status(400).json({
+        error: 'ORDERS_ALREADY_CONTRACTED',
+        orderIds: existingLinks.map(r => r.order_id)
+      });
     }
     let tpl;
     let companyNameZh = '';
@@ -341,7 +356,18 @@ router.post('/contracts/generate', async (req, res, next) => {
       companyNameZh = String(companyRows[0]?.company_name_zh || '').trim();
     }
 
-    const linesHtml = buildContractOrderLinesHtml(orders);
+    const listFieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
+    const linesHtml = buildContractOrderLinesHtml(orders, listFieldDefs);
+    let totalAmount = 0;
+    for (const o of orders) {
+      const po = listFieldDefs?.length ? prepareOrderRowForContractHtml(o, listFieldDefs) : o;
+      const grossUnit = Number(po?.unit_price);
+      const tons = tonsFromQtyAndSpec(po?.quantity, po?.product_name || '');
+      if (Number.isFinite(grossUnit) && grossUnit > 0 && tons != null && tons > 0) {
+        totalAmount += grossUnit * tons;
+      }
+    }
+    totalAmount = Math.round(totalAmount * 100) / 100;
 
     /**
      * 兜底：历史模板可能缺少统一外层 div（或字体声明），导致前端无法将正文反解析回可视化表单。
@@ -361,8 +387,7 @@ router.post('/contracts/generate', async (req, res, next) => {
       await conn.beginTransaction();
       const { contractNo, lockKey } = await reserveNextShanghaiContractNo(conn);
       cnLockKey = lockKey;
-      /** 明细金额由用户在合同内填写；占位总金额用 0 */
-      const amountTotal = 0;
+      const amountTotal = totalAmount;
       const first = orders[0];
       const customerLegalName = await resolveCustomerLegalNameForContract(conn, first);
       const filled = ensureStandardContractOuterWrap(
@@ -639,11 +664,13 @@ router.get('/contracts/:id', async (req, res, next) => {
     const c = rows[0];
     const vis = await assertSalesContractVisible(req, pool, c);
     if (!vis.ok) return res.status(vis.code === 'NOT_FOUND' ? 404 : 403).json({ error: vis.code || 'FORBIDDEN' });
-    const [orders] = await pool.query(
-      `SELECT o.id, o.order_no, o.product_name, o.product_model, o.amount FROM sales_orders o
+    const [orderRows] = await pool.query(
+      `SELECT o.* FROM sales_orders o
        INNER JOIN sales_contract_orders sco ON sco.order_id = o.id WHERE sco.contract_id = ?`,
       [req.params.id]
     );
+    const listFieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
+    const orders = orderRows.map((r) => prepareOrderRowForContractHtml(r, listFieldDefs));
     const [audits] = await pool.query(
       `SELECT a.*, u.username AS actor_username, u.real_name AS actor_real_name
        FROM sales_contract_audit_logs a
@@ -683,6 +710,31 @@ router.get('/contracts/:id/document', async (req, res, next) => {
       if (!res.headersSent) res.status(500).end();
     });
     stream.pipe(res);
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/contracts/:id/export-docx', async (req, res, next) => {
+  try {
+    if (!canAccessSalesContractWorkspace(req)) return res.status(403).json({ error: 'FORBIDDEN' });
+    const cid = Number(req.params.id);
+    if (!Number.isFinite(cid) || cid < 1) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const pool = getPool();
+    const c = await fetchSalesContractRow(pool, cid);
+    if (!c) return res.status(404).json({ error: 'NOT_FOUND' });
+    const vis = await assertSalesContractVisible(req, pool, c);
+    if (!vis.ok) return res.status(vis.code === 'NOT_FOUND' ? 404 : 403).json({ error: vis.code || 'FORBIDDEN' });
+    if (c.contract_source === 'upload') {
+      return res.redirect(`/api/sales/contracts/${c.id}/document`);
+    }
+    const result = await generateContractDocx(pool, cid);
+    if (!result) return res.status(500).json({ error: 'DOCX_GEN_FAILED' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', contentDispositionHeader(result.filename));
+    const buf = Buffer.from(result.buffer);
+    res.setHeader('Content-Length', buf.length);
+    res.end(buf);
   } catch (e) {
     next(e);
   }
@@ -730,12 +782,35 @@ router.post('/contracts/:id/replace-document', contractDocumentUpload.single('fi
   }
 });
 
+function parseContractDataJson(raw) {
+  if (raw == null || raw === '') return {};
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  try {
+    const o = JSON.parse(String(raw));
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+function mergeContractDataJson(prev, patch) {
+  const next = { ...parseContractDataJson(prev) };
+  if (patch.title !== undefined) next.title = patch.title;
+  if (patch.body_html !== undefined) next.body_html = patch.body_html;
+  if (patch.contract_visual !== undefined) next.contract_visual = patch.contract_visual;
+  return next;
+}
+
 const patchContractSchema = z
   .object({
     title: z.string().max(256).optional(),
-    body_html: z.string().min(1).optional()
+    body_html: z.string().min(1).optional(),
+    contract_visual: z.record(z.unknown()).optional()
   })
-  .refine((d) => d.title !== undefined || d.body_html !== undefined, { message: 'EMPTY_PATCH' });
+  .refine(
+    (d) => d.title !== undefined || d.body_html !== undefined || d.contract_visual !== undefined,
+    { message: 'EMPTY_PATCH' }
+  );
 
 router.patch('/contracts/:id', async (req, res, next) => {
   try {
@@ -773,28 +848,41 @@ router.patch('/contracts/:id', async (req, res, next) => {
       updates.push('body_html = ?');
       args.push(body.body_html);
     }
+    const nextTitle = body.title !== undefined ? String(body.title).trim() : String(c.title || '');
+    const nextBodyHtml = body.body_html !== undefined ? String(body.body_html || '') : String(c.body_html || '');
+    if (body.contract_visual !== undefined) {
+      const nextDataJson = mergeContractDataJson(c.data_json, {
+        title: nextTitle,
+        body_html: body.body_html !== undefined ? nextBodyHtml : undefined,
+        contract_visual: body.contract_visual
+      });
+      updates.push('data_json = CAST(? AS JSON)');
+      args.push(JSON.stringify(nextDataJson));
+    }
     updates.push('updated_at = NOW(3)');
     args.push(id);
     await pool.query(`UPDATE sales_contracts SET ${updates.join(', ')} WHERE id = ?`, args);
     if (c.contract_source !== 'upload') {
-      const nextTitle = body.title !== undefined ? String(body.title).trim() : String(c.title || '');
-      const nextBodyHtml = body.body_html !== undefined ? String(body.body_html || '') : String(c.body_html || '');
       const shouldCreateVersion =
-        body.body_html !== undefined || (body.title !== undefined && nextTitle !== String(c.title || ''));
+        body.body_html !== undefined ||
+        body.contract_visual !== undefined ||
+        (body.title !== undefined && nextTitle !== String(c.title || ''));
       if (shouldCreateVersion) {
         const changedFields = [];
         if (body.title !== undefined && nextTitle !== String(c.title || '')) changedFields.push('标题');
         if (body.body_html !== undefined && nextBodyHtml !== String(c.body_html || '')) changedFields.push('正文');
+        if (body.contract_visual !== undefined) changedFields.push('订单明细');
         const changeNote =
           changedFields.length > 0 ? `修改了${changedFields.join('、')}` : '合同内容更新';
-        await createContractVersion(
-          pool,
-          id,
-          nextBodyHtml,
-          { title: nextTitle, body_html: nextBodyHtml },
-          req.user.userId,
-          changeNote
-        );
+        const versionDataJson = mergeContractDataJson(c.data_json, {
+          title: nextTitle,
+          body_html: nextBodyHtml,
+          contract_visual:
+            body.contract_visual !== undefined
+              ? body.contract_visual
+              : parseContractDataJson(c.data_json).contract_visual
+        });
+        await createContractVersion(pool, id, nextBodyHtml, versionDataJson, req.user.userId, changeNote);
       }
     }
     await logOperationFromReq(req, {

@@ -27,6 +27,7 @@ coverage/
 **/coverage/
 server/uploads/
 **/uploads/
+server/data/order-exports/
 
 # editor and os files
 .DS_Store

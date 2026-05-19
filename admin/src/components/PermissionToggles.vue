@@ -74,6 +74,9 @@
       <el-checkbox v-model="inner.order_management.order_cancel" @change="emit">取消订单</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_delete" @change="emit">删除订单（含批量；非财务角色仅能删本人创建的单据）</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_field_config" @change="emit">订单录入表单字段管理</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_list_unit_price" @change="emit">订单列表显示单价列</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_list_contract" @change="emit">订单列表显示合同列</el-checkbox>
+      <el-checkbox v-model="inner.order_management.order_list_qc_qrcode" @change="emit">订单列表显示质检二维码列</el-checkbox>
     </div>
     <div class="perm-block">
       <div class="perm-title">销售 · 合同（module=contract_management）</div>

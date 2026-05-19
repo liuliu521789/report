@@ -213,6 +213,7 @@ import { bulkActivateReports, bulkDeleteReports, bulkPassReports, bulkVoidReport
 import { Brush, Check, Close, Delete, Download, Plus, Promotion, Printer, RefreshRight, Search, View, Warning } from '@element-plus/icons-vue';
 import { perm } from '../utils/permissions';
 import { getAuthToken } from '../stores/auth';
+import { startDownload } from '../composables/useDownloadProgress.js';
 import { customerReportPreviewUrl } from '../utils/customerReportPreviewUrl';
 
 export default {
@@ -379,8 +380,8 @@ export default {
       const ids = this.selected.map((r) => r.id);
       if (!ids.length) return;
       try {
-        await exportReportsJson(ids);
-        this.$message.success('已开始下载');
+        const blob = await exportReportsJson(ids);
+        startDownload({ request: blob, filename: `reports-export-${Date.now()}.json` });
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '导出失败'));
       }

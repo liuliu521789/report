@@ -70,7 +70,10 @@ export function emptyPermissionShape() {
       order_view_status_logs: false,
       order_cancel: false,
       order_delete: false,
-      order_field_config: false
+      order_field_config: false,
+      order_list_unit_price: false,
+      order_list_contract: false,
+      order_list_qc_qrcode: false
     },
     contract_management: {
       template_manage: false,

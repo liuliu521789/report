@@ -1,0 +1,391 @@
+/**
+ * 合同编辑页订单明细表：按含税单价（元/吨）及多列反推联动（与生成合同/导出逻辑一致）。
+ */
+import { tonsFromQtyAndSpec } from './salesOrderTonAmount.js';
+import { amountToRmbUppercase } from './chineseMoney.js';
+
+const DEFAULT_VAT_RATE = 0.13;
+const EDITOR_COL_COUNT = 10;
+
+/** 与 CONTRACT_ORDER_LINE_HEADERS_EDITOR 列序一致 */
+export const ORDER_LINE_COL = {
+  PRODUCT_NAME: 0,
+  MODEL: 1,
+  GROSS_UNIT: 2,
+  NET_UNIT: 3,
+  TONS: 4,
+  QTY: 5,
+  NET_AMOUNT: 6,
+  TAX_RATE: 7,
+  TAX_AMOUNT: 8,
+  TOTAL: 9
+};
+
+/** 修改后触发整行联动的列（含金额反推列） */
+export const ORDER_LINE_TRIGGER_COLS = new Set([
+  ORDER_LINE_COL.PRODUCT_NAME,
+  ORDER_LINE_COL.MODEL,
+  ORDER_LINE_COL.GROSS_UNIT,
+  ORDER_LINE_COL.NET_UNIT,
+  ORDER_LINE_COL.TONS,
+  ORDER_LINE_COL.QTY,
+  ORDER_LINE_COL.NET_AMOUNT,
+  ORDER_LINE_COL.TAX_RATE,
+  ORDER_LINE_COL.TAX_AMOUNT,
+  ORDER_LINE_COL.TOTAL
+]);
+
+/** @deprecated 联动列已并入 TRIGGER_COLS */
+export const ORDER_LINE_CALC_COLS = new Set([
+  ORDER_LINE_COL.NET_UNIT,
+  ORDER_LINE_COL.TONS,
+  ORDER_LINE_COL.NET_AMOUNT,
+  ORDER_LINE_COL.TAX_AMOUNT,
+  ORDER_LINE_COL.TOTAL
+]);
+
+function parseNum(raw) {
+  if (raw == null || raw === '') return NaN;
+  const n = Number(String(raw).replace(/,/g, '').replace(/%/g, '').trim());
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function fmtMoney2(n) {
+  if (!Number.isFinite(n)) return '';
+  return (Math.round(n * 100) / 100).toFixed(2);
+}
+
+function fmtInt(v) {
+  if (v == null || v === '') return '';
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.round(n)) : String(v).trim();
+}
+
+function normalizeRow(row) {
+  return Array.from({ length: EDITOR_COL_COUNT }, (_, i) =>
+    row && row[i] != null ? String(row[i]) : ''
+  );
+}
+
+export function formatTaxRateCell(rate) {
+  if (!Number.isFinite(rate) || rate < 0) return '';
+  const pct = Math.round(rate * 10000) / 100;
+  return `${pct}%`;
+}
+
+export function resolveVatRateFractionFromCell(cell, fallback = DEFAULT_VAT_RATE) {
+  const raw = cell;
+  if (raw == null || raw === '') return fallback;
+  const s = String(raw).replace(/%/g, '').trim();
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  if (n > 1 && n <= 100) return n / 100;
+  return n;
+}
+
+export function resolveVatRateFromOrder(order) {
+  const d = order?.display_data || {};
+  const raw = order?.tax_rate ?? order?.vat_rate ?? d?.tax_rate ?? d?.vat_rate;
+  return resolveVatRateFractionFromCell(raw, DEFAULT_VAT_RATE);
+}
+
+function resolveSpecTextForCalc(row, orderSpecText) {
+  const fromOrder = String(orderSpecText ?? '').trim();
+  if (fromOrder) return fromOrder;
+  const model = String(row[ORDER_LINE_COL.MODEL] ?? '').trim();
+  if (/千克|公斤|kg/i.test(model)) return model;
+  const pn = String(row[ORDER_LINE_COL.PRODUCT_NAME] ?? '').trim();
+  if (/千克|公斤|kg|\d/.test(pn) && pn.length > 0) return pn;
+  return '';
+}
+
+/** 优先数量×规格算吨；否则沿用表中「单位（吨）」 */
+function resolveTonsForRow(row, orderSpecText) {
+  const specText = resolveSpecTextForCalc(row, orderSpecText);
+  const qtyRaw = row[ORDER_LINE_COL.QTY];
+  const fromQtySpec = tonsFromQtyAndSpec(qtyRaw, specText);
+  if (fromQtySpec != null && fromQtySpec > 0) {
+    return { tons: fromQtySpec, fromQtySpec: true };
+  }
+  const fromCell = parseNum(row[ORDER_LINE_COL.TONS]);
+  if (Number.isFinite(fromCell) && fromCell > 0) {
+    return { tons: fromCell, fromQtySpec: false };
+  }
+  return { tons: null, fromQtySpec: false };
+}
+
+function resolveTonsForRecalc(row, orderSpecText, editedCol) {
+  if (editedCol === ORDER_LINE_COL.TONS) {
+    const t = parseNum(row[ORDER_LINE_COL.TONS]);
+    if (t > 0) return { tons: t, fromQtySpec: false, lockTons: true };
+  }
+  const base = resolveTonsForRow(row, orderSpecText);
+  return { ...base, lockTons: false };
+}
+
+/** 含税单价 + 吨数 + 税率 → 其余金额列 */
+function applyForwardFromGrossAndTons(r, gross, tons, rate, { lockTons = false } = {}) {
+  if (!Number.isFinite(gross) || gross <= 0) return r;
+  const netUnit = gross / (1 + rate);
+  r[ORDER_LINE_COL.NET_UNIT] = fmtMoney2(netUnit);
+  if (Number.isFinite(tons) && tons > 0) {
+    if (!lockTons) {
+      r[ORDER_LINE_COL.TONS] = tons.toFixed(2);
+    }
+    const totalWithTax = gross * tons;
+    const netAmount = netUnit * tons;
+    const taxAmount = totalWithTax - netAmount;
+    r[ORDER_LINE_COL.NET_AMOUNT] = fmtMoney2(netAmount);
+    r[ORDER_LINE_COL.TAX_AMOUNT] = fmtMoney2(taxAmount);
+    r[ORDER_LINE_COL.TOTAL] = fmtMoney2(totalWithTax);
+  }
+  return r;
+}
+
+/**
+ * 按用户编辑的列联动重算整行（保留正在编辑单元格的原文，避免输入中被覆盖）。
+ * @param {string[]} row
+ * @param {{ orderSpecText?: string, editedCol?: number|null }} [options]
+ */
+export function recalcEditorOrderLineRow(row, options = {}) {
+  const { orderSpecText, editedCol = null } = options;
+  const r = normalizeRow(row);
+  const preserveCol = editedCol;
+  const preserveVal = preserveCol != null ? r[preserveCol] : null;
+
+  let rate = resolveVatRateFractionFromCell(r[ORDER_LINE_COL.TAX_RATE]);
+  if (!r[ORDER_LINE_COL.TAX_RATE]) {
+    r[ORDER_LINE_COL.TAX_RATE] = formatTaxRateCell(rate);
+  } else if (editedCol === ORDER_LINE_COL.TAX_RATE) {
+    rate = resolveVatRateFractionFromCell(preserveVal, rate);
+    r[ORDER_LINE_COL.TAX_RATE] = formatTaxRateCell(rate);
+  }
+
+  let { tons, fromQtySpec, lockTons } = resolveTonsForRecalc(r, orderSpecText, editedCol);
+
+  const setTonsFromQtySpec = () => {
+    if (fromQtySpec && tons != null && tons > 0 && !lockTons) {
+      r[ORDER_LINE_COL.TONS] = tons.toFixed(2);
+    }
+  };
+
+  const finish = () => {
+    if (preserveCol != null && preserveVal != null) r[preserveCol] = preserveVal;
+    return r;
+  };
+
+  const grossFromCell = () => parseNum(r[ORDER_LINE_COL.GROSS_UNIT]);
+
+  switch (editedCol) {
+    case ORDER_LINE_COL.NET_UNIT: {
+      const net = parseNum(r[ORDER_LINE_COL.NET_UNIT]);
+      if (net > 0) {
+        const gross = net * (1 + rate);
+        r[ORDER_LINE_COL.GROSS_UNIT] = fmtMoney2(gross);
+        applyForwardFromGrossAndTons(r, gross, tons, rate, { lockTons });
+      }
+      return finish();
+    }
+    case ORDER_LINE_COL.TONS: {
+      tons = parseNum(r[ORDER_LINE_COL.TONS]);
+      lockTons = true;
+      const gross = grossFromCell();
+      if (gross > 0 && tons > 0) {
+        applyForwardFromGrossAndTons(r, gross, tons, rate, { lockTons: true });
+      }
+      return finish();
+    }
+    case ORDER_LINE_COL.TOTAL: {
+      const total = parseNum(r[ORDER_LINE_COL.TOTAL]);
+      if (total > 0 && tons > 0) {
+        const gross = total / tons;
+        r[ORDER_LINE_COL.GROSS_UNIT] = fmtMoney2(gross);
+        applyForwardFromGrossAndTons(r, gross, tons, rate, { lockTons });
+      } else {
+        const gross = grossFromCell();
+        if (gross > 0) applyForwardFromGrossAndTons(r, gross, tons, rate, { lockTons });
+      }
+      return finish();
+    }
+    case ORDER_LINE_COL.NET_AMOUNT: {
+      const netAmt = parseNum(r[ORDER_LINE_COL.NET_AMOUNT]);
+      if (netAmt > 0 && tons > 0) {
+        const netU = netAmt / tons;
+        const gross = netU * (1 + rate);
+        r[ORDER_LINE_COL.NET_UNIT] = fmtMoney2(netU);
+        r[ORDER_LINE_COL.GROSS_UNIT] = fmtMoney2(gross);
+        applyForwardFromGrossAndTons(r, gross, tons, rate, { lockTons });
+      }
+      return finish();
+    }
+    case ORDER_LINE_COL.TAX_AMOUNT: {
+      const tax = parseNum(r[ORDER_LINE_COL.TAX_AMOUNT]);
+      let total = parseNum(r[ORDER_LINE_COL.TOTAL]);
+      if (tons > 0) {
+        if (total > 0 && Number.isFinite(tax) && tax >= 0) {
+          const netAmt = total - tax;
+          if (netAmt >= 0) {
+            const netU = netAmt / tons;
+            const gross = netU * (1 + rate);
+            r[ORDER_LINE_COL.NET_AMOUNT] = fmtMoney2(netAmt);
+            r[ORDER_LINE_COL.NET_UNIT] = fmtMoney2(netU);
+            r[ORDER_LINE_COL.GROSS_UNIT] = fmtMoney2(gross);
+          }
+        } else if (Number.isFinite(tax) && tax >= 0) {
+          const gross = grossFromCell();
+          if (gross > 0) {
+            total = gross * tons;
+            const netAmt = total - tax;
+            const netU = netAmt / tons;
+            r[ORDER_LINE_COL.TOTAL] = fmtMoney2(total);
+            r[ORDER_LINE_COL.NET_AMOUNT] = fmtMoney2(netAmt);
+            r[ORDER_LINE_COL.NET_UNIT] = fmtMoney2(netU);
+            r[ORDER_LINE_COL.TAX_AMOUNT] = fmtMoney2(tax);
+          }
+        }
+      }
+      return finish();
+    }
+    case ORDER_LINE_COL.TAX_RATE:
+    case ORDER_LINE_COL.GROSS_UNIT:
+    case ORDER_LINE_COL.QTY:
+    case ORDER_LINE_COL.MODEL:
+    case ORDER_LINE_COL.PRODUCT_NAME: {
+      if (
+        editedCol === ORDER_LINE_COL.QTY ||
+        editedCol === ORDER_LINE_COL.MODEL ||
+        editedCol === ORDER_LINE_COL.PRODUCT_NAME
+      ) {
+        const refreshed = resolveTonsForRecalc(r, orderSpecText, null);
+        tons = refreshed.tons;
+        fromQtySpec = refreshed.fromQtySpec;
+        lockTons = false;
+        setTonsFromQtySpec();
+      }
+      const gross = grossFromCell();
+      if (gross > 0) applyForwardFromGrossAndTons(r, gross, tons, rate, { lockTons });
+      return finish();
+    }
+    default: {
+      setTonsFromQtySpec();
+      const gross = grossFromCell();
+      if (gross > 0) applyForwardFromGrossAndTons(r, gross, tons, rate, { lockTons });
+      return finish();
+    }
+  }
+}
+
+/** @deprecated 使用 recalcEditorOrderLineRow */
+export function calcEditorOrderLineRow(row, options = {}) {
+  return recalcEditorOrderLineRow(row, {
+    ...options,
+    editedCol: options.editedCol ?? ORDER_LINE_COL.GROSS_UNIT
+  });
+}
+
+export function patchEditorOrderLineCalcColumns(row, options = {}) {
+  return recalcEditorOrderLineRow(row, options);
+}
+
+/** 表格内总金额（大写） */
+export function buildTableTotalTextFromEditorRows(rows) {
+  let sum = 0;
+  for (const row of rows || []) {
+    const t = parseNum(row?.[ORDER_LINE_COL.TOTAL]);
+    if (Number.isFinite(t)) sum += t;
+  }
+  sum = Math.round(sum * 100) / 100;
+  if (sum <= 0) return '';
+  const cn = amountToRmbUppercase(sum);
+  return `${cn}（￥${sum.toFixed(2)}）`;
+}
+
+export function editorRowFromPreparedOrder(order) {
+  const d = order?.display_data || {};
+  const row = Array(EDITOR_COL_COUNT).fill('');
+  row[ORDER_LINE_COL.PRODUCT_NAME] = String(order?.product_model ?? d?.product_model ?? '').trim();
+  row[ORDER_LINE_COL.MODEL] = String(order?.product_model ?? d?.product_model ?? '').trim();
+  const up = order?.unit_price ?? d?.unit_price;
+  if (up != null && up !== '') row[ORDER_LINE_COL.GROSS_UNIT] = fmtMoney2(Number(up));
+  row[ORDER_LINE_COL.QTY] = fmtInt(order?.quantity ?? d?.quantity);
+  row[ORDER_LINE_COL.TAX_RATE] = formatTaxRateCell(resolveVatRateFromOrder(order));
+  const orderSpecText = String(order?.product_name ?? d?.product_name ?? '').trim();
+  return {
+    row: recalcEditorOrderLineRow(row, { orderSpecText, editedCol: ORDER_LINE_COL.GROSS_UNIT }),
+    orderSpecText
+  };
+}
+
+export function grossUnitFromNetAndTaxRate(netUnitRaw, taxRateRaw) {
+  const net = parseNum(netUnitRaw);
+  if (!Number.isFinite(net) || net <= 0) return '';
+  const rate = resolveVatRateFractionFromCell(taxRateRaw);
+  return fmtMoney2(net * (1 + rate));
+}
+
+export function enrichVisualOrderLinesFromContractOrders(visual, orders = []) {
+  if (!visual || !orders?.length) return false;
+  const rows = visual.tableRows || [];
+  const specs = Array.isArray(visual.tableRowSpecs) ? [...visual.tableRowSpecs] : [];
+  const { rows: fromOrders, orderSpecs } = editorRowsFromContractOrders(orders);
+  if (!fromOrders.length) return false;
+  const anyGross = rows.some((r) => parseNum(r?.[ORDER_LINE_COL.GROSS_UNIT]) > 0);
+  if (!anyGross) {
+    visual.tableRows = fromOrders;
+    visual.tableRowSpecs = orderSpecs;
+    visual.tableTotalText = buildTableTotalTextFromEditorRows(fromOrders);
+    return true;
+  }
+  let changed = false;
+  const nextRows = rows.map((row, i) => {
+    const hasGross = parseNum(row?.[ORDER_LINE_COL.GROSS_UNIT]) > 0;
+    if (hasGross) return row;
+    const src = fromOrders[i] ?? fromOrders[0];
+    if (!src || parseNum(src[ORDER_LINE_COL.GROSS_UNIT]) <= 0) return row;
+    changed = true;
+    if (!String(specs[i] ?? '').trim() && orderSpecs[i]) specs[i] = orderSpecs[i];
+    return recalcEditorOrderLineRow(
+      [
+        row[ORDER_LINE_COL.PRODUCT_NAME] || src[ORDER_LINE_COL.PRODUCT_NAME],
+        row[ORDER_LINE_COL.MODEL] || src[ORDER_LINE_COL.MODEL],
+        src[ORDER_LINE_COL.GROSS_UNIT],
+        row[ORDER_LINE_COL.NET_UNIT] || src[ORDER_LINE_COL.NET_UNIT],
+        row[ORDER_LINE_COL.TONS] || src[ORDER_LINE_COL.TONS],
+        row[ORDER_LINE_COL.QTY] || src[ORDER_LINE_COL.QTY],
+        row[ORDER_LINE_COL.NET_AMOUNT] || src[ORDER_LINE_COL.NET_AMOUNT],
+        row[ORDER_LINE_COL.TAX_RATE] || src[ORDER_LINE_COL.TAX_RATE],
+        row[ORDER_LINE_COL.TAX_AMOUNT] || src[ORDER_LINE_COL.TAX_AMOUNT],
+        row[ORDER_LINE_COL.TOTAL] || src[ORDER_LINE_COL.TOTAL]
+      ],
+      { orderSpecText: specs[i] || orderSpecs[i], editedCol: ORDER_LINE_COL.GROSS_UNIT }
+    );
+  });
+  if (!changed) return false;
+  visual.tableRows = nextRows;
+  visual.tableRowSpecs = specs;
+  visual.tableTotalText = buildTableTotalTextFromEditorRows(nextRows);
+  return true;
+}
+
+export function editorRowsFromContractOrders(orders = []) {
+  const rows = [];
+  const orderSpecs = [];
+  for (const o of orders || []) {
+    const { row, orderSpecText } = editorRowFromPreparedOrder(o);
+    const hasUnit = parseNum(row[ORDER_LINE_COL.GROSS_UNIT]) > 0;
+    const hasQty = String(row[ORDER_LINE_COL.QTY] ?? '').trim() !== '';
+    if (!hasUnit && !hasQty) continue;
+    rows.push(row);
+    orderSpecs.push(orderSpecText);
+  }
+  return { rows, orderSpecs };
+}
+
+export function isOrderLineCalcColumn(colIndex) {
+  return ORDER_LINE_CALC_COLS.has(colIndex);
+}
+
+export function isOrderLineTriggerColumn(colIndex) {
+  return ORDER_LINE_TRIGGER_COLS.has(colIndex);
+}
+

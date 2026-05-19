@@ -569,6 +569,7 @@ import {
   listSalesCustomers,
   uploadSalesContractDocument,
   downloadSalesContractDocument,
+  downloadSalesContractDocx,
   fetchSalesContractDocumentBlob
 } from '../api';
 import mammoth from 'mammoth';
@@ -580,6 +581,7 @@ import {
   escapeHtmlText
 } from '../utils/contractPreviewHtml';
 import { orderFlowStatusZh } from '../utils/salesStatusDisplay';
+import { startDownload } from '../composables/useDownloadProgress.js';
 
 export default {
   name: 'SalesContracts',
@@ -1316,8 +1318,11 @@ export default {
     },
     async downloadPreviewContractFile() {
       if (!this.previewContractId) return;
+      const id = this.previewContractId;
+      const name = this.contractPreviewDocName || '合同文件.docx';
       try {
-        await downloadSalesContractDocument(this.previewContractId, this.contractPreviewDocName || '合同文件');
+        const blob = await downloadSalesContractDocx(id);
+        startDownload({ request: blob, filename: name });
       } catch {
         this.$message.error('下载失败');
       }
@@ -1325,9 +1330,16 @@ export default {
     async downloadDetailContractFile() {
       const id = this.detail?.contract?.id;
       if (!id) return;
-      const name = this.detail.contract.document_original_filename || '合同文件';
+      const c = this.detail.contract;
       try {
-        await downloadSalesContractDocument(id, name);
+        if (c?.contract_source === 'upload') {
+          const blob = await downloadSalesContractDocument(id);
+          startDownload({ request: blob, filename: c.document_original_filename || '合同文件' });
+        } else {
+          const no = (c.contract_no || `contract-${id}`).replace(/[/\\?%*:|"<>]/g, '-');
+          const blob = await downloadSalesContractDocx(id);
+          startDownload({ request: blob, filename: `${no}.docx` });
+        }
       } catch {
         this.$message.error('下载失败');
       }
@@ -1747,7 +1759,7 @@ export default {
   font-size: 16px;
   line-height: 1.5;
   color: #000;
-  text-align: justify;
+  text-align: left;
 }
 .contract-preview-html :deep(h1),
 .contract-preview-html :deep(h2),
@@ -1762,6 +1774,7 @@ export default {
 .contract-preview-html :deep(p) {
   text-indent: 2em;
   margin: 0.5em 0;
+  text-align: justify;
 }
 .contract-preview-html :deep(table) {
   border-collapse: collapse;
