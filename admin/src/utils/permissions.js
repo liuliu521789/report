@@ -56,6 +56,32 @@ export function canAccessSalesContractWorkspace() {
   );
 }
 
+/** 与后端 sales.js canManageContractInvoice 一致：可新建/编辑开票申请 */
+export function canManageContractInvoice() {
+  if (isSuperAdmin()) return true;
+  return (
+    perm('contract_management', 'contract_submit') ||
+    perm('contract_management', 'contract_generate')
+  );
+}
+
+/** 与后端 sales.js canFulfillContractInvoice 一致：财务回填发票 */
+export function canFulfillContractInvoice() {
+  if (isSuperAdmin()) return true;
+  return perm('order_management', 'order_status_finance');
+}
+
+/** 与后端 sales.js canDeleteContractInvoice 一致：删除开票申请 */
+export function canDeleteContractInvoice() {
+  if (isSuperAdmin()) return true;
+  return perm('contract_management', 'invoice_delete');
+}
+
+/** 开票中心菜单：销售申请 + 财务处理 */
+export function canAccessInvoiceCenter() {
+  return canManageContractInvoice() || canFulfillContractInvoice();
+}
+
 /** 编辑已有报告时按 permissions.reports.fieldEdit 控制；新建报告不限制（避免无法通过必填校验） */
 export function canEditReportFieldKey(input) {
   // Backward compatibility: allow old string signature canEditReportFieldKey('field_key')

@@ -22,16 +22,16 @@
 </template>
 
 <script>
-import { orderStatusDisplay, contractStatusDisplay } from '../utils/salesStatusDisplay';
+import { orderStatusDisplay, contractStatusDisplay, invoiceStatusDisplay } from '../utils/salesStatusDisplay';
 
 export default {
   name: 'SalesStatusPill',
   props: {
-    /** `order`: use `orderRow`; `contract`: use `status` string */
+    /** `order` | `contract` | `invoice` */
     kind: {
       type: String,
       required: true,
-      validator: (v) => v === 'order' || v === 'contract'
+      validator: (v) => v === 'order' || v === 'contract' || v === 'invoice'
     },
     orderRow: {
       type: Object,
@@ -56,14 +56,15 @@ export default {
   computed: {
     meta() {
       if (this.kind === 'order') return orderStatusDisplay(this.orderRow || {});
+      if (this.kind === 'invoice') return invoiceStatusDisplay(this.status);
       return contractStatusDisplay(this.status, this.rejectReason);
     },
     wrapModifierClass() {
-      if (this.kind === 'contract') return 'sales-status-wrap--contract';
+      if (this.kind === 'contract' || this.kind === 'invoice') return 'sales-status-wrap--contract';
       return '';
     },
     pillModifierClass() {
-      if (this.kind !== 'contract') return '';
+      if (this.kind !== 'contract' && this.kind !== 'invoice') return '';
       const s = (this.status || 'draft').replace(/[^a-z0-9_]/gi, '');
       return `sales-status-pill--contract sales-status-pill--c-${s || 'draft'}`;
     }

@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS company_settings (
   description_zh VARCHAR(256) NULL,
   description_en VARCHAR(256) NULL,
   logo_url VARCHAR(512) NULL,
+  footer_seal_position VARCHAR(16) NOT NULL DEFAULT 'below',
   quick_role_sales_user_id BIGINT UNSIGNED NULL,
   quick_role_finance_user_id BIGINT UNSIGNED NULL,
   quick_role_warehouse_user_id BIGINT UNSIGNED NULL,
@@ -121,6 +122,8 @@ CREATE TABLE IF NOT EXISTS company_settings (
 CREATE TABLE IF NOT EXISTS support_contact_settings (
   id TINYINT UNSIGNED NOT NULL DEFAULT 1,
   engineer_wechat_id VARCHAR(64) NOT NULL DEFAULT '',
+  engineer_wecom_userid VARCHAR(64) NOT NULL DEFAULT '',
+  engineer_display_name VARCHAR(64) NOT NULL DEFAULT '',
   updated_by BIGINT UNSIGNED NULL,
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
@@ -213,6 +216,7 @@ CREATE TABLE IF NOT EXISTS reports (
   batch_no_en VARCHAR(128) NULL,
   product_name VARCHAR(128) NOT NULL,
   product_name_en VARCHAR(128) NULL,
+  customer_id BIGINT UNSIGNED NULL,
   template_id BIGINT UNSIGNED NULL,
   conclusion ENUM('pass', 'fail', 'unknown') NOT NULL DEFAULT 'unknown',
   status ENUM('active', 'void') NOT NULL DEFAULT 'active',
@@ -226,8 +230,10 @@ CREATE TABLE IF NOT EXISTS reports (
   KEY idx_reports_batch_no (batch_no),
   KEY idx_reports_status (status),
   KEY idx_reports_template_id (template_id),
+  KEY idx_reports_customer_id (customer_id),
   CONSTRAINT fk_reports_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-  CONSTRAINT fk_reports_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+  CONSTRAINT fk_reports_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_reports_customer FOREIGN KEY (customer_id) REFERENCES sales_customers(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 -- Applied seals snapshot per report (so historical reports keep their seal image)

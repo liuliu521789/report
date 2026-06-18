@@ -38,6 +38,8 @@ import {
   verifyWecomShipOAuthState
 } from '../lib/wecomShipOAuth.js';
 import { isWarehouseWecomShipActor, resolveWecomPublicBaseUrl } from '../lib/wecomNotify.js';
+import { formatInvoiceAmountZh, resolveAdminInvoiceCenterHref } from '../lib/contractInvoiceWecomNotify.js';
+import { diagnoseWecomPublicBaseUrl, resolveAdminPublicRoot } from '../lib/wecomPublicUrl.js';
 import {
   attachCustomerNamesToOrders,
   formatWarehouseWecomOrderDetail,
@@ -240,11 +242,12 @@ window.addEventListener("load",schedule,{passive:true});
 })();</script>`;
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>合同审批</title>
 <style>
-*{box-sizing:border-box;} html,body{max-width:100%;overflow-x:hidden;}
+*{box-sizing:border-box;} html,body{overflow-x:hidden;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#e8f0fe;min-height:100vh;padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom));} 
-.wrap{width:100%;max-width:100%;margin:0 auto;} h1{font-size:17px;margin:0 0 10px;color:#1e293b;font-weight:700;}
-.warn{color:#b45309;font-size:14px;line-height:1.5;margin:0 0 12px;padding:10px 12px;background:#fffbeb;border-radius:10px;border:1px solid #fde68a;}
-.detail{margin-bottom:12px;width:100%;max-width:100%;}
+.wrap{width:100%;max-width:640px;margin:0 auto;text-align:center;} h1{font-size:17px;margin:0 0 10px;color:#1e293b;font-weight:700;text-align:center;}
+.warn{color:#b45309;font-size:14px;line-height:1.5;margin:0 0 12px;padding:10px 12px;background:#fffbeb;border-radius:10px;border:1px solid #fde68a;text-align:center;}
+.detail{margin-bottom:12px;width:100%;max-width:100%;text-align:left;}
+.detail .contract-html{text-align:left;}
 .contract-panel{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 8px;width:100%;max-width:100%;overflow-x:hidden;}
 .muted{color:#94a3b8;font-size:13px;margin:0;}
 .contract-html{font-size:13px;line-height:1.5;color:#1e293b;width:100%;max-width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%;}
@@ -272,18 +275,21 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Micros
 .doc-fallback{font-size:14px;color:#475569;line-height:1.55;margin:0 0 12px;}
 .btn-dl{display:block;text-align:center;padding:12px;border-radius:10px;background:#2563eb;color:#fff;text-decoration:none;font-weight:600;font-size:15px;}
 .approve-panel{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 12px;width:100%;max-width:100%;}
-.form{margin:0;} .lab{display:block;font-size:13px;color:#64748b;margin-bottom:8px;}
-textarea{width:100%;max-width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;resize:vertical;min-height:88px;}
+.form{margin:0;} .lab{display:block;font-size:13px;color:#64748b;margin-bottom:8px;text-align:center;}
+textarea{width:100%;max-width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;resize:vertical;min-height:88px;text-align:left;}
 .btns{display:flex;gap:10px;margin-top:14px;} 
 .btn{flex:1;padding:13px 12px;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;}
 .btn-ok{background:#22c55e;color:#fff;} .btn-no{background:#fff;color:#dc2626;border:2px solid #fecaca;}
 .fine{font-size:12px;color:#94a3b8;line-height:1.45;margin-top:14px;text-align:center;}
+@keyframes shake{0%,100%{transform:translateX(0)}10%,30%,50%,70%,90%{transform:translateX(-6px)}20%,40%,60%,80%{transform:translateX(6px)}}
+.error-textarea{border-color:#dc2626!important;background:#fef2f2!important;}
+.shake{animation:shake .45s ease-in-out;}
 </style></head><body><div class="wrap"><h1>合同审批</h1>
 ${detail}
 ${reason}
 ${formSection}
 <p class="fine">链接仅当前审批人可用，请勿转发。打开即代表您确认在企业微信内身份可信。</p>
-</div>${tableFitScript}</body></html>`;
+</div>${tableFitScript}<script>(function(){var f=document.querySelector('.form');if(!f)return;f.addEventListener('submit',function(e){var s=e.submitter,ta=this.querySelector('textarea');if(s&&s.value==='rejected'&&!ta.value.trim()){e.preventDefault();ta.classList.add('error-textarea','shake');setTimeout(function(){ta.classList.remove('shake')},500)}})})();</script></body></html>`;
 }
 
 function mapActiveStamps(rows) {
@@ -719,6 +725,47 @@ function wecomOrderShipConfirmPageHtml({ orderNo, orderDetailText, canShip, ship
 </html>`;
 }
 
+/** 企业微信「开票待处理」卡片：引导打开管理后台开票中心 */
+function wecomInvoiceCenterLandingHtml({ contractNo, customerName, amount, adminHref }) {
+  const safeContract = wecomShipEscapeHtml(contractNo || '—');
+  const safeCustomer = wecomShipEscapeHtml(customerName || '—');
+  const safeAmount = wecomShipEscapeHtml(amount || '—');
+  const safeHref = escapeHtmlAttr(adminHref);
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>开票中心</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #f1f5f9; color: #0f172a; display: flex; align-items: center; justify-content: center;
+        padding: 24px; padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+      .card { background: #fff; border-radius: 12px; padding: 26px 22px 28px; max-width: 420px; width: 100%;
+        box-shadow: 0 4px 24px rgba(15,23,42,0.08); text-align: center; }
+      h1 { font-size: 18px; margin: 0 0 16px; }
+      .meta { margin: 0 0 18px; font-size: 14px; color: #475569; line-height: 1.55; text-align: left; }
+      .meta strong { color: #0f172a; }
+      .btn-open {
+        display: block; width: 100%; padding: 14px 16px; border-radius: 10px; background: #2563eb; color: #fff !important;
+        font-size: 16px; font-weight: 600; text-align: center; text-decoration: none; -webkit-tap-highlight-color: transparent;
+      }
+      .btn-open:active { opacity: 0.92; }
+      .fine { margin: 16px 0 0; font-size: 12px; color: #94a3b8; line-height: 1.45; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>合同开票待处理</h1>
+      <p class="meta">合同号：<strong>${safeContract}</strong><br/>客户：<strong>${safeCustomer}</strong><br/>开票金额：<strong>${safeAmount}</strong> 元</p>
+      <a class="btn-open" href="${safeHref}">打开开票中心</a>
+      <p class="fine">若无法打开，请配置 ADMIN_PUBLIC_URL 指向管理后台 HTTPS 地址，并将该域名加入企业微信应用「可信网页域名」。</p>
+    </div>
+  </body>
+</html>`;
+}
+
 /** 企业微信「提交/撤回财务审核」卡片：引导打开管理后台订单页（Hash 路由） */
 function wecomFinanceReviewLandingHtml({ orderNo, batchCount, ordersAdminHref }) {
   const safeNo = wecomShipEscapeHtml(orderNo || '—');
@@ -768,6 +815,18 @@ function wecomFinanceReviewLandingHtml({ orderNo, batchCount, ordersAdminHref })
 /** 自检：在手机/企业微信中打开，确认能访问到本服务（与「完成发货」同机同域） */
 router.get('/api/public/wecom-order-ship-probe', (req, res) => {
   res.type('text').send('wecom-ship-probe-ok');
+});
+
+router.get('/api/public/wecom-invoice-center-probe', (req, res) => {
+  res.type('text').send('wecom-invoice-center-probe-ok');
+});
+
+router.get('/api/public/wecom-contract-review-probe', (req, res) => {
+  const diag = diagnoseWecomPublicBaseUrl();
+  if (!diag.ok) {
+    return res.status(503).type('text').send(`wecom-contract-review-probe-fail: ${diag.message}`);
+  }
+  res.type('text').send(`wecom-contract-review-probe-ok base=${diag.base}`);
 });
 
 /** 企业微信网页授权回调：换取 userid → 映射系统用户 → 写入 HttpOnly Cookie → 回到确认页 */
@@ -972,7 +1031,7 @@ router.get('/api/public/wecom-order-ship-confirm', async (req, res) => {
             orderDetailText,
             canShip: false,
             shipPost,
-            blockReason: '当前订单状态不允许从本页发货（可能已撤回或未在「待发货」状态）。请在电脑端查看订单。',
+            blockReason: '当前订单状态不允许从本页发货（可能已撤回或未在「待备货发货」状态）。请在电脑端查看订单。',
             actorHint
           })
         );
@@ -1226,6 +1285,68 @@ router.get('/api/public/wecom-contract-review-oauth', async (req, res) => {
   }
 });
 
+/** 企业微信：开票中心引导页（文本卡片入口；再跳转管理后台 Hash 路由） */
+router.get('/api/public/wecom-invoice-center', async (req, res) => {
+  try {
+    const invoiceIdRaw = req.query.invoice_id != null ? Number(req.query.invoice_id) : NaN;
+    const invoiceId = Number.isFinite(invoiceIdRaw) && invoiceIdRaw >= 1 ? Math.floor(invoiceIdRaw) : null;
+
+    let contractNo = '';
+    let customerName = '';
+    let amount = '—';
+    if (invoiceId != null) {
+      const pool = getPool();
+      const [rows] = await pool.query(
+        `SELECT iv.amount, c.contract_no, cu.customer_name
+         FROM sales_contract_invoices iv
+         INNER JOIN sales_contracts c ON c.id = iv.contract_id
+         INNER JOIN sales_customers cu ON cu.id = c.customer_id
+         WHERE iv.id = ? LIMIT 1`,
+        [invoiceId]
+      );
+      const row = rows?.[0];
+      if (row) {
+        contractNo = row.contract_no != null ? String(row.contract_no) : '';
+        customerName = row.customer_name != null ? String(row.customer_name) : '';
+        amount = formatInvoiceAmountZh(row);
+      }
+    }
+
+    const adminRoot = resolveAdminPublicRoot();
+    if (!adminRoot) {
+      return res
+        .status(503)
+        .type('html')
+        .send(
+          wecomOrderShipResultHtml(
+            false,
+            '服务器未配置',
+            '未设置 PUBLIC_BASE_URL 或 ADMIN_PUBLIC_URL，无法生成管理后台入口。请在 .env 配置 HTTPS 公网地址。'
+          )
+        );
+    }
+
+    const adminHref = resolveAdminInvoiceCenterHref(invoiceId);
+    if (!adminHref) {
+      return res
+        .status(503)
+        .type('html')
+        .send(wecomOrderShipResultHtml(false, '无法生成链接', '请配置 ADMIN_PUBLIC_URL 为管理后台访问地址。'));
+    }
+
+    return res
+      .type('html')
+      .send(wecomInvoiceCenterLandingHtml({ contractNo, customerName, amount, adminHref }));
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[wecom-invoice-center]', e?.message || e);
+    return res
+      .status(500)
+      .type('html')
+      .send(wecomOrderShipResultHtml(false, '暂时无法处理', '服务器异常，请稍后再试。'));
+  }
+});
+
 /** 企业微信：财务审核引导页（JWT 绑定首笔订单；跳转后台 Hash 路由「待财务审核」视图） */
 router.get('/api/public/wecom-finance-review', async (req, res) => {
   try {
@@ -1311,6 +1432,7 @@ router.get('/api/public/wecom-contract-review', async (req, res) => {
       if (!ck) {
         const oauthBase = resolveWecomPublicBaseUrl();
         if (!oauthBase) {
+          const diag = diagnoseWecomPublicBaseUrl();
           return res
             .status(503)
             .type('html')
@@ -1318,7 +1440,8 @@ router.get('/api/public/wecom-contract-review', async (req, res) => {
               wecomContractReviewResultHtml(
                 false,
                 '无法完成企业微信授权',
-                '服务器未配置 PUBLIC_BASE_URL（或 WECOM_PUBLIC_BASE_URL）。网页授权 redirect_uri 必须与企业微信应用可信域名一致。'
+                diag.message ||
+                  '服务器未配置 PUBLIC_BASE_URL（须为 API 服务根，能访问 /api/public/wecom-contract-review-probe）。管理后台请用 ADMIN_PUBLIC_URL，勿与 PUBLIC_BASE_URL 混用。'
               )
             );
         }
@@ -1547,6 +1670,8 @@ router.post('/api/public/wecom-contract-review/submit', wecomContractReviewForm,
 });
 
 function sendReportCustomerHtml(req, res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
   res.type('html').send(`<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -1554,7 +1679,23 @@ function sendReportCustomerHtml(req, res) {
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>检测报告</title>
     <style>
-      body { font-family: "SimSun", "Songti SC", "Microsoft YaHei", serif; margin: 0; background: #e8e8e8; color: #222; }
+      :root {
+        --report-ink: #1a2332;
+        --report-muted: #64748b;
+        --report-accent: #1a3a5f;
+        --report-accent-light: #2d5a8e;
+        --report-border: #334155;
+        --report-border-light: #cbd5e1;
+        --report-table-head: #f1f5f9;
+        --report-table-stripe: #f8fafc;
+      }
+      body {
+        font-family: "PingFang SC", "Microsoft YaHei", "SimSun", "Songti SC", serif;
+        margin: 0;
+        background: linear-gradient(165deg, #e8edf3 0%, #eef1f6 45%, #f4f6f9 100%);
+        color: var(--report-ink);
+        -webkit-font-smoothing: antialiased;
+      }
       .wrap { max-width: 1000px; margin: 0 auto; padding: 16px; box-sizing: border-box; }
       /* A4 竖版：版心固定 210mm×297mm（内容超长时-only 高度增大）；窄屏由 JS 整体 scale，保证等比缩放 */
       .paper {
@@ -1566,22 +1707,82 @@ function sendReportCustomerHtml(req, res) {
         margin: 0 auto;
         padding: 20mm 20mm 16mm;
         box-sizing: border-box;
-        box-shadow: 0 0 12px rgba(0,0,0,0.08);
+        border: 1px solid var(--report-border-light);
+        box-shadow:
+          0 1px 2px rgba(26, 58, 95, 0.04),
+          0 8px 32px rgba(26, 58, 95, 0.08);
         position: relative;
         display: flex;
         flex-direction: column;
         flex-shrink: 0;
       }
+      .paper::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, var(--report-accent) 0%, var(--report-accent-light) 50%, var(--report-accent) 100%);
+        border-radius: 1px 1px 0 0;
+      }
       .paper-main {
         flex: 1 1 auto;
         min-height: 0;
+        display: flex;
+        flex-direction: column;
       }
-      .topbar { display:flex; justify-content: space-between; align-items:center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
-      .btn { display: inline-block; padding: 8px 12px; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; text-decoration: none; color: #222; font-family: inherit; font-size: 13px; }
-      .muted { color: #666; font-size: 12px; }
+      .paper-main-body {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 10px 14px;
+        background: #fff;
+        border: 1px solid var(--report-border-light);
+        border-radius: 10px;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+      }
+      .btn {
+        display: inline-block;
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: 1px solid var(--report-border-light);
+        background: #fff;
+        cursor: pointer;
+        text-decoration: none;
+        color: var(--report-ink);
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        transition: border-color 0.15s, color 0.15s, background 0.15s;
+      }
+      .btn:hover { border-color: var(--report-accent-light); color: var(--report-accent); background: #f8fafc; }
+      .muted { color: var(--report-muted); font-size: 13px; font-weight: 500; letter-spacing: 0.02em; }
+      .topbar.topbar--admin-preview {
+        justify-content: flex-end;
+        margin-bottom: 4px;
+        padding: 4px 8px 0;
+        border: none;
+        box-shadow: none;
+        background: transparent;
+      }
       .error { color: #cf1322; white-space: pre-wrap; margin-bottom: 10px; }
 
-      .paper-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+      .paper-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #e2e8f0;
+      }
       .paper-top-right {
         display: flex;
         flex-direction: column;
@@ -1594,136 +1795,251 @@ function sendReportCustomerHtml(req, res) {
       /* 描述语（中文）单行显示，不换行 */
       .slogan-zh-line {
         font-size: 11px;
-        color: #333;
+        color: var(--report-muted);
         line-height: 1.35;
         margin-top: 6px;
         white-space: nowrap;
+        letter-spacing: 0.04em;
       }
-      .slogan-en { font-size: 10px; color: #666; margin-top: 3px; }
-      .doc-no-line { text-align: right; font-size: 14px; color: #333; padding-top: 4px; flex: 1; }
-      .doc-no-line .lbl { margin-right: 6px; }
-      .doc-no-line .val { display: inline-block; min-width: 140px; border-bottom: 1px solid #222; text-align: center; padding: 0 4px 2px; font-size: 15px; }
+      .slogan-en { font-size: 10px; color: #94a3b8; margin-top: 3px; }
+      .doc-no-line { text-align: right; font-size: 14px; color: var(--report-ink); padding-top: 4px; flex: 1; }
+      .doc-no-line .lbl {
+        margin-right: 8px;
+        font-size: 13px;
+        color: var(--report-muted);
+        font-weight: 500;
+      }
+      .doc-no-line .val {
+        display: inline-block;
+        min-width: 140px;
+        border-bottom: 1.5px solid var(--report-border);
+        text-align: center;
+        padding: 0 6px 3px;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--report-accent);
+      }
 
       .center-block { text-align: center; margin-bottom: 28px; }
-      .company-name { font-size: 20px; color: #222; margin-bottom: 10px; letter-spacing: 0.5px; line-height: 1.4; }
-      .report-title-zh { font-size: 32px; font-weight: bold; color: #111; margin: 0 0 10px; letter-spacing: 2px; line-height: 1.25; }
-      .report-title-en { font-size: 18px; color: #333; font-style: italic; line-height: 1.35; }
+      .company-name {
+        font-size: 19px;
+        color: var(--report-ink);
+        margin-bottom: 12px;
+        letter-spacing: 0.08em;
+        line-height: 1.45;
+        font-weight: 600;
+      }
+      .title-divider {
+        width: 72px;
+        height: 3px;
+        margin: 0 auto 14px;
+        background: linear-gradient(90deg, var(--report-accent), var(--report-accent-light));
+        border-radius: 2px;
+      }
+      .title-divider-bottom {
+        width: 120px;
+        height: 1px;
+        margin: 14px auto 0;
+        background: linear-gradient(90deg, transparent, var(--report-border-light), transparent);
+      }
+      .report-title-zh {
+        font-size: 30px;
+        font-weight: 700;
+        color: var(--report-accent);
+        margin: 0 0 8px;
+        letter-spacing: 0.18em;
+        line-height: 1.3;
+      }
+      .report-title-en {
+        font-size: 16px;
+        color: var(--report-muted);
+        font-style: italic;
+        line-height: 1.35;
+        letter-spacing: 0.02em;
+      }
 
       .meta-rows { margin-bottom: 22px; }
       .meta-row-2 { display: flex; gap: 32px; margin-bottom: 16px; }
       .meta-pair { flex: 1; min-width: 0; }
       .meta-line { display: flex; align-items: flex-end; gap: 8px; }
       .meta-label-side { flex: 0 0 110px; text-align: right; padding-bottom: 2px; }
-      .meta-label-side .lab-cn { font-size: 15px; color: #222; line-height: 1.2; }
-      .meta-label-side .lab-en { font-size: 11px; color: #666; line-height: 1.2; margin-top: 2px; }
+      .meta-label-side .lab-cn { font-size: 14px; color: var(--report-ink); line-height: 1.2; font-weight: 500; }
+      .meta-label-side .lab-en { font-size: 11px; color: var(--report-muted); line-height: 1.2; margin-top: 2px; }
       .meta-value-side {
         flex: 1;
         min-width: 0;
-        border-bottom: 1px solid #222;
+        border-bottom: 1px solid #94a3b8;
         min-height: 28px;
-        padding: 4px 6px 5px;
+        padding: 4px 8px 5px;
         font-size: 15px;
         text-align: left;
         line-height: 1.45;
+        color: var(--report-ink);
       }
 
       .main-table {
         width: 100%;
         border-collapse: collapse;
-        border: 1px solid #222;
+        border: 1px solid #475569;
         margin-top: 12px;
-        margin-bottom: 20px;
+        margin-bottom: 28px;
       }
-      .main-table th, .main-table td { border: 1px solid #222; padding: 10px 12px; font-size: 14px; vertical-align: middle; text-align: center; line-height: 1.45; }
-      .main-table th { background: #fafafa; font-weight: bold; padding: 12px 12px 14px; }
-      .main-table .th-cn { display: block; font-size: 15px; }
-      .main-table .th-en { display: block; font-size: 12px; color: #666; font-weight: normal; margin-top: 3px; }
-      .main-table tbody td .cell-first-en { font-size: 12px; color: #666; margin-top: 3px; }
-      .cell-merged-label { font-weight: 700; text-align: center; }
-      .cell-merged-label .en { font-size: 12px; color: #666; font-weight: normal; margin-top: 4px; }
-      .val-red { color: #c00; font-weight: bold; font-size: 18px; }
+      .main-table th,
+      .main-table td {
+        border: 1px solid #475569;
+        padding: 10px 12px;
+        font-size: 14px;
+        vertical-align: middle;
+        text-align: center;
+        line-height: 1.45;
+      }
+      .main-table th {
+        background: linear-gradient(180deg, #f8fafc 0%, var(--report-table-head) 100%);
+        font-weight: 700;
+        padding: 11px 12px 13px;
+        color: var(--report-accent);
+      }
+      .main-table tbody tr:nth-child(even) { background: var(--report-table-stripe); }
+      .main-table .th-cn { display: block; font-size: 14px; letter-spacing: 0.04em; }
+      .main-table .th-en { display: block; font-size: 11px; color: var(--report-muted); font-weight: normal; margin-top: 3px; }
+      .main-table tbody td .cell-first-en { font-size: 11px; color: var(--report-muted); margin-top: 3px; }
+      .cell-merged-label {
+        font-weight: 700;
+        text-align: center;
+        background: #f8fafc;
+        color: var(--report-accent);
+      }
+      .main-table tr.main-table-bottom-row {
+        height: 60px;
+      }
+      .main-table tr.main-table-bottom-row td {
+        height: 60px;
+        padding: 0;
+        font-size: 12px;
+        vertical-align: middle;
+      }
+      .main-table tr.main-table-bottom-row .cell-merged-label {
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      .main-table tr.main-table-bottom-row .cell-merged-label .en {
+        display: block;
+        margin-top: 1px;
+        font-size: 9px;
+        color: var(--report-muted);
+        font-weight: normal;
+        line-height: 1.25;
+      }
+      .main-table tr.main-table-bottom-row .val-red { color: #b91c1c; font-weight: 700; font-size: 12px; letter-spacing: 0.02em; line-height: 1.3; }
 
       .section-extra { margin-top: 24px; margin-bottom: 28px; }
-      .section-extra-title { font-weight: 700; font-size: 14px; margin-bottom: 10px; color: #222; }
-      .extra-table { width: 100%; border-collapse: collapse; border: 1px solid #222; }
-      .extra-table th, .extra-table td { border: 1px solid #222; padding: 10px; font-size: 13px; vertical-align: top; line-height: 1.45; }
+      .section-extra-title { font-weight: 700; font-size: 14px; margin-bottom: 10px; color: var(--report-accent); letter-spacing: 0.04em; }
+      .extra-table { width: 100%; border-collapse: collapse; border: 1px solid #475569; }
+      .extra-table th, .extra-table td { border: 1px solid #475569; padding: 10px; font-size: 13px; vertical-align: top; line-height: 1.45; }
+      .extra-table th { background: var(--report-table-head); color: var(--report-accent); font-weight: 600; }
 
       .footer-sign {
         margin-top: auto;
-        padding-top: 52px;
+        padding-top: 48px;
         flex-shrink: 0;
         display: flex;
         justify-content: space-around;
         padding-left: 8px;
         padding-right: 8px;
+        border-top: 1px solid #e2e8f0;
       }
-      .main-table tbody.main-table-bottom {
+      .main-table tr.main-table-bottom-row {
         page-break-inside: avoid;
         break-inside: avoid;
       }
       .footer-col { flex: 1; max-width: 33%; padding: 0 6px; }
-      .footer-stamp-wrap {
-        position: relative;
-        min-height: 100px;
-        padding: 10px 6px 12px;
+      .footer-seal-item {
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: flex-start;
+        min-height: 100px;
+        padding: 10px 6px 12px;
       }
-      /* 章相对「中文+英文」两行标题居中，避免相对整块区域垂直居中而偏下 */
       .footer-labels {
-        position: relative;
-        z-index: 1;
         text-align: center;
         pointer-events: none;
         display: inline-block;
         max-width: 100%;
       }
-      .footer-stamp-wrap .t-cn { font-size: 16px; margin-bottom: 4px; color: #222; }
-      .footer-stamp-wrap .t-en { font-size: 13px; color: #666; margin-bottom: 0; line-height: 1.3; }
-      .seal-footer.seal-on-label {
-        position: absolute;
-        z-index: 2;
-        left: 50%;
-        top: 50%;
-        transform: translate(-50%, -50%);
-        width: auto;
-        height: auto;
+      .footer-seal-slot {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        width: 80px;
+        height: 80px;
+      }
+      .footer-stamp-wrap .t-cn { font-size: 15px; margin-bottom: 4px; color: var(--report-ink); font-weight: 500; }
+      .footer-stamp-wrap .t-en { font-size: 12px; color: var(--report-muted); margin-bottom: 0; line-height: 1.3; }
+      .seal-footer {
+        width: 80px;
+        height: 80px;
         max-width: 80px;
         max-height: 80px;
         object-fit: contain;
         opacity: 0.9;
         pointer-events: none;
+        display: block;
       }
-      .seal-footer.seal-on-label[src$=".svg"] {
-        width: 80px;
-        height: 80px;
+      .seal-footer[src$=".svg"] {
         object-fit: fill;
       }
-      .seal-footer.seal-on-label.seal-dept {
-        max-width: 120px;
-        max-height: 120px;
-        opacity: 0.88;
+      /* 底部三章位置：below 默认（文字上、章下） */
+      .footer-sign.footer-seal-pos--below .footer-seal-item {
+        flex-direction: column;
       }
-      .seal-footer.seal-on-label.seal-dept[src$=".svg"] {
-        width: 120px;
-        height: 120px;
-        object-fit: fill;
+      .footer-sign.footer-seal-pos--below .footer-labels { order: 1; }
+      .footer-sign.footer-seal-pos--below .footer-seal-slot { order: 2; margin-top: 10px; }
+      .footer-sign.footer-seal-pos--above {
+        align-items: flex-end;
       }
-      /* 结论/备注值格：仅定位，不改行高（不使用 min-height/flex 撑高） */
+      .footer-sign.footer-seal-pos--above .footer-seal-item {
+        flex-direction: column;
+        justify-content: flex-end;
+        min-height: 0;
+      }
+      .footer-sign.footer-seal-pos--above .footer-seal-slot { order: 1; margin-bottom: 10px; flex-shrink: 0; }
+      .footer-sign.footer-seal-pos--above .footer-labels { order: 2; flex-shrink: 0; }
+      .footer-sign.footer-seal-pos--right .footer-seal-item {
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        text-align: left;
+      }
+      .footer-sign.footer-seal-pos--right .footer-labels { text-align: left; }
+      .footer-sign.footer-seal-pos--right .footer-seal-slot { margin: 0; }
+      /* 结论/备注行高固定 60px；合格/复检章保持 80px */
       .td-seal-wrap {
         position: relative;
         vertical-align: middle !important;
+        padding: 0 !important;
+        box-sizing: border-box;
+        overflow: visible;
+      }
+      .td-seal-wrap.has-table-seal {
+        padding: 0 !important;
       }
       .td-seal-inner {
+        position: relative;
         box-sizing: border-box;
+        min-height: 0;
+        height: 60px;
+        overflow: visible;
       }
       .td-seal-inner > span {
         position: relative;
         z-index: 1;
       }
-      /* 合格/复检章：相对单元格绝对定位，不占流，不影响表格行高 */
+      /* 合格/复检章：在单元格内居中，不缩小章图 */
       .td-seal-wrap img.seal-table {
         position: absolute;
         left: 50%;
@@ -1733,15 +2049,15 @@ function sendReportCustomerHtml(req, res) {
         opacity: 0.9;
         width: auto;
         height: auto;
-        max-width: 96px;
-        max-height: 96px;
+        max-width: 80px;
+        max-height: 80px;
         object-fit: contain;
         object-position: center center;
         pointer-events: none;
       }
       .td-seal-wrap img.seal-table[src$=".svg"] {
-        width: 96px;
-        height: 96px;
+        width: 80px;
+        height: 80px;
         object-fit: fill;
       }
 
@@ -1933,7 +2249,7 @@ function sendReportCustomerHtml(req, res) {
       @media print {
         @page {
           size: A4 portrait;
-          margin: 7mm;
+          margin: 5mm;
         }
         html, body {
           margin: 0 !important;
@@ -1949,50 +2265,126 @@ function sendReportCustomerHtml(req, res) {
         }
         .topbar { display: none !important; }
         /*
-          打印不用 flex 撑满整页高度，避免「主内容 + margin-top:auto 签章」被算到超过一页而拆到第 2 页。
-          略缩小整页，使表格末行与签章区尽量落在同一页，底边留空。
+          打印不用 flex 撑满整页高度，避免签章区被挤到第 2 页。
+          签章紧跟表格后、压缩间距，尽量与正文落在同一页。
         */
         .paper {
           box-shadow: none !important;
+          border: none !important;
           width: 210mm !important;
           max-width: 210mm !important;
           min-height: 0 !important;
           height: auto !important;
           margin: 0 auto !important;
-          padding: 7mm 10mm 11mm !important;
+          padding: 5mm 8mm 6mm !important;
           display: block !important;
           page-break-after: auto;
           page-break-inside: auto;
           box-sizing: border-box !important;
-          zoom: 0.93;
+          zoom: 0.9;
         }
-        .paper-main {
+        .paper::before {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        .main-table th,
+        .main-table tbody tr:nth-child(even),
+        .cell-merged-label {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        .paper-main,
+        .paper-main-body {
+          display: block !important;
           flex: none !important;
+          min-height: 0 !important;
         }
-        .center-block { margin-bottom: 18px !important; }
-        .meta-rows { margin-bottom: 16px !important; }
-        .meta-row-2 { margin-bottom: 12px !important; }
+        .center-block { margin-bottom: 14px !important; }
+        .meta-rows { margin-bottom: 12px !important; }
+        .meta-row-2 { margin-bottom: 8px !important; }
+        .main-table {
+          margin-bottom: 14px !important;
+          page-break-inside: auto !important;
+          break-inside: auto !important;
+          border-collapse: collapse !important;
+          border: 1px solid #475569 !important;
+        }
+        .main-table thead {
+          display: table-header-group;
+        }
         .main-table th,
         .main-table td {
-          padding: 7px 9px !important;
-          font-size: 13px !important;
+          padding: 6px 8px !important;
+          font-size: 12px !important;
+          border: 1px solid #475569 !important;
         }
-        .main-table th { padding: 9px 9px 10px !important; }
-        .footer-sign.print-footer-sign {
-          margin-top: 28px !important;
-          padding-top: 36px !important;
-          padding-bottom: 2mm !important;
+        .main-table tr.main-table-bottom-row {
           page-break-inside: avoid !important;
           break-inside: avoid !important;
           page-break-before: avoid !important;
           break-before: avoid !important;
         }
-        .main-table tbody.main-table-bottom {
+        .main-table th { padding: 7px 8px 8px !important; }
+        .main-table tr.main-table-bottom-row {
+          height: 60px !important;
+        }
+        .main-table tr.main-table-bottom-row td {
+          height: 60px !important;
+          padding: 0 !important;
+        }
+        .td-seal-wrap {
+          padding: 0 !important;
+          overflow: visible !important;
+        }
+        .td-seal-wrap.has-table-seal {
+          padding: 0 !important;
+        }
+        .td-seal-inner {
+          height: 60px !important;
+          min-height: 0 !important;
+          overflow: visible !important;
+        }
+        .td-seal-wrap img.seal-table {
+          max-width: 80px !important;
+          max-height: 80px !important;
+        }
+        .td-seal-wrap img.seal-table[src$=".svg"] {
+          width: 80px !important;
+          height: 80px !important;
+        }
+        .footer-sign.print-footer-sign {
+          margin-top: 18px !important;
+          padding-top: 16px !important;
+          padding-bottom: 0 !important;
+          border-top: 1px solid #d0d7e2 !important;
           page-break-inside: avoid !important;
           break-inside: avoid !important;
+          page-break-before: avoid !important;
+          break-before: avoid !important;
+        }
+        .footer-seal-item {
+          min-height: 0 !important;
+          padding: 2px 4px 4px !important;
+        }
+        .footer-sign.footer-seal-pos--below .footer-seal-slot {
+          margin-top: 4px !important;
+        }
+        .footer-sign.footer-seal-pos--above .footer-seal-slot {
+          margin-bottom: 4px !important;
+        }
+        .seal-footer {
+          width: 72px !important;
+          height: 72px !important;
+          max-width: 72px !important;
+          max-height: 72px !important;
+        }
+        .footer-seal-slot {
+          width: 72px !important;
+          height: 72px !important;
         }
         .section-extra {
-          margin-top: 14px !important;
+          margin-top: 10px !important;
+          margin-bottom: 10px !important;
           page-break-inside: avoid !important;
         }
         .void-stamp.is-visible {
@@ -2035,6 +2427,7 @@ function sendReportCustomerHtml(req, res) {
         <div id="err" class="error"></div>
 
         <div class="paper-main">
+        <div class="paper-main-body">
         <div class="paper-top">
           <div class="logo-block">
             <img id="logo" alt="公司logo" style="display:none" />
@@ -2050,8 +2443,10 @@ function sendReportCustomerHtml(req, res) {
 
         <div class="center-block">
           <div class="company-name" id="company"></div>
+          <div class="title-divider" aria-hidden="true"></div>
           <h1 class="report-title-zh" id="reportTitleZh"></h1>
           <div class="report-title-en" id="reportTitleEn"></div>
+          <div class="title-divider title-divider-bottom" aria-hidden="true"></div>
         </div>
 
         <div class="meta-rows" id="metaRows"></div>
@@ -2061,8 +2456,8 @@ function sendReportCustomerHtml(req, res) {
             <tr id="itemHead"></tr>
           </thead>
           <tbody id="items"></tbody>
-          <tbody class="main-table-bottom">
-            <tr>
+          <tbody id="mainTableBottom" class="main-table-bottom" hidden aria-hidden="true">
+            <tr class="main-table-bottom-row">
               <td id="finalConclusionLabelCell" colspan="3" class="cell-merged-label">
                 检验结论
                 <div class="en">Test conclusion</div>
@@ -2074,7 +2469,7 @@ function sendReportCustomerHtml(req, res) {
                 </div>
               </td>
             </tr>
-            <tr>
+            <tr class="main-table-bottom-row">
               <td id="remarksLabelCell" colspan="3" class="cell-merged-label">
                 备注
                 <div class="en">Remarks</div>
@@ -2103,34 +2498,41 @@ function sendReportCustomerHtml(req, res) {
         </div>
         </div>
 
-        <div class="footer-sign print-footer-sign">
+        <div id="footerSign" class="footer-sign print-footer-sign footer-seal-pos--below">
           <div class="footer-col">
-            <div class="footer-stamp-wrap">
+            <div class="footer-stamp-wrap footer-seal-item">
               <div class="footer-labels">
-                <div class="t-cn">主检（签字）</div>
+                <div class="t-cn">主检</div>
                 <div class="t-en">Inspector</div>
-                <img id="sealInspector" class="seal-footer seal-on-label" style="display:none" alt="主检章" />
+              </div>
+              <div class="footer-seal-slot">
+                <img id="sealInspector" class="seal-footer" style="display:none" alt="主检章" />
               </div>
             </div>
           </div>
           <div class="footer-col">
-            <div class="footer-stamp-wrap">
+            <div class="footer-stamp-wrap footer-seal-item">
               <div class="footer-labels">
-                <div class="t-cn">审核（签字）</div>
+                <div class="t-cn">审核</div>
                 <div class="t-en">Supervisor</div>
-                <img id="sealSupervisor" class="seal-footer seal-on-label" style="display:none" alt="审核章" />
+              </div>
+              <div class="footer-seal-slot">
+                <img id="sealSupervisor" class="seal-footer" style="display:none" alt="审核章" />
               </div>
             </div>
           </div>
           <div class="footer-col">
-            <div class="footer-stamp-wrap">
+            <div class="footer-stamp-wrap footer-seal-item">
               <div class="footer-labels">
                 <div class="t-cn">部门</div>
                 <div class="t-en">Department</div>
-                <img id="sealDepartment" class="seal-footer seal-on-label seal-dept" style="display:none" alt="质检章" />
+              </div>
+              <div class="footer-seal-slot">
+                <img id="sealDepartment" class="seal-footer" style="display:none" alt="质检章" />
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
       </div>
@@ -2195,7 +2597,13 @@ function sendReportCustomerHtml(req, res) {
       }
       if (adminPreview) {
         const titleEl = document.getElementById('topbarTitle');
-        if (titleEl) titleEl.textContent = '报告详情（管理端预览）';
+        if (titleEl) titleEl.style.display = 'none';
+        const topbar = document.querySelector('.topbar');
+        if (topbar) topbar.classList.add('topbar--admin-preview');
+        const backBtn = document.getElementById('back');
+        const printBtn = document.getElementById('print');
+        if (backBtn) backBtn.style.display = 'none';
+        if (printBtn) printBtn.style.display = 'none';
       } else {
         const titleEl = document.getElementById('topbarTitle');
         if (titleEl) titleEl.textContent = '报告详情';
@@ -2341,7 +2749,7 @@ function sendReportCustomerHtml(req, res) {
       /** 检验结论 / 备注：仅中文、红色 */
       function renderRedZhOnly(v) {
         const zh = toBi(v).zh || '';
-        if (!zh) return '<span class="val-red">&nbsp;</span>';
+        if (!zh) return '';
         return '<span class="val-red">' + esc(zh) + '</span>';
       }
 
@@ -2424,6 +2832,30 @@ function sendReportCustomerHtml(req, res) {
         setTimeout(scheduleFitMobilePaperScale, 300);
       });
 
+      function applyFooterSealPosition(pos) {
+        const el = document.getElementById('footerSign');
+        if (!el) return;
+        const allowed = ['below', 'above', 'right'];
+        const p = allowed.includes(String(pos || '').trim()) ? String(pos).trim() : 'below';
+        el.classList.remove('footer-seal-pos--below', 'footer-seal-pos--above', 'footer-seal-pos--right');
+        el.classList.add('footer-seal-pos--' + p);
+      }
+
+      let mainTableBottomRowsHtml = null;
+      function captureMainTableBottomRows() {
+        if (mainTableBottomRowsHtml != null) return;
+        const bottom = document.getElementById('mainTableBottom');
+        if (!bottom) return;
+        mainTableBottomRowsHtml = bottom.innerHTML;
+        bottom.remove();
+      }
+      function appendMainTableBottomRows(itemsEl) {
+        captureMainTableBottomRows();
+        if (!mainTableBottomRowsHtml || !itemsEl) return;
+        itemsEl.insertAdjacentHTML('beforeend', mainTableBottomRowsHtml);
+      }
+      captureMainTableBottomRows();
+
       async function load() {
         window.__REPORT_READY = false;
         try {
@@ -2431,12 +2863,12 @@ function sendReportCustomerHtml(req, res) {
         document.getElementById('items').innerHTML = '';
         document.getElementById('others').innerHTML = '';
         document.getElementById('itemHead').innerHTML = '';
+        const metaRowsEl = document.getElementById('metaRows');
+        if (metaRowsEl) metaRowsEl.innerHTML = '';
         const sealDepartment = document.getElementById('sealDepartment');
         const sealInspector = document.getElementById('sealInspector');
         const sealSupervisor = document.getElementById('sealSupervisor');
-        const sealPass = document.getElementById('sealPass');
-        const sealRecheck = document.getElementById('sealRecheck');
-        [sealDepartment, sealInspector, sealSupervisor, sealPass, sealRecheck].forEach((el) => {
+        [sealDepartment, sealInspector, sealSupervisor].forEach((el) => {
           if (el) el.style.display = 'none';
         });
         const voidStampEl = document.getElementById('voidStamp');
@@ -2467,6 +2899,7 @@ function sendReportCustomerHtml(req, res) {
           if (!res.ok) throw new Error(JSON.stringify(data));
 
           const company = data.company || {};
+          applyFooterSealPosition(company.footer_seal_position || company.footerSealPosition);
           document.getElementById('company').textContent = company.company_name_zh || '';
           document.getElementById('reportTitleZh').textContent = company.report_title_zh || '';
           document.getElementById('reportTitleEn').textContent = company.report_title_en || '';
@@ -2522,9 +2955,10 @@ function sendReportCustomerHtml(req, res) {
               var f = fields.find(function(field) { return field.fieldKey === config.key; });
               if (f) {
                 var bi = toBi(parseMaybeJson(f.fieldValue));
-                var val = bi.zh || '';
-                if (config.fallback && !val.trim()) {
-                  val = config.fallback(r) || '';
+                var val = (bi.zh || bi.en || '').trim();
+                if (config.fallback && !val) {
+                  val = String(config.fallback(r) || '').trim();
+                  if (val) bi = { zh: val, en: bi.en || val };
                 }
                 allDisplayFields.push({ labelZh: config.labelZh, labelEn: config.labelEn, value: val, bi: bi });
               }
@@ -2552,7 +2986,7 @@ function sendReportCustomerHtml(req, res) {
                       '<div class="lab-cn">' + esc(ff.labelZh) + '</div>' +
                       (ff.labelEn ? '<div class="lab-en">' + esc(ff.labelEn) + '</div>' : '') +
                     '</div>' +
-                    '<div class="meta-value-side">' + renderZhOnly(ff.bi) + '</div>' +
+                    '<div class="meta-value-side">' + (ff.value ? esc(ff.value) : '&nbsp;') + '</div>' +
                   '</div>';
                 crow.appendChild(pair);
               }
@@ -2635,10 +3069,6 @@ function sendReportCustomerHtml(req, res) {
             )
             .join('');
           document.getElementById('itemHead').innerHTML = headHtml;
-          const finalConclusionLabelCell = document.getElementById('finalConclusionLabelCell');
-          const remarksLabelCell = document.getElementById('remarksLabelCell');
-          if (finalConclusionLabelCell) finalConclusionLabelCell.colSpan = mergedColspan;
-          if (remarksLabelCell) remarksLabelCell.colSpan = mergedColspan;
 
           const itemHtml = (itemRows || [])
             .map((it) => {
@@ -2656,7 +3086,7 @@ function sendReportCustomerHtml(req, res) {
               const cellHtml = colLabels
                 .map((c, idx) => {
                   const val = valueByKey(c.key, idx);
-                  if (idx === 0) return '<td>' + renderItemCol(val) + '</td>';
+                  if (c.key === 'item') return '<td>' + renderItemCol(val) + '</td>';
                   return '<td>' + renderZhOnly(val) + '</td>';
                 })
                 .join('');
@@ -2667,9 +3097,23 @@ function sendReportCustomerHtml(req, res) {
               );
             })
             .join('');
-          document.getElementById('items').innerHTML =
+          const itemsEl = document.getElementById('items');
+          itemsEl.innerHTML =
             itemHtml ||
             '<tr><td colspan="' + colLabels.length + '" class="muted" style="text-align:center;padding:16px">（未配置检测项目表，请在后台为该报告添加表格类字段）</td></tr>';
+          appendMainTableBottomRows(itemsEl);
+          const finalConclusionLabelCell = document.getElementById('finalConclusionLabelCell');
+          const remarksLabelCell = document.getElementById('remarksLabelCell');
+          if (finalConclusionLabelCell) finalConclusionLabelCell.colSpan = mergedColspan;
+          if (remarksLabelCell) remarksLabelCell.colSpan = mergedColspan;
+          const sealPass = document.getElementById('sealPass');
+          const sealRecheck = document.getElementById('sealRecheck');
+          [sealPass, sealRecheck].forEach((el) => {
+            if (el) el.style.display = 'none';
+          });
+          document.querySelectorAll('.td-seal-wrap').forEach((el) => {
+            el.classList.remove('has-table-seal');
+          });
 
           const tcVal = fieldBi(fields, 'test_conclusion');
           const tcBi = toBi(tcVal);
@@ -2678,14 +3122,14 @@ function sendReportCustomerHtml(req, res) {
           if (tcBi.zh) {
             finalEl.innerHTML = renderRedZhOnly(tcVal);
           } else {
-            finalEl.innerHTML = '<span class="val-red">&nbsp;</span>';
+            finalEl.innerHTML = '';
           }
 
           const remVal = fieldBi(fields, 'remarks');
           const remBi = toBi(remVal);
           document.getElementById('remarksText').innerHTML = remBi.zh
             ? renderRedZhOnly(remVal)
-            : '<span class="val-red">&nbsp;</span>';
+            : '';
 
           const secOthers = document.getElementById('sectionOthers');
           if (secOthers) secOthers.style.display = 'none';
@@ -2705,10 +3149,14 @@ function sendReportCustomerHtml(req, res) {
           if (appliedSeals.pass?.imageUrl && sealPass) {
             sealPass.src = appliedSeals.pass.imageUrl;
             sealPass.style.display = 'block';
+            const passWrap = sealPass.closest('.td-seal-wrap');
+            if (passWrap) passWrap.classList.add('has-table-seal');
           }
           if (appliedSeals.recheck?.imageUrl && sealRecheck) {
             sealRecheck.src = appliedSeals.recheck.imageUrl;
             sealRecheck.style.display = 'block';
+            const recheckWrap = sealRecheck.closest('.td-seal-wrap');
+            if (recheckWrap) recheckWrap.classList.add('has-table-seal');
           }
           if (adminPreview && autoPrint) {
             setTimeout(function () { window.print(); }, 400);
@@ -2722,7 +3170,14 @@ function sendReportCustomerHtml(req, res) {
         }
       }
 
-      document.getElementById('refresh').addEventListener('click', load);
+      document.getElementById('refresh').addEventListener('click', function () {
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = '刷新中...';
+        const url = new URL(location.href);
+        url.searchParams.set('_t', String(Date.now()));
+        location.replace(url.toString());
+      });
       load();
     </script>
   </body>

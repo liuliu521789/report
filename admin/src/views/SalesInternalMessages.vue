@@ -78,7 +78,13 @@
                   <el-tag size="small" effect="plain" class="msg-card__type-tag">{{ messageKindLabel(m) }}</el-tag>
                   <el-tag v-if="!m.read_at" type="danger" size="small" effect="plain" class="msg-card__badge">未读</el-tag>
                 </div>
-                <div class="msg-card__body">{{ m.body_text }}</div>
+                <div class="msg-card__body" :class="{ 'msg-card__body--collapsed': !isMsgExpanded(m.id) }">{{ m.body_text }}</div>
+                <div v-if="m.body_text && m.body_text.length > 100" class="msg-card__toggle-wrap">
+                  <span class="msg-card__toggle" @click.stop="toggleExpand(m.id)">
+                    {{ isMsgExpanded(m.id) ? '收起' : '展开全部' }}
+                    <el-icon :size="12"><ArrowDown v-if="!isMsgExpanded(m.id)" /><ArrowUp v-else /></el-icon>
+                  </span>
+                </div>
                 <div class="msg-card__time">{{ $dt(m.created_at) }}</div>
               </div>
             </div>
@@ -104,6 +110,7 @@ import {
   batchDeleteSalesMessages
 } from '../api';
 import { resolveInternalMessageRoute } from '../utils/internalMessageNavigate';
+import { ArrowDown, ArrowUp } from '@element-plus/icons-vue';
 
 export default {
   name: 'SalesInternalMessages',
@@ -111,12 +118,14 @@ export default {
     return {
       messages: [],
       selectedIds: [],
+      expandedIds: [],
       /** all | notice | todo | system */
       messageInboxFilter: 'all',
       pollTimer: null,
       visibilityHandler: null
     };
   },
+  components: { ArrowDown, ArrowUp },
   computed: {
     filteredMessages() {
       const list = this.messages || [];
@@ -160,6 +169,14 @@ export default {
     }
   },
   methods: {
+    isMsgExpanded(id) {
+      return this.expandedIds.includes(id);
+    },
+    toggleExpand(id) {
+      const i = this.expandedIds.indexOf(id);
+      if (i >= 0) this.expandedIds.splice(i, 1);
+      else this.expandedIds.push(id);
+    },
     pruneSelection() {
       const valid = new Set((this.messages || []).map((m) => m.id));
       this.selectedIds = this.selectedIds.filter((id) => valid.has(id));
@@ -480,6 +497,28 @@ export default {
   color: #475569;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.msg-card__body--collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msg-card__toggle-wrap {
+  margin-top: 4px;
+}
+.msg-card__toggle {
+  font-size: 12px;
+  color: #2563eb;
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.msg-card__toggle:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
 }
 .msg-card__time {
   font-size: 11px;

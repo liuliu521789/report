@@ -13,6 +13,18 @@ function parseJsonMaybe(v) {
   }
 }
 
+/**
+ * 订单列表「厂家」列：按简称/全称展示关联客户名称
+ * @param {Record<string, unknown> | null | undefined} row
+ * @param {'short' | 'full'} [mode]
+ */
+export function orderListCustomerDisplayName(row, mode = 'short') {
+  const full = String(row?.customer_name ?? '').trim();
+  const short = String(row?.contact_name ?? '').trim();
+  if (mode === 'full') return full || short;
+  return short || full;
+}
+
 export function legacyRowToDataJson(row) {
   const o = {};
   if (!row) return o;
@@ -43,7 +55,62 @@ export function mergeRowDataJson(row, definitions) {
   for (const d of (definitions || []).filter((x) => x.is_active)) {
     display[d.field_key] = base[d.field_key] ?? '';
   }
+  const priceDef = (definitions || []).find((d) => d.maps_to === 'unit_price');
+  const priceKey = priceDef?.field_key || 'unit_price';
+  const rowUp = Number(row?.unit_price);
+  if (Number.isFinite(rowUp) && rowUp > 0) {
+    display[priceKey] = rowUp;
+    base[priceKey] = rowUp;
+  }
   return { dataJson: base, display_data: display };
+}
+
+/**
+ * 比对订单修改记录中的 before_json / after_json，返回可读字段变更列表
+ * @param {Record<string, unknown> | null | undefined} beforeRow
+ * @param {Record<string, unknown> | null | undefined} afterRow
+ * @param {Array<{ field_key: string, label_zh?: string, maps_to?: string, is_active?: boolean }>} [definitions]
+ * @returns {Array<{ field_key: string, label: string, before: string, after: string }>}
+ */
+export function diffSalesOrderEditLog(beforeRow, afterRow, definitions = []) {
+  const before = mergeRowDataJson(beforeRow, definitions).dataJson;
+  const after = mergeRowDataJson(afterRow, definitions).dataJson;
+  const labelByKey = new Map(
+    (definitions || []).map((d) => [d.field_key, d.label_zh || d.field_key])
+  );
+  const mapsToByKey = new Map(
+    (definitions || []).map((d) => [d.field_key, d.maps_to])
+  );
+  const keyOrder = (definitions || [])
+    .filter((d) => d.is_active !== false)
+    .map((d) => d.field_key);
+  const extraKeys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
+    (k) => !keyOrder.includes(k)
+  );
+  const keys = [...keyOrder, ...extraKeys];
+
+  const fmt = (val, fieldKey) => {
+    if (val === undefined || val === null || String(val).trim() === '') return '（空）';
+    if (mapsToByKey.get(fieldKey) === 'unit_price') {
+      const n = Number(val);
+      if (Number.isFinite(n)) return n.toFixed(2);
+    }
+    return String(val);
+  };
+
+  const changes = [];
+  for (const key of keys) {
+    const b = before[key];
+    const a = after[key];
+    if (fmt(b, key) === fmt(a, key)) continue;
+    changes.push({
+      field_key: key,
+      label: labelByKey.get(key) || key,
+      before: fmt(b, key),
+      after: fmt(a, key)
+    });
+  }
+  return changes;
 }
 
 function pickUnitPriceFromBase(base, definitions, display_data) {

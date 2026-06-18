@@ -35,6 +35,27 @@ export const WECOM_TEMPLATE_VARIABLE_SCHEMAS = {
     ],
     /** 与系统种子模板正文一致（正文可另含 {{detail}}，非强制） */
     requiredInBody: ['customerName', 'contractReviewStatus', 'reviewComment']
+  },
+  sales_invoice_submit_finance: {
+    allowed: ['detail', 'contractNo', 'customerName', 'amount', 'fromUser', 'invoiceCenterUrl', 'invoiceNo', 'invoiceCode'],
+    requiredInBody: ['detail'],
+    requiredInUrl: ['invoiceCenterUrl']
+  },
+  sales_invoice_withdraw_finance: {
+    allowed: ['detail', 'contractNo', 'customerName', 'amount', 'fromUser', 'invoiceCenterUrl', 'invoiceNo', 'invoiceCode'],
+    requiredInBody: ['detail']
+  },
+  sales_invoice_fulfilled_applicant: {
+    allowed: ['detail', 'contractNo', 'customerName', 'amount', 'fromUser', 'invoiceCenterUrl', 'invoiceNo', 'invoiceCode'],
+    requiredInBody: ['detail']
+  },
+  sales_invoice_deleted_finance: {
+    allowed: ['detail', 'contractNo', 'customerName', 'amount', 'fromUser', 'invoiceCenterUrl', 'invoiceNo', 'invoiceCode'],
+    requiredInBody: ['detail']
+  },
+  sales_invoice_deleted_applicant: {
+    allowed: ['detail', 'contractNo', 'customerName', 'amount', 'fromUser', 'invoiceCenterUrl', 'invoiceNo', 'invoiceCode'],
+    requiredInBody: ['detail']
   }
 };
 

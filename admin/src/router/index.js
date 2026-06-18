@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { usePageTabsStore } from '../stores/pageTabs';
 import { getMe } from '../api';
 
 import Login from '../views/Login.vue';
@@ -26,9 +27,13 @@ import ReportTemplates from '../views/ReportTemplates.vue';
 import SalesOrders from '../views/SalesOrders.vue';
 import SalesInternalMessages from '../views/SalesInternalMessages.vue';
 import SalesContracts from '../views/SalesContracts.vue';
+import SalesInvoiceCenter from '../views/SalesInvoiceCenter.vue';
 import CustomerManagement from '../views/CustomerManagement.vue';
+import CustomerModels from '../views/CustomerModels.vue';
 import InternalModels from '../views/InternalModels.vue';
 import ContractTemplateEdit from '../views/ContractTemplateEdit.vue';
+import OrderCalcRules from '../views/OrderCalcRules.vue';
+import OrderFlowConfig from '../views/OrderFlowConfig.vue';
 import WecomNotifications from '../views/WecomNotifications.vue';
 import Backups from '../views/Backups.vue';
 import QcYearbooks from '../views/QcYearbooks.vue';
@@ -102,8 +107,23 @@ const router = createRouter({
           }
         },
         {
+          path: '/sales/orders/flow-config',
+          component: OrderFlowConfig,
+          meta: {
+            needAnyPerm: [
+              ['process_management', 'edit_flow'],
+              ['process_management', 'view_flow']
+            ]
+          }
+        },
+        {
           path: '/sales/customers',
           component: CustomerManagement,
+          meta: { needPerm: ['customer_management', 'view'] }
+        },
+        {
+          path: '/sales/customers/models/:customerId',
+          component: CustomerModels,
           meta: { needPerm: ['customer_management', 'view'] }
         },
         {
@@ -119,6 +139,16 @@ const router = createRouter({
             needAnyPerm: [
               ['contract_management', 'contract_edit'],
               ['contract_management', 'contract_generate']
+            ]
+          }
+        },
+        {
+          path: '/sales/contracts/rule-settings',
+          component: OrderCalcRules,
+          meta: {
+            needAnyPerm: [
+              ['contract_management', 'template_manage'],
+              ['contract_management', 'contract_edit']
             ]
           }
         },
@@ -147,6 +177,17 @@ const router = createRouter({
               ['contract_management', 'contract_delete'],
               ['contract_management', 'template_manage'],
               ['process_management', 'view_flow']
+            ]
+          }
+        },
+        {
+          path: '/sales/invoices',
+          component: SalesInvoiceCenter,
+          meta: {
+            needAnyPerm: [
+              ['order_management', 'order_status_finance'],
+              ['contract_management', 'contract_submit'],
+              ['contract_management', 'contract_generate']
             ]
           }
         }
@@ -200,6 +241,17 @@ router.beforeEach(async (to, _from, next) => {
    * 统一以后端接口鉴权为准，这里不再做 needPerm / needAnyPerm 的前置拦截。
    */
   return next();
+});
+
+/** 在 router-view 渲染前同步页签，避免 keep-alive include 滞后导致页面不切换 */
+router.afterEach((to) => {
+  if (to.path === '/login') {
+    usePageTabsStore().reset();
+    return;
+  }
+  if (to.path) {
+    usePageTabsStore().syncFromRoute(to);
+  }
 });
 
 export default router;

@@ -4,8 +4,8 @@
       <span class="title">电子签章</span>
       <div class="actions">
         <el-button size="small" @click="clearCanvas">清空</el-button>
-        <el-button type="primary" size="small" @click="saveSignature">保存签章</el-button>
-        <el-button type="success" size="small" @click="applyToPDF" :disabled="!signatureData">盖章到PDF</el-button>
+        <el-button type="primary" size="small" :loading="uploading" @click="saveSignature">保存签章</el-button>
+        <el-button type="success" size="small" :loading="stamping" :disabled="!signatureData" @click="applyToPDF">盖章到PDF</el-button>
       </div>
     </div>
     
@@ -24,10 +24,16 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
+const props = defineProps({
+  contractId: { type: [Number, String], default: null }
+})
+
 const canvas = ref(null)
 const ctx = ref(null)
 const isDrawing = ref(false)
 const signatureData = ref(null)
+const uploading = ref(false)
+const stamping = ref(false)
 const emit = defineEmits(['signature-saved'])
 
 let lastX = 0
@@ -76,26 +82,57 @@ function clearCanvas() {
   emit('signature-saved', null)
 }
 
-function saveSignature() {
+async function saveSignature() {
   if (!signatureData.value) {
     ElMessage.warning('请先绘制签章')
     return
   }
-  ElMessage.success('签章已保存')
-  // In real implementation, upload to server or store in contract_signatures
+  if (!props.contractId) {
+    ElMessage.warning('请先保存合同后再上传签章')
+    return
+  }
+  uploading.value = true
+  try {
+    const { uploadContractSignature } = await import('../api')
+    const res = await uploadContractSignature(props.contractId, signatureData.value)
+    if (res?.ok) {
+      ElMessage.success('签章已保存至服务器')
+      emit('signature-saved', res.signatureUrl)
+    }
+  } catch {
+    ElMessage.error('签章上传失败')
+  } finally {
+    uploading.value = false
+  }
 }
 
 async function applyToPDF() {
-  if (!signatureData.value) {
-    ElMessage.warning('请先绘制签章')
+  if (!signatureData.value && !props.contractId) {
+    ElMessage.warning('请先绘制并保存签章')
     return
   }
-  ElMessage.info('正在生成带签章的PDF（使用 jspdf）...')
-  // Simulate PDF stamping using existing jspdf (project already has it in vendor)
-  // In full implementation, call backend or use jspdf in frontend to stamp signature on contract PDF
-  setTimeout(() => {
-    ElMessage.success('PDF 已生成并盖章（模拟）')
-  }, 800)
+  if (!props.contractId) {
+    ElMessage.warning('请先保存合同')
+    return
+  }
+  stamping.value = true
+  try {
+    const { stampContractPdf } = await import('../api')
+    const blob = await stampContractPdf(props.contractId)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `合同_${props.contractId}_已签章.pdf`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    ElMessage.success('带签章PDF已生成并下载')
+  } catch {
+    ElMessage.error('PDF生成失败')
+  } finally {
+    stamping.value = false
+  }
 }
 </script>
 

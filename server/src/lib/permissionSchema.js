@@ -138,6 +138,7 @@ export const PERMISSION_MODULES = [
       { key: 'contract_view', label: '查看', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
       { key: 'contract_edit', label: '编辑' },
       { key: 'contract_delete', label: '删除' },
+      { key: 'invoice_delete', label: '删除开票申请', defaults: ROLE_DEFAULT('sales_admin') },
       { key: 'contract_edit_approved', label: '编辑已审核合同' },
       { key: 'contract_delete_approved', label: '删除已审核合同' },
       {
@@ -174,7 +175,8 @@ export const PERMISSION_MODULES = [
     key: 'process_management',
     label: '流程',
     items: [
-      { key: 'view_flow', label: '查看流程', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') }
+      { key: 'view_flow', label: '查看流程', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
+      { key: 'edit_flow', label: '配置审核流程', defaults: ROLE_DEFAULT('sales_admin') }
     ]
   },
   {

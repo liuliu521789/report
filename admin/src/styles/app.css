@@ -67,18 +67,46 @@ body {
 }
 
 /* Sidebar collapse: icon centered + suitable hover background */
+.app-shell .aside .menu.el-menu--collapse {
+  --el-menu-base-level-padding: 0px;
+  width: 100% !important;
+}
+
 .app-shell .aside .menu.el-menu--collapse .el-menu-item,
 .app-shell .aside .menu.el-menu--collapse .el-sub-menu__title {
   display: flex !important;
-  align-items: center;
-  justify-content: center;
-  padding-left: 0 !important;
-  padding-right: 0 !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-right: none !important;
+  text-align: center;
+}
+
+.app-shell .aside .menu.el-menu--collapse .el-menu-item .el-menu-tooltip__trigger {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+
+.app-shell .aside .menu.el-menu--collapse .el-sub-menu {
+  width: 100%;
+}
+
+.app-shell .aside .menu.el-menu--collapse .el-sub-menu__title > span {
+  display: none !important;
 }
 
 .app-shell .aside .menu.el-menu--collapse .el-menu-item .el-icon,
 .app-shell .aside .menu.el-menu--collapse .el-sub-menu__title .el-icon {
-  margin-right: 0 !important;
+  margin: 0 !important;
+}
+
+.app-shell .aside .menu.el-menu--collapse .el-menu-item.is-active {
+  border-left: 3px solid var(--primary) !important;
+  border-right: none !important;
 }
 
 .app-shell .aside .menu.el-menu--collapse .el-sub-menu__icon-arrow {

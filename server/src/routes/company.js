@@ -131,6 +131,38 @@ const settingsSchema = z.object({
   logoUrl: z.string().max(512).optional().nullable()
 });
 
+const footerSealPositionSchema = z.object({
+  footerSealPosition: z.enum(['below', 'above', 'right'])
+});
+
+router.patch(
+  '/settings/footer-seal-position',
+  requireAnyPermissionPairs([
+    ['company', 'manage'],
+    ['reports', 'seals']
+  ]),
+  async (req, res) => {
+    const parsed = footerSealPositionSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
+    const pool = getPool();
+    try {
+      await pool.query(
+        `INSERT INTO company_settings (id, footer_seal_position)
+         VALUES (1, ?)
+         ON DUPLICATE KEY UPDATE
+          footer_seal_position = VALUES(footer_seal_position),
+          updated_at = CURRENT_TIMESTAMP(3)`,
+        [parsed.data.footerSealPosition]
+      );
+      res.json({ ok: true, footerSealPosition: parsed.data.footerSealPosition });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[footer-seal-position]', e?.message || e);
+      return res.status(500).json({ error: 'SAVE_FAILED', message: '保存章位置失败，请重启服务后重试' });
+    }
+  }
+);
+
 router.put('/settings', requirePermission('company', 'manage'), async (req, res) => {
   const parsed = settingsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });

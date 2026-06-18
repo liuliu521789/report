@@ -1,231 +1,223 @@
 <template>
-  <div class="company-page">
-    <el-card>
-      <template #header>
-        <div class="field-header">
-          <div>公司信息（页眉固定内容）</div>
+  <div class="company-page" v-loading="pageLoading">
+    <el-card class="page-header-card" shadow="never">
+      <div class="page-head">
+        <div class="page-head-text">
+          <h2 class="page-title">公司信息</h2>
+          <p class="page-desc">
+            维护报告页眉中的公司名称、Logo、报告标题等对外展示内容；保存后新打印或新分享的报告将使用最新信息。
+          </p>
         </div>
-      </template>
+        <div v-if="canManageCompany" class="head-actions">
+          <el-button :icon="RefreshLeft" :disabled="!isDirty || saving" @click="onResetForm">放弃修改</el-button>
+          <el-button type="primary" :icon="Check" :loading="saving" :disabled="!isDirty" @click="save">保存</el-button>
+        </div>
+      </div>
       <el-alert
         v-if="!canManageCompany"
         type="info"
         :closable="false"
         show-icon
-        style="margin-bottom: 16px"
+        class="readonly-alert"
         title="当前为只读查看，不可修改公司信息。"
       />
+      <el-tag v-else-if="isDirty" type="warning" effect="plain" class="dirty-tag">有未保存的修改</el-tag>
+    </el-card>
 
+    <el-card shadow="never" class="section-card">
+      <template #header>
+        <div class="section-head">
+          <span>Logo 与品牌</span>
+          <span class="section-sub">显示在报告页眉左上角</span>
+        </div>
+      </template>
       <el-form :model="form" label-width="120px" class="company-form" @submit.prevent>
-        <el-form-item label="公司logo">
-          <div class="logo-upload-row">
-            <el-upload
-              v-if="canManageCompany"
-              :action="uploadAction"
-              :headers="uploadHeaders"
-              :show-file-list="false"
-              :before-upload="beforeUpload"
-              :on-success="onUploadSuccess"
-              :on-error="onUploadError"
-            >
-              <el-button size="small" type="primary" icon=Upload>上传logo图片</el-button>
-            </el-upload>
-            <span class="upload-tip">建议使用透明底 PNG，展示效果更好。</span>
-          </div>
-          <div v-if="form.logoUrl" class="logo-preview-wrap">
-            <el-link :href="form.logoUrl" target="_blank" class="logo-link">{{ form.logoUrl }}</el-link>
-            <div class="logo-preview">
-              <img :src="form.logoUrl" alt="logo" class="logo-preview-img" />
+        <el-form-item label="公司 Logo">
+          <div class="logo-block">
+            <div class="logo-preview-box" :class="{ empty: !form.logoUrl }">
+              <img v-if="form.logoUrl" :src="form.logoUrl" alt="公司 Logo" class="logo-preview-img" />
+              <div v-else class="logo-placeholder">
+                <el-icon :size="28"><Picture /></el-icon>
+                <span>暂未上传 Logo</span>
+              </div>
+            </div>
+            <div class="logo-side">
+              <div v-if="canManageCompany" class="logo-actions">
+                <el-upload
+                  :action="uploadAction"
+                  :headers="uploadHeaders"
+                  :show-file-list="false"
+                  :before-upload="beforeUpload"
+                  :on-success="onUploadSuccess"
+                  :on-error="onUploadError"
+                >
+                  <el-button type="primary" :icon="Upload" :loading="logoUploading">
+                    {{ form.logoUrl ? '更换 Logo' : '上传 Logo' }}
+                  </el-button>
+                </el-upload>
+                <el-button
+                  v-if="form.logoUrl"
+                  type="danger"
+                  plain
+                  :icon="Delete"
+                  @click="removeLogo"
+                >
+                  移除
+                </el-button>
+              </div>
+              <p class="field-tip">建议使用透明底 PNG，大小不超过 2MB，展示效果更好。</p>
             </div>
           </div>
         </el-form-item>
 
-        <el-form-item label="描述语（中文）">
-          <el-input type="textarea" :rows="3" v-model="form.descriptionZh" :readonly="!canManageCompany" />
+        <el-divider content-position="left">公司名称</el-divider>
+        <el-form-item label="中文名称">
+          <el-input
+            v-model="form.companyNameZh"
+            :readonly="!canManageCompany"
+            maxlength="128"
+            show-word-limit
+            placeholder="例如：某某化工有限公司"
+          />
         </el-form-item>
-        <el-form-item label="Description (English)">
-          <el-input type="textarea" :rows="3" v-model="form.descriptionEn" :readonly="!canManageCompany" />
+        <el-form-item label="英文名称">
+          <el-input
+            v-model="form.companyNameEn"
+            :readonly="!canManageCompany"
+            maxlength="256"
+            show-word-limit
+            placeholder="e.g. Example Chemical Co., Ltd."
+          />
         </el-form-item>
 
-        <el-form-item label="公司名称（中文）">
-          <el-input v-model="form.companyNameZh" :readonly="!canManageCompany" />
+        <el-divider content-position="left">报告标题</el-divider>
+        <el-form-item label="中文标题">
+          <el-input
+            v-model="form.reportTitleZh"
+            :readonly="!canManageCompany"
+            maxlength="128"
+            show-word-limit
+            placeholder="例如：产品质量检验报告单"
+          />
         </el-form-item>
-        <el-form-item label="Company Name (English)">
-          <el-input v-model="form.companyNameEn" :readonly="!canManageCompany" />
+        <el-form-item label="英文标题">
+          <el-input
+            v-model="form.reportTitleEn"
+            :readonly="!canManageCompany"
+            maxlength="256"
+            show-word-limit
+            placeholder="e.g. Certificate of Analysis"
+          />
         </el-form-item>
+
+        <el-divider content-position="left">联系信息</el-divider>
         <el-form-item label="邮箱">
-          <el-input v-model="form.email" :readonly="!canManageCompany" placeholder="例如：contact@company.com" />
+          <el-input
+            v-model="form.email"
+            :readonly="!canManageCompany"
+            maxlength="128"
+            placeholder="例如：contact@company.com"
+          />
         </el-form-item>
         <el-form-item label="地址">
-          <el-input v-model="form.address" :readonly="!canManageCompany" />
+          <el-input
+            v-model="form.address"
+            :readonly="!canManageCompany"
+            maxlength="256"
+            show-word-limit
+            placeholder="公司联系地址"
+          />
         </el-form-item>
 
-      </el-form>
-
-      <div v-if="canManageCompany" class="actions">
-        <el-button type="primary" :loading="saving" @click="save" icon=Check>保存</el-button>
-      </div>
-    </el-card>
-
-    <el-card v-if="isSuperAdminUser" class="quick-role-card" shadow="never">
-      <template #header>
-        <div class="field-header">
-          <div>快捷角色账号（仅超级管理员）</div>
-        </div>
-      </template>
-      <p class="quick-role-hint">
-        在控制台点击「销售 / 财务 / 仓库」快捷入口时，将以此处绑定的<strong>员工账号</strong>重新登录，菜单与权限与该员工一致。请先在各「员工类别」中维护好对应权限，再创建员工并绑定到此处。
-      </p>
-      <p class="quick-role-hint">
-        <strong>企业微信：</strong>销售提交订单财务审核时，系统会向此处「财务角色」对应员工发送企业微信（需在「员工账号」中为其填写与通讯录一致的
-        UserID，并完成「企业微信通知」中的应用配置）。未绑定财务快捷账号时，将向所有「财务」类别且填写了 UserID 的员工推送。
-      </p>
-      <el-form label-width="120px" class="company-form" @submit.prevent>
-        <el-form-item label="销售角色">
-          <el-select
-            v-model="quickRoles.salesUserId"
-            clearable
-            filterable
-            placeholder="选择员工账号"
-            class="w-full-select"
-          >
-            <el-option
-              v-for="u in employeeOptions"
-              :key="'s-' + u.id"
-              :label="formatUserOption(u)"
-              :value="u.id"
-            />
-          </el-select>
+        <el-divider content-position="left">描述语</el-divider>
+        <el-form-item label="中文描述">
+          <el-input
+            type="textarea"
+            :rows="3"
+            v-model="form.descriptionZh"
+            :readonly="!canManageCompany"
+            maxlength="256"
+            show-word-limit
+            placeholder="显示在报告页眉的简短中文描述"
+          />
         </el-form-item>
-        <el-form-item label="财务角色">
-          <el-select
-            v-model="quickRoles.financeUserId"
-            clearable
-            filterable
-            placeholder="选择员工账号"
-            class="w-full-select"
-          >
-            <el-option
-              v-for="u in employeeOptions"
-              :key="'f-' + u.id"
-              :label="formatUserOption(u)"
-              :value="u.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="仓库角色">
-          <el-select
-            v-model="quickRoles.warehouseUserId"
-            clearable
-            filterable
-            placeholder="选择员工账号"
-            class="w-full-select"
-          >
-            <el-option
-              v-for="u in employeeOptions"
-              :key="'w-' + u.id"
-              :label="formatUserOption(u)"
-              :value="u.id"
-            />
-          </el-select>
+        <el-form-item label="英文描述">
+          <el-input
+            type="textarea"
+            :rows="3"
+            v-model="form.descriptionEn"
+            :readonly="!canManageCompany"
+            maxlength="256"
+            show-word-limit
+            placeholder="Short English description shown in report header"
+          />
         </el-form-item>
       </el-form>
-<div class="actions">
-        <el-button type="primary" :loading="quickRoleSaving" @click="saveQuickRoles" icon=Check>保存</el-button>
-      </div>
     </el-card>
 
-    <el-card v-if="isSuperAdminUser" class="backup-card" shadow="never">
-      <template #header>
-        <div class="field-header">
-          <div>数据备份（仅超级管理员）</div>
-        </div>
-      </template>
-      <p class="backup-hint">
-        点击下方按钮，将下载当前数据库的完整 SQL 备份文件。建议定期备份，或在执行重要操作前备份。
-      </p>
-      <p class="backup-hint backup-hint-warning">
-        注意：从 SQL 文件恢复仅恢复数据库数据，不会恢复 uploads 中的图片/附件文件（如公司章图片、公司 logo）。
-      </p>
-<div class="actions">
-        <el-button type="warning" :loading="backingUp" icon="Download" @click="onBackup">下载 SQL 备份</el-button>
-        <el-button icon="Upload" @click="restoreDialog = true">从 SQL 文件恢复</el-button>
+    <div v-if="canManageCompany && isDirty" class="sticky-save-bar">
+      <span class="sticky-tip">有未保存的修改</span>
+      <div class="sticky-actions">
+        <el-button size="small" @click="onResetForm">放弃修改</el-button>
+        <el-button size="small" type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
-    </el-card>
-  </div>
-
-  <el-dialog title="从 SQL 文件恢复" v-model="restoreDialog" width="600px" :close-on-click-modal="false">
-    <el-alert type="danger" :closable="false" show-icon style="margin-bottom: 16px">
-      恢复将覆盖当前所有数据，建议先下载备份后再操作。
-    </el-alert>
-    <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 16px">
-      仅恢复数据库，不恢复 uploads 文件；若需要恢复公司章/logo 等图片，请使用「备份管理」中的完整恢复。
-    </el-alert>
-    <el-upload
-      ref="restoreUploadRef"
-      :auto-upload="false"
-      :limit="1"
-      accept=".sql"
-      :on-change="onRestoreFileChange"
-    >
-      <template #trigger>
-        <el-button icon="Upload">选择 .sql 文件</el-button>
-      </template>
-      <template #tip>
-        <div class="el-upload__tip">仅支持 .sql 文件，请确保文件由本系统备份生成</div>
-      </template>
-    </el-upload>
-    <div v-if="restoreSql" style="margin-top: 12px">
-      <el-input type="textarea" :rows="6" :value="restoreSql" readonly placeholder="已加载文件内容（只读）" />
     </div>
-    <template #footer>
-      <el-button @click="restoreDialog = false">取消</el-button>
-      <el-button type="danger" :loading="restoreLoading" :disabled="!restoreSql" @click="onRestore">确认恢复</el-button>
-    </template>
-  </el-dialog>
+  </div>
 </template>
 
 <script>
 import { mapState } from 'pinia';
-import { getCompanySettings, getQuickRoleUsers, listUsersLite, updateCompanySettings, updateQuickRoleUsers, downloadBackup, restoreBackup } from '../api';
+import { Check, Delete, Picture, RefreshLeft, Upload } from '@element-plus/icons-vue';
+import { getCompanySettings, updateCompanySettings } from '../api';
 import { useAuthStore } from '../stores/auth';
-import { isSuperAdmin, perm } from '../utils/permissions';
+import { perm } from '../utils/permissions';
 import { absoluteApiOrigin } from '../utils/absoluteApiOrigin.js';
-import { startDownload } from '../composables/useDownloadProgress.js';
+
+const EMPTY_FORM = () => ({
+  companyNameZh: '',
+  companyNameEn: '',
+  email: '',
+  address: '',
+  reportTitleZh: '',
+  reportTitleEn: '',
+  descriptionZh: '',
+  descriptionEn: '',
+  logoUrl: ''
+});
+
+function normalizeSettings(settings) {
+  if (!settings) return EMPTY_FORM();
+  return {
+    companyNameZh: settings.companyNameZh || settings.company_name_zh || '',
+    companyNameEn: settings.companyNameEn || settings.company_name_en || '',
+    email: settings.email || settings.company_email || '',
+    address: settings.address || settings.company_address || '',
+    reportTitleZh: settings.reportTitleZh || settings.report_title_zh || '',
+    reportTitleEn: settings.reportTitleEn || settings.report_title_en || '',
+    descriptionZh: settings.descriptionZh || settings.description_zh || '',
+    descriptionEn: settings.descriptionEn || settings.description_en || '',
+    logoUrl: settings.logoUrl || settings.logo_url || ''
+  };
+}
 
 export default {
   name: 'CompanySettings',
   data() {
     return {
+      Check,
+      Delete,
+      Picture,
+      RefreshLeft,
+      Upload,
+      pageLoading: false,
       saving: false,
-      form: {
-        companyNameZh: '',
-        companyNameEn: '',
-        email: '',
-        address: '',
-        reportTitleZh: '',
-        reportTitleEn: '',
-        descriptionZh: '',
-        descriptionEn: '',
-        logoUrl: ''
-      },
-      quickRoles: {
-        salesUserId: null,
-        financeUserId: null,
-        warehouseUserId: null
-      },
-      employeeOptions: [],
-      quickRoleSaving: false,
-      backingUp: false,
-      restoreDialog: false,
-      restoreSql: '',
-      restoreLoading: false
+      logoUploading: false,
+      form: EMPTY_FORM(),
+      savedForm: EMPTY_FORM()
     };
   },
   computed: {
     ...mapState(useAuthStore, ['token']),
-    isSuperAdminUser() {
-      return isSuperAdmin();
-    },
     canManageCompany() {
       return perm('company', 'manage');
     },
@@ -234,87 +226,54 @@ export default {
     },
     uploadHeaders() {
       return this.token ? { Authorization: `Bearer ${this.token}` } : {};
+    },
+    isDirty() {
+      return JSON.stringify(this.form) !== JSON.stringify(this.savedForm);
     }
   },
   mounted() {
     this.load();
-    this.loadQuickRoleSection();
   },
   methods: {
-    formatUserOption(u) {
-      const cat = u.categoryNameZh || u.categoryCode || '';
-      return cat ? `${u.username}（${cat}）` : u.username;
-    },
-    async loadQuickRoleSection() {
-      if (!this.isSuperAdminUser) return;
-      try {
-        const [usersRes, qr] = await Promise.all([
-          listUsersLite({ accountType: 'employee', activeOnly: 1 }),
-          getQuickRoleUsers()
-        ]);
-        this.employeeOptions = usersRes?.items || [];
-        this.quickRoles = {
-          salesUserId: qr?.salesUserId ?? null,
-          financeUserId: qr?.financeUserId ?? null,
-          warehouseUserId: qr?.warehouseUserId ?? null
-        };
-      } catch {
-        this.employeeOptions = [];
-      }
-    },
-    async saveQuickRoles() {
-      this.quickRoleSaving = true;
-      try {
-        await updateQuickRoleUsers({
-          salesUserId: this.quickRoles.salesUserId,
-          financeUserId: this.quickRoles.financeUserId,
-          warehouseUserId: this.quickRoles.warehouseUserId
-        });
-        await this.loadQuickRoleSection();
-        this.$message.success('快捷角色绑定已保存');
-      } catch (e) {
-        const err = e?.response?.data?.error;
-        if (err === 'INVALID_QUICK_ROLE_USER') {
-          this.$message.error('所选账号须为已启用的员工');
-        } else {
-          this.$message.error(this.$apiUserMsg(e, '保存失败'));
-        }
-      } finally {
-        this.quickRoleSaving = false;
-      }
-    },
     async load() {
-      const { settings } = await getCompanySettings();
-      if (!settings) return;
-      this.form = {
-        companyNameZh: settings.companyNameZh || settings.company_name_zh || '',
-        companyNameEn: settings.companyNameEn || settings.company_name_en || '',
-        email: settings.email || settings.company_email || '',
-        address: settings.address || settings.company_address || '',
-        reportTitleZh: settings.reportTitleZh || settings.report_title_zh || '',
-        reportTitleEn: settings.reportTitleEn || settings.report_title_en || '',
-        descriptionZh: settings.descriptionZh || settings.description_zh || '',
-        descriptionEn: settings.descriptionEn || settings.description_en || '',
-        logoUrl: settings.logoUrl || settings.logo_url || ''
-      };
+      this.pageLoading = true;
+      try {
+        const { settings } = await getCompanySettings();
+        const normalized = normalizeSettings(settings);
+        this.form = { ...normalized };
+        this.savedForm = { ...normalized };
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '加载公司信息失败'));
+      } finally {
+        this.pageLoading = false;
+      }
+    },
+    onResetForm() {
+      this.form = { ...this.savedForm };
+    },
+    removeLogo() {
+      this.form.logoUrl = '';
     },
     beforeUpload(file) {
       const okType = ['image/png', 'image/jpeg', 'image/webp'].includes(file.type);
       const okSize = file.size / 1024 / 1024 <= 2;
-      if (!okType) this.$message.error('仅支持 png/jpg/webp');
+      if (!okType) this.$message.error('仅支持 png / jpg / webp');
       if (!okSize) this.$message.error('图片大小不能超过 2MB');
+      if (okType && okSize) this.logoUploading = true;
       return okType && okSize;
     },
     onUploadSuccess(res) {
+      this.logoUploading = false;
       if (res && res.logoUrl) {
         this.form.logoUrl = res.logoUrl;
-        this.$message.success('logo上传成功');
+        this.$message.success('Logo 上传成功');
       } else {
         this.$message.error('上传返回异常');
       }
     },
     onUploadError() {
-      this.$message.error('logo上传失败');
+      this.logoUploading = false;
+      this.$message.error('Logo 上传失败');
     },
     async save() {
       this.saving = true;
@@ -330,53 +289,12 @@ export default {
           descriptionEn: this.form.descriptionEn,
           logoUrl: this.form.logoUrl || null
         });
+        this.savedForm = { ...this.form };
         this.$message.success('保存成功');
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '保存失败'));
       } finally {
         this.saving = false;
-      }
-    },
-    async onBackup() {
-      this.backingUp = true;
-      try {
-        const blob = await downloadBackup();
-        startDownload({
-          request: blob,
-          filename: `backup_${new Date().toISOString().slice(0, 10)}.sql`,
-          onSuccess: () => { this.$message.success('备份下载完成'); }
-        });
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '备份失败'));
-      } finally {
-        this.backingUp = false;
-      }
-    },
-    onRestoreFileChange(file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        this.restoreSql = e.target.result;
-      };
-      reader.readAsText(file.raw);
-    },
-    async onRestore() {
-      if (!this.restoreSql) return;
-      try {
-        await this.$confirm('数据将被完全覆盖，确定要恢复吗？', '危险操作', { type: 'error' });
-      } catch {
-        return;
-      }
-      this.restoreLoading = true;
-      try {
-        await restoreBackup(this.restoreSql);
-        this.$message.success('数据恢复完成（仅数据库）');
-        this.restoreDialog = false;
-        this.restoreSql = '';
-      } catch (e) {
-        const msg = e?.response?.data?.error || this.$apiUserMsg(e, '恢复失败');
-        this.$message.error(msg);
-      } finally {
-        this.restoreLoading = false;
       }
     }
   }
@@ -386,129 +304,200 @@ export default {
 <style scoped>
 .company-page {
   max-width: 920px;
+  padding-bottom: 72px;
 }
 
-.quick-role-card {
-  margin-top: 16px;
+.page-header-card {
+  margin-bottom: 12px;
 }
 
-.backup-card {
-  margin-top: 16px;
+.page-header-card :deep(.el-card__body) {
+  padding: 16px 18px;
 }
 
-.quick-role-hint {
-  font-size: 13px;
-  color: #64748b;
-  line-height: 1.5;
-  margin: 0 0 16px;
-}
-
-.backup-hint {
-  font-size: 13px;
-  color: #64748b;
-  line-height: 1.5;
-  margin: 0 0 16px;
-}
-
-.backup-hint-warning {
-  color: #b45309;
-}
-
-.w-full-select {
-  width: 100%;
-  max-width: 420px;
-}
-
-.field-header {
+.page-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 16px;
 }
 
-.company-form :deep(.el-form-item) {
-  margin-bottom: 18px;
+.page-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
 }
 
-.logo-upload-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.upload-tip {
-  font-size: 12px;
+.page-desc {
+  margin: 0;
+  font-size: 13px;
   color: #64748b;
+  line-height: 1.55;
 }
 
-.logo-preview-wrap {
-  margin-top: 10px;
+.head-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
-.logo-link {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: inline-block;
-}
-
-.logo-preview {
-  margin-top: 10px;
-}
-.logo-preview-img {
-  width: 120px;
-  height: 120px;
-  object-fit: contain;
-  border: 1px dashed #ddd;
-  border-radius: 10px;
-  background: #fafafa;
-}
-.actions {
-  text-align: right;
+.readonly-alert {
   margin-top: 12px;
 }
 
+.dirty-tag {
+  margin-top: 10px;
+}
+
+.section-card :deep(.el-card__header) {
+  padding: 12px 16px;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.section-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: #94a3b8;
+}
+
+.company-form :deep(.el-form-item) {
+  margin-bottom: 16px;
+}
+
+.company-form :deep(.el-divider__text) {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.field-tip {
+  margin: 0;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.logo-block {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.logo-preview-box {
+  width: 120px;
+  height: 120px;
+  border: 1px dashed #d1d5db;
+  border-radius: 10px;
+  background: #fafafa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.logo-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.logo-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.logo-side {
+  flex: 1;
+  min-width: 200px;
+}
+
+.logo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sticky-save-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  background: rgba(255, 255, 255, 0.96);
+  border-top: 1px solid #e5e7eb;
+  box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.06);
+}
+
+.sticky-tip {
+  font-size: 13px;
+  color: #b45309;
+}
+
+.sticky-actions {
+  display: flex;
+  gap: 8px;
+}
+
 @media (max-width: 992px) {
-  .company-page :deep(.el-card__body) {
-    padding: 12px;
+  .page-head {
+    flex-direction: column;
   }
+
+  .head-actions {
+    width: 100%;
+  }
+
+  .head-actions .el-button {
+    flex: 1;
+  }
+
   .company-form :deep(.el-form-item__label) {
     width: 100% !important;
     text-align: left;
     margin-bottom: 6px;
     line-height: 1.3;
   }
+
   .company-form :deep(.el-form-item__content) {
     margin-left: 0 !important;
   }
-  .logo-upload-row {
+
+  .logo-block,
+  .logo-side {
     width: 100%;
-    align-items: stretch;
-    gap: 6px;
+    min-width: 0;
   }
-  .logo-upload-row :deep(.el-upload),
-  .logo-upload-row :deep(.el-upload .el-button) {
-    width: 100%;
-  }
-  .upload-tip {
+
+  .logo-actions {
     width: 100%;
   }
-  .logo-link {
+
+  .logo-actions :deep(.el-upload),
+  .logo-actions :deep(.el-upload .el-button) {
     width: 100%;
   }
-  .logo-preview-img {
-    width: 100px;
-    height: 100px;
-  }
-  .actions {
-    text-align: left;
-    margin-top: 4px;
-  }
-  .actions .el-button {
-    width: 100%;
-    min-height: 38px;
+
+  .sticky-save-bar {
+    padding: 10px 12px;
   }
 }
 </style>
-

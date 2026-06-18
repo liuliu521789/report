@@ -41,7 +41,6 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       port: adminPort,
       proxy: {
-        // 批量导入/导出等接口可能耗时较长；避免开发代理默认超时过早断开
         '/api': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
         '/qc-yearbooks': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
         '/uploads': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
@@ -57,18 +56,13 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
-      // 路由级拆包 + 体积预算门禁
-      chunkSizeWarningLimit: 800, // 降低警告阈值，鼓励拆包
+      chunkSizeWarningLimit: 800,
       rollupOptions: {
         output: {
           manualChunks: {
-            // 核心 vendor 拆分
             vendor: ['vue', 'vue-router', 'pinia'],
-            // UI 库（Element Plus 体积大，可进一步按需但需 unplugin）
             ui: ['element-plus'],
-            // 图表库
             charts: ['echarts'],
-            // 其他大依赖
             utils: ['axios', 'mammoth']
           }
         }

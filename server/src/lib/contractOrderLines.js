@@ -102,7 +102,7 @@ function lineAmountsFromOrder(o) {
  * 从订单生成合同时：品名留空；填充型号、不含税单价、单位（吨）、数量（整数）、不含税金额、税率、税额、价税合计（无「单价」列）。
  * 订单数据取自 data_json 合并后的 display_data 及物理列（须传入 field_definitions）。
  */
-export function buildContractOrderLinesHtml(orders = [], definitions = null) {
+export function buildContractOrderLinesHtml(orders = [], definitions = null, modelToProductNameMap = {}) {
   const headers = CONTRACT_ORDER_LINE_HEADERS_FINAL;
   const head = headers.map((h, i) => `<th style="${i < 2 ? CELL_NOWRAP : CELL_STYLE}">${h}</th>`).join('');
 
@@ -111,13 +111,14 @@ export function buildContractOrderLinesHtml(orders = [], definitions = null) {
       const o = definitions?.length ? prepareOrderRowForContractHtml(raw, definitions) : raw;
       const d = o?.display_data || {};
       const productModel = esc(o?.product_model || d?.product_model);
+      const productName = modelToProductNameMap[productModel.toUpperCase()] || '';
       const qtyRaw = o?.quantity ?? d?.quantity ?? '';
       const quantity = esc(typeof qtyRaw === 'number' ? fmtInt(qtyRaw) : String(qtyRaw));
       const tonsCell = esc(fmtTonsFromOrder(o));
       const { netUnitStr, netAmountStr, taxRateCell, taxAmountStr, totalWithTaxStr } = lineAmountsFromOrder(o);
 
       return `<tr>
-        <td style="${CELL_NOWRAP}"></td>
+        <td style="${CELL_NOWRAP}">${esc(productName)}</td>
         <td style="${CELL_NOWRAP}">${productModel}</td>
         <td style="${CELL_STYLE}">${esc(netUnitStr)}</td>
         <td style="${CELL_STYLE}">${tonsCell}</td>

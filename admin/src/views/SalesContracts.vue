@@ -1,37 +1,6 @@
 <template>
   <div class="sales-contracts reports-style-page">
     <el-tabs v-model="tab">
-      <el-tab-pane v-if="perm('contract_management', 'template_manage')" label="合同模板" name="tpl">
-        <div class="toolbar">
-          <div class="left">
-            <el-input v-model="tplFilterQ" placeholder="筛选模板名称" clearable class="field-tpl-q" />
-            <el-button
-              v-if="perm('company', 'manage') || perm('company', 'view')"
-              plain
-              type="primary"
-              @click="$router.push('/company')"
-            >企业信息</el-button>
-            <span class="hint inline-hint">卖方公司名称等来自企业信息，对应报告中「公司信息」页。</span>
-          </div>
-          <div class="right">
-            <el-button type="primary" @click="goNewTemplate" icon=Plus>新建模板</el-button>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <el-table :data="filteredTemplates" border>
-            <el-table-column prop="name" label="模板名称" min-width="160" />
-            <el-table-column label="更新时间" width="180">
-              <template #default="{ row }">{{ $dt(row.updated_at) }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="200" fixed="right">
-              <template #default="{ row }">
-                <el-button link @click="goEditTemplate(row)" icon=Edit>编辑</el-button>
-                <el-button link type="danger" @click="removeTpl(row)" icon=Delete>删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-      </el-tab-pane>
       <el-tab-pane v-if="canAccessSalesContractWorkspace()" label="合同列表" name="list">
         <div class="toolbar">
           <div class="left">
@@ -40,22 +9,18 @@
               placeholder="合同编号 / 客户 / 标题"
               clearable
               class="field-q"
+              @input="onContractSearchInput"
+              @clear="onContractSearchInput"
               @keyup.enter="onContractSearch"
             />
-            <el-select v-model="contractStatus" placeholder="状态" clearable class="field-status" @change="onContractSearch">
+            <el-select v-model="contractStatus" placeholder="审核状态" clearable class="field-status" @change="onContractSearch">
               <el-option label="草稿" value="draft" />
               <el-option label="待审核" value="pending_review" />
               <el-option label="已通过" value="approved" />
               <el-option label="已驳回" value="rejected" />
             </el-select>
             <el-button type="primary" @click="onContractSearch" icon=Search>查询</el-button>
-            <el-button
-              v-if="perm('contract_management', 'contract_delete')"
-              type="danger"
-              plain
-              :disabled="!selectedContracts.length"
-              @click="confirmBulkDeleteContracts"
-             icon=Delete>批量删除</el-button>
+            <el-button :disabled="!hasContractActiveFilters" @click="resetContractFilters">重置</el-button>
           </div>
           <div class="right">
             <el-button
@@ -69,27 +34,72 @@
               type="primary"
               @click="$router.push('/sales/orders')"
             >去订单生成合同</el-button>
-            <el-button @click="loadContracts" icon=Refresh>刷新</el-button>
+            <el-button :loading="contractsLoading" @click="loadContracts" icon=Refresh>刷新</el-button>
           </div>
+        </div>
+        <div v-if="contractActiveFilterTags.length" class="contract-filter-tags">
+          <span class="contract-filter-tags__label">当前筛选</span>
+          <el-tag
+            v-for="tag in contractActiveFilterTags"
+            :key="tag.key"
+            closable
+            size="small"
+            type="info"
+            effect="plain"
+            class="contract-filter-tag"
+            @close="tag.onClose()"
+          >
+            {{ tag.label }}
+          </el-tag>
+          <el-button link type="primary" size="small" class="contract-filter-tags__clear" @click="resetContractFilters">
+            清空全部
+          </el-button>
+        </div>
+        <div v-if="perm('contract_management', 'contract_delete')" class="contract-batch-bar">
+          <span v-if="selectedContracts.length" class="contract-batch-bar__count">已选 {{ selectedContracts.length }} 条</span>
+          <el-button
+            type="danger"
+            plain
+            size="small"
+            :disabled="!selectedContracts.length"
+            @click="confirmBulkDeleteContracts"
+            icon=Delete
+          >批量删除</el-button>
         </div>
         <div class="table-wrap">
           <el-table
             ref="contractsTableRef"
             :data="contracts"
             border
-            class="contracts-list-table"
+            v-loading="contractsLoading"
+            class="contracts-list-table desktop-table"
             row-key="id"
             @selection-change="onContractSelectionChange"
+            @row-click="onContractRowClick"
           >
+            <template #empty>
+              <el-empty :description="contractListEmptyDescription" :image-size="72">
+                <el-button v-if="contractListEmptyIsFiltered" type="primary" plain @click="resetContractFilters">
+                  清空筛选
+                </el-button>
+                <el-button
+                  v-else-if="perm('contract_management', 'contract_generate')"
+                  type="primary"
+                  @click="$router.push('/sales/orders')"
+                >
+                  去订单生成合同
+                </el-button>
+              </el-empty>
+            </template>
             <el-table-column
               v-if="perm('contract_management', 'contract_delete')"
               type="selection"
               width="48"
               :selectable="contractRowSelectable"
             />
-            <el-table-column prop="contract_no" label="合同编号" width="168" />
+            <el-table-column prop="contract_no" label="合同编号" width="168" show-overflow-tooltip />
             <el-table-column prop="title" label="标题" min-width="140" show-overflow-tooltip />
-            <el-table-column prop="customer_name" label="客户" min-width="120" />
+            <el-table-column prop="customer_name" label="客户" min-width="120" show-overflow-tooltip />
             <el-table-column label="类型" width="92" align="center">
               <template #default="{ row }">
                 <el-tag v-if="row.contract_source === 'upload'" type="info" size="small">文档</el-tag>
@@ -110,51 +120,124 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column prop="created_by_username" label="创建人" width="100" />
+            <el-table-column label="开票状态" width="120" align="center">
+              <template #default="{ row }">
+                <el-tag
+                  v-if="row.status === 'approved' || row.invoice_status !== 'none'"
+                  :type="invoiceStatusTagType(row.invoice_status)"
+                  effect="light"
+                  size="small"
+                >{{ invoiceStatusLabel(row.invoice_status) }}</el-tag>
+                <span v-else class="invoice-status-na">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="created_by_username" label="创建人" width="100" show-overflow-tooltip />
             <el-table-column label="创建时间" width="170">
               <template #default="{ row }">{{ $dt(row.created_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="400" fixed="right">
+            <el-table-column label="操作" width="240" fixed="right" class-name="contracts-col-actions">
               <template #default="{ row }">
-                <el-button link type="primary" @click="openContractPreview(row)" icon=View>预览</el-button>
-                <el-button link @click="openDetail(row)">详情</el-button>
-                <el-tooltip
-                  v-if="isEditDisabled(row)"
-                  content="已审核通过的合同需要超级管理员授权才能编辑"
-                  placement="top"
-                >
-                  <el-button link type="info" disabled icon=Edit>编辑</el-button>
-                </el-tooltip>
-                <el-button v-else-if="canEditContract(row)" link type="primary" @click="goContractEditor(row)" icon=Edit>编辑</el-button>
-                <el-tooltip
-                  v-if="isDeleteDisabled(row)"
-                  content="已审核通过的合同需要超级管理员授权才能删除"
-                  placement="top"
-                >
-                  <el-button link type="info" disabled icon=Delete>删除</el-button>
-                </el-tooltip>
-                <el-button v-else-if="canDeleteContract(row)" link type="danger" @click="removeContract(row)" icon=Delete>删除</el-button>
-                <el-button
-                  v-if="contractSubmitToolbarAction(row) === 'submit'"
-                  link
-                  @click="openSubmit(row)"
-                  icon=Check
-                >提交审核</el-button>
-                <el-button
-                  v-else-if="contractSubmitToolbarAction(row) === 'withdraw'"
-                  link
-                  type="danger"
-                  @click="confirmWithdrawContractReview(row)"
-                >撤销审核</el-button>
-                <el-button
-                  v-if="row.status === 'pending_review' && (isSuperAdmin() || isReviewer(row))"
-                  link
-                  type="warning"
-                  @click="openReview(row)"
-                >审核</el-button>
+                <div class="contracts-row-actions" @click.stop>
+                  <el-button
+                    v-for="act in getContractRowPrimaryActions(row)"
+                    :key="act.key"
+                    link
+                    :type="act.type || 'primary'"
+                    @click="onContractRowAction(row, act.key)"
+                  >{{ act.label }}</el-button>
+                  <el-dropdown
+                    v-if="getContractRowSecondaryActions(row).length"
+                    trigger="click"
+                    @command="(key) => onContractRowAction(row, key)"
+                  >
+                    <el-button link type="primary">更多</el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item
+                          v-for="act in getContractRowSecondaryActions(row)"
+                          :key="act.key"
+                          :command="act.key"
+                          :divided="act.divided"
+                        >
+                          {{ act.label }}
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
               </template>
             </el-table-column>
           </el-table>
+          <div class="contracts-mobile-list" v-loading="contractsLoading">
+            <div v-for="row in contracts" :key="'m-' + row.id" class="contracts-mobile-card" @click="openDetail(row)">
+              <div class="contracts-mobile-head">
+                <div class="contracts-mobile-head-main">
+                  <strong class="contracts-mobile-no">{{ row.contract_no || '—' }}</strong>
+                  <span class="contracts-mobile-customer">{{ row.customer_name || '—' }}</span>
+                </div>
+                <div
+                  class="contracts-status-cell contracts-status-cell--flow"
+                  @click.stop="openApprovalFlowDrawer(row)"
+                >
+                  <SalesStatusPill kind="contract" :status="row.status" :reject-reason="row.last_reject_comment || ''" />
+                </div>
+              </div>
+              <div v-if="row.title" class="contracts-mobile-line">
+                <span>标题</span>
+                <span>{{ row.title }}</span>
+              </div>
+              <div class="contracts-mobile-line">
+                <span>类型</span>
+                <span>{{ row.contract_source === 'upload' ? '文档' : '模板' }}</span>
+              </div>
+              <div v-if="row.status === 'approved' || row.invoice_status !== 'none'" class="contracts-mobile-line">
+                <span>开票</span>
+                <span>{{ invoiceStatusLabel(row.invoice_status) }}</span>
+              </div>
+              <div class="contracts-mobile-line">
+                <span>创建</span>
+                <span>{{ row.created_by_username || '—' }} · {{ $dt(row.created_at) }}</span>
+              </div>
+              <div class="contracts-mobile-actions" @click.stop>
+                <el-button
+                  v-for="act in getContractRowPrimaryActions(row)"
+                  :key="'m-' + act.key"
+                  size="small"
+                  :type="act.type || 'primary'"
+                  plain
+                  @click="onContractRowAction(row, act.key)"
+                >{{ act.label }}</el-button>
+                <el-dropdown
+                  v-if="getContractRowSecondaryActions(row).length"
+                  trigger="click"
+                  @command="(key) => onContractRowAction(row, key)"
+                >
+                  <el-button size="small">更多</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item
+                        v-for="act in getContractRowSecondaryActions(row)"
+                        :key="'m-' + act.key"
+                        :command="act.key"
+                        :divided="act.divided"
+                      >
+                        {{ act.label }}
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
+            </div>
+            <el-empty
+              v-if="!contracts.length && !contractsLoading"
+              :description="contractListEmptyDescription"
+              :image-size="72"
+            >
+              <el-button v-if="contractListEmptyIsFiltered" type="primary" plain @click="resetContractFilters">
+                清空筛选
+              </el-button>
+            </el-empty>
+          </div>
         </div>
         <div class="pagination-wrap">
           <el-pagination
@@ -169,7 +252,44 @@
           />
         </div>
       </el-tab-pane>
-      <el-tab-pane v-if="perm('process_management', 'view_flow')" label="流程追溯" name="flow">
+      <el-tab-pane v-if="perm('contract_management', 'template_manage')" label="合同模板" name="tpl">
+        <div class="toolbar">
+          <div class="left">
+            <el-input v-model="tplFilterQ" placeholder="筛选模板名称" clearable class="field-tpl-q" />
+            <el-button
+              v-if="perm('company', 'manage') || perm('company', 'view')"
+              plain
+              type="primary"
+              @click="$router.push('/company')"
+            >企业信息</el-button>
+            <span class="hint inline-hint">卖方公司名称等来自企业信息，对应报告中「公司信息」页。</span>
+          </div>
+          <div class="right">
+            <el-button type="primary" @click="goNewTemplate" icon=Plus>新建模板</el-button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <el-table :data="filteredTemplates" border>
+            <template #empty>
+              <el-empty :description="tplFilterQ.trim() ? '没有匹配的模板' : '暂无合同模板'" :image-size="64">
+                <el-button v-if="!tplFilterQ.trim()" type="primary" @click="goNewTemplate" icon=Plus>新建模板</el-button>
+                <el-button v-else plain @click="tplFilterQ = ''">清空筛选</el-button>
+              </el-empty>
+            </template>
+            <el-table-column prop="name" label="模板名称" min-width="160" />
+            <el-table-column label="更新时间" width="180">
+              <template #default="{ row }">{{ $dt(row.updated_at) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="200" fixed="right">
+              <template #default="{ row }">
+                <el-button link @click="goEditTemplate(row)" icon=Edit>编辑</el-button>
+                <el-button link type="danger" :disabled="row.is_system" @click="removeTpl(row)" icon=Delete>删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-tab-pane>
+      <el-tab-pane v-if="perm('process_management', 'view_flow')" label="订单流程追溯" name="flow">
         <div class="toolbar flow-toolbar-wrap">
           <div class="left">
             <el-input
@@ -181,7 +301,7 @@
             />
             <el-button size="small" type="primary" @click="loadFlow" icon=Search>查询</el-button>
             <el-button size="small" @click="loadFlow" icon=Refresh>刷新</el-button>
-            <span class="hint inline-hint">按订单汇总，与合同列表分开；展开查看流程步骤。</span>
+            <span class="hint inline-hint">关联订单的流转记录（非合同审批流程）；展开查看订单状态变更步骤。</span>
           </div>
         </div>
         <div v-loading="flowLoading" class="flow-body">
@@ -205,12 +325,12 @@
                   <el-step
                     v-for="l in g.logs"
                     :key="l.id"
-                    :title="`${orderFlowStatusZh(l.from_status)} → ${orderFlowStatusZh(l.to_status)}`"
+                    :title="`[订单] ${orderFlowStatusZh(l.from_status)} → ${orderFlowStatusZh(l.to_status, { fromStatus: l.from_status })}`"
                   >
                     <template #description>
                       <div class="flow-step-desc">
                         <div class="flow-step-time">{{ $dt(l.created_at) }}</div>
-                        <div>操作人：{{ l.actor_username || '—' }}</div>
+                        <div>操作人：{{ approvalFlowActorDisplay(l) }}</div>
                         <div v-if="l.remark">备注：{{ l.remark }}</div>
                       </div>
                     </template>
@@ -256,12 +376,12 @@
                 <el-step
                   v-for="l in g.logs"
                   :key="l.id"
-                  :title="`${orderFlowStatusZh(l.from_status)} → ${orderFlowStatusZh(l.to_status)}`"
+                  :title="`[订单] ${orderFlowStatusZh(l.from_status)} → ${orderFlowStatusZh(l.to_status, { fromStatus: l.from_status })}`"
                 >
                   <template #description>
                     <div class="flow-step-desc">
                       <div class="flow-step-time">{{ $dt(l.created_at) }}</div>
-                      <div>操作人：{{ l.actor_username || '—' }}</div>
+                      <div>操作人：{{ approvalFlowActorDisplay(l) }}</div>
                       <div v-if="l.remark">备注：{{ l.remark }}</div>
                     </div>
                   </template>
@@ -347,6 +467,24 @@
             </div>
           </template>
           <el-empty v-else description="暂无审批记录" :image-size="64" />
+        </div>
+      </template>
+      <template v-if="detail?.contract" #footer>
+        <div class="detail-drawer-footer">
+          <el-button @click="openContractPreview(detail.contract)" icon=View>预览</el-button>
+          <el-button v-if="canEditContract(detail.contract)" type="primary" plain @click="goContractEditor(detail.contract)" icon=Edit>编辑</el-button>
+          <el-button
+            v-if="contractSubmitToolbarAction(detail.contract) === 'submit'"
+            type="primary"
+            @click="openSubmit(detail.contract)"
+            icon=Check
+          >提交审核</el-button>
+          <el-button
+            v-if="detail.contract.status === 'pending_review' && (isSuperAdmin() || isReviewer(detail.contract))"
+            type="warning"
+            @click="openReview(detail.contract)"
+          >审核</el-button>
+          <el-button v-if="canOpenInvoice(detail.contract)" type="success" plain @click="openInvoiceDialog(detail.contract)" icon=Tickets>开票</el-button>
         </div>
       </template>
     </el-drawer>
@@ -544,6 +682,13 @@
       </template>
     </el-dialog>
 
+    <SalesContractInvoiceDialog
+      v-model:visible="invoiceDialogOpen"
+      :contract-id="invoiceContractId"
+      :contract-no="invoiceContractNo"
+      @changed="loadContracts"
+    />
+
   </div>
 </template>
 
@@ -572,11 +717,14 @@ import {
   downloadSalesContractDocx,
   fetchSalesContractDocumentBlob
 } from '../api';
+import { downloadContractFile, contractDownloadErrorMessage } from '../utils/contractDownload.js';
 import mammoth from 'mammoth';
 import SalesStatusPill from '../components/SalesStatusPill.vue';
+import SalesContractInvoiceDialog from './sales-contracts/SalesContractInvoiceDialog.vue';
 import {
   finalizeContractBodyForPreview,
   printHtmlDocumentInHiddenIframe,
+  printHtmlInNewWindow,
   printContractPreviewFromHtml,
   escapeHtmlText
 } from '../utils/contractPreviewHtml';
@@ -585,7 +733,7 @@ import { startDownload } from '../composables/useDownloadProgress.js';
 
 export default {
   name: 'SalesContracts',
-  components: { SalesStatusPill },
+  components: { SalesStatusPill, SalesContractInvoiceDialog },
   data() {
     return {
       /** 首屏前在 created 中按权限设为 tpl | list | flow，避免仅有模板/流程权时 v-model=list 无对应 pane */
@@ -593,6 +741,7 @@ export default {
       templates: [],
       tplFilterQ: '',
       contracts: [],
+      contractsLoading: false,
       contractQ: '',
       contractStatus: '',
       contractPage: 1,
@@ -638,7 +787,10 @@ export default {
       uploadDocCustomers: [],
       uploadDocCustomersLoading: false,
       uploadDocSubmitting: false,
-      flowOrderNo: ''
+      flowOrderNo: '',
+      invoiceDialogOpen: false,
+      invoiceContractId: null,
+      invoiceContractNo: ''
     };
   },
   computed: {
@@ -682,6 +834,10 @@ export default {
         CUSTOMER_ADDRESS: c.customer_address != null ? String(c.customer_address) : '',
         CUSTOMER_CONTACT: c.customer_contact != null ? String(c.customer_contact) : '',
         CUSTOMER_PHONE: c.customer_phone != null ? String(c.customer_phone) : '',
+        CUSTOMER_FAX: c.customer_fax != null ? String(c.customer_fax) : '',
+        CUSTOMER_BANK: c.customer_bank != null ? String(c.customer_bank) : '',
+        CUSTOMER_ACCOUNT: c.customer_account != null ? String(c.customer_account) : '',
+        CUSTOMER_TAX_ID: c.customer_tax_id != null ? String(c.customer_tax_id) : '',
         CONTRACT_NO: c.contract_no != null ? String(c.contract_no) : '',
         COMPANY_NAME_ZH: c.company_name_zh != null ? String(c.company_name_zh) : ''
       };
@@ -694,6 +850,53 @@ export default {
     /** 合同详情内嵌审批时间轴 */
     detailApprovalTimelineSteps() {
       return this.buildApprovalTimelineSteps(this.detail?.audits);
+    },
+    hasContractActiveFilters() {
+      return this.contractActiveFilterTags.length > 0;
+    },
+    contractActiveFilterTags() {
+      const tags = [];
+      const q = (this.contractQ || '').trim();
+      if (q) {
+        tags.push({
+          key: 'q',
+          label: `关键词：${q}`,
+          onClose: () => {
+            this.contractQ = '';
+            this.onContractSearch();
+          }
+        });
+      }
+      if (this.contractStatus) {
+        tags.push({
+          key: 'status',
+          label: `审核状态：${this.contractStatusLabel(this.contractStatus)}`,
+          onClose: () => {
+            this.contractStatus = '';
+            this.onContractSearch();
+          }
+        });
+      }
+      const cc = this.$route?.query?.customer_code;
+      if (cc) {
+        tags.push({
+          key: 'customer_code',
+          label: `客户编号：${cc}`,
+          onClose: () => {
+            const rest = { ...this.$route.query };
+            delete rest.customer_code;
+            this.$router.replace({ path: '/sales/contracts', query: rest });
+          }
+        });
+      }
+      return tags;
+    },
+    contractListEmptyIsFiltered() {
+      return this.hasContractActiveFilters;
+    },
+    contractListEmptyDescription() {
+      if (this.contractListEmptyIsFiltered) return '没有符合筛选条件的合同';
+      return '暂无合同，可从销售订单生成或上传文档合同';
     },
     ...mapState(useAuthStore, ['permissions', 'accountType'])
   },
@@ -761,6 +964,7 @@ export default {
     await this.tryOpenReviewFromRouteQuery();
   },
   beforeUnmount() {
+    clearTimeout(this._contractSearchTimer);
     this.detailOpen = false;
     this.approvalFlowDrawerOpen = false;
     this.uploadDocOpen = false;
@@ -817,6 +1021,32 @@ export default {
         return;
       }
       this.$router.push(`/sales/contracts/editor/${row.id}`);
+    },
+    /** 仅「已审核通过」合同显示开票入口；权限与合同提交/生成同源 */
+    canOpenInvoice(row) {
+      if (!row || row.status !== 'approved') return false;
+      return (
+        isSuperAdmin() ||
+        perm('contract_management', 'contract_submit') ||
+        perm('contract_management', 'contract_generate') ||
+        perm('contract_management', 'contract_review')
+      );
+    },
+    openInvoiceDialog(row) {
+      if (!row?.id) return;
+      this.invoiceContractId = row.id;
+      this.invoiceContractNo = row.contract_no || '';
+      this.invoiceDialogOpen = true;
+    },
+    invoiceStatusLabel(s) {
+      if (s === 'full') return '已开票';
+      if (s === 'partial') return '部分开票';
+      return '未开票';
+    },
+    invoiceStatusTagType(s) {
+      if (s === 'full') return 'success';
+      if (s === 'partial') return 'warning';
+      return 'info';
     },
     goNewTemplate() {
       this.$router.push('/sales/contracts/templates/new');
@@ -1183,8 +1413,115 @@ export default {
     onContractSelectionChange(rows) {
       this.selectedContracts = rows || [];
     },
+    contractStatusLabel(status) {
+      const map = {
+        draft: '草稿',
+        pending_review: '待审核',
+        approved: '已通过',
+        rejected: '已驳回'
+      };
+      return map[status] || status || '';
+    },
+    onContractSearchInput() {
+      clearTimeout(this._contractSearchTimer);
+      this._contractSearchTimer = setTimeout(() => {
+        this.onContractSearch();
+      }, 400);
+    },
+    resetContractFilters() {
+      this.contractQ = '';
+      this.contractStatus = '';
+      const cc = this.$route?.query?.customer_code;
+      if (cc) {
+        const rest = { ...this.$route.query };
+        delete rest.customer_code;
+        this.$router.replace({ path: '/sales/contracts', query: rest });
+      }
+      this.onContractSearch();
+    },
+    buildContractRowActions(row) {
+      const actions = [];
+      const push = (key, label, opts = {}) => actions.push({ key, label, ...opts });
+
+      if (row?.status === 'pending_review' && (isSuperAdmin() || this.isReviewer(row))) {
+        push('review', '审核', { type: 'warning', order: 0 });
+      }
+      const submitAction = this.contractSubmitToolbarAction(row);
+      if (submitAction === 'submit') push('submit', '提交审核', { order: 1 });
+      if (submitAction === 'withdraw') push('withdraw', '撤销审核', { type: 'danger', order: 1 });
+
+      push('preview', '预览', { order: 2 });
+      push('detail', '详情', { order: 3 });
+      if (this.canOpenInvoice(row)) push('invoice', '开票', { type: 'success', order: 4 });
+      if (this.canEditContract(row)) push('edit', '编辑', { order: 5 });
+      push('download_word', '下载 Word', { order: 6 });
+      push('download_pdf', '下载 PDF', { order: 7 });
+      if (this.canDeleteContract(row)) push('delete', '删除', { type: 'danger', order: 99, divided: true });
+
+      actions.sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
+      return actions;
+    },
+    splitContractRowActions(row) {
+      const all = this.buildContractRowActions(row);
+      const primary = [];
+      const used = new Set();
+      const pick = (key) => {
+        if (primary.length >= 3 || used.has(key)) return;
+        const act = all.find((a) => a.key === key);
+        if (!act) return;
+        primary.push(act);
+        used.add(key);
+      };
+      for (const key of ['review', 'submit', 'withdraw', 'preview', 'detail']) pick(key);
+      for (const act of all) {
+        if (primary.length >= 3) break;
+        if (!used.has(act.key)) pick(act.key);
+      }
+      const secondary = all.filter((a) => !used.has(a.key));
+      return { primary, secondary };
+    },
+    getContractRowPrimaryActions(row) {
+      return this.splitContractRowActions(row).primary;
+    },
+    getContractRowSecondaryActions(row) {
+      return this.splitContractRowActions(row).secondary;
+    },
+    onContractRowAction(row, key) {
+      if (!row?.id || !key) return;
+      switch (key) {
+        case 'review':
+          return this.openReview(row);
+        case 'submit':
+          return this.openSubmit(row);
+        case 'withdraw':
+          return this.confirmWithdrawContractReview(row);
+        case 'preview':
+          return this.openContractPreview(row);
+        case 'detail':
+          return this.openDetail(row);
+        case 'invoice':
+          return this.openInvoiceDialog(row);
+        case 'edit':
+          return this.goContractEditor(row);
+        case 'download_word':
+          return this.onDownloadContract(row, 'word');
+        case 'download_pdf':
+          return this.onDownloadContract(row, 'pdf');
+        case 'delete':
+          return this.removeContract(row);
+        default:
+          break;
+      }
+    },
+    onContractRowClick(row, column, event) {
+      if (column?.type === 'selection') return;
+      const target = event?.target;
+      if (target?.closest?.('button, a, .el-dropdown, .contracts-status-cell--flow, .el-checkbox')) return;
+      this.openDetail(row);
+    },
     async loadContracts() {
       if (!canAccessSalesContractWorkspace()) return;
+      this.contractsLoading = true;
       try {
         const cc = this.$route?.query?.customer_code;
         const d = await listSalesContracts({
@@ -1208,6 +1545,8 @@ export default {
         this.contracts = [];
         this.contractTotal = 0;
         this.$message.error(this.$apiUserMsg(e, '加载合同列表失败'));
+      } finally {
+        this.contractsLoading = false;
       }
     },
     onContractSearch() {
@@ -1225,6 +1564,7 @@ export default {
     },
     async openContractPreview(row) {
       if (!row?.id) return;
+      this.previewContractId = row.id;
       this.contractPreviewTitle = `合同预览 · ${row.contract_no || row.id}`;
       this.contractPreviewOpen = true;
       this.contractPreviewLoading = true;
@@ -1240,10 +1580,12 @@ export default {
         this.contractPreviewImageUrl = '';
       }
       this.contractPreviewDocName = '';
-      this.previewContractId = row.id;
       try {
         const d = await getSalesContract(row.id);
         const c = d?.contract;
+        const cust = c?.customer_name || row.customer_name || '';
+        const no = c?.contract_no || row.contract_no || `#${row.id}`;
+        this.contractPreviewTitle = `${cust} · 销售合同 · ${no}`;
         if (c?.contract_source === 'upload') {
           const mime = String(c.document_mime_type || '').toLowerCase();
           const fn = String(c.document_original_filename || '').toLowerCase();
@@ -1279,16 +1621,20 @@ export default {
           this.contractPreviewMode = 'other';
           return;
         }
-        const vars = c
-          ? {
-              CUSTOMER_NAME: c.customer_name != null ? String(c.customer_name) : '',
-              CUSTOMER_ADDRESS: c.customer_address != null ? String(c.customer_address) : '',
-              CUSTOMER_CONTACT: c.customer_contact != null ? String(c.customer_contact) : '',
-              CUSTOMER_PHONE: c.customer_phone != null ? String(c.customer_phone) : '',
-              CONTRACT_NO: c.contract_no != null ? String(c.contract_no) : '',
-              COMPANY_NAME_ZH: c.company_name_zh != null ? String(c.company_name_zh) : ''
-            }
-          : null;
+          const vars = c
+            ? {
+                CUSTOMER_NAME: c.customer_name != null ? String(c.customer_name) : '',
+                CUSTOMER_ADDRESS: c.customer_address != null ? String(c.customer_address) : '',
+                CUSTOMER_CONTACT: c.customer_contact != null ? String(c.customer_contact) : '',
+                CUSTOMER_PHONE: c.customer_phone != null ? String(c.customer_phone) : '',
+                CUSTOMER_FAX: c.customer_fax != null ? String(c.customer_fax) : '',
+                CUSTOMER_BANK: c.customer_bank != null ? String(c.customer_bank) : '',
+                CUSTOMER_ACCOUNT: c.customer_account != null ? String(c.customer_account) : '',
+                CUSTOMER_TAX_ID: c.customer_tax_id != null ? String(c.customer_tax_id) : '',
+                CONTRACT_NO: c.contract_no != null ? String(c.contract_no) : '',
+                COMPANY_NAME_ZH: c.company_name_zh != null ? String(c.company_name_zh) : ''
+              }
+            : null;
         this.contractPreviewHtml = finalizeContractBodyForPreview(
           c?.body_html,
           d?.orders || [],
@@ -1315,6 +1661,14 @@ export default {
         this.contractPreviewImageUrl = '';
       }
       this.previewContractId = null;
+    },
+    async onDownloadContract(row, format) {
+      if (!row?.id) return;
+      try {
+        await downloadContractFile(row.id, format);
+      } catch (e) {
+        this.$message.error(contractDownloadErrorMessage(e, this.$apiUserMsg(e, '下载失败')));
+      }
     },
     async downloadPreviewContractFile() {
       if (!this.previewContractId) return;
@@ -1347,8 +1701,8 @@ export default {
     printContractPreview() {
       const docTitle = (this.contractPreviewTitle && String(this.contractPreviewTitle).trim()) || '合同打印';
       if (this.contractPreviewMode === 'pdf' && this.contractPreviewPdfUrl) {
-        const w = window.open(this.contractPreviewPdfUrl, '_blank');
-        if (!w) this.$message.warning('请允许弹窗后重试打印');
+        const pdfHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtmlText(docTitle)}</title><style>body{margin:0;height:100vh;}embed{width:100%;height:100%;border:none;}</style></head><body><embed src="${this.contractPreviewPdfUrl}" type="application/pdf"></body></html>`;
+        printHtmlInNewWindow(pdfHtml);
         return;
       }
       if (this.contractPreviewMode === 'docx' && this.contractPreviewDocxHtml) {
@@ -1360,7 +1714,7 @@ export default {
           table{border-collapse:collapse;} td,th{border:1px solid #ccc;padding:4px 8px;}
           @media print{@page{margin:0;}body{padding:12mm;}}
           </style></head><body>${docHtml}</body></html>`;
-        printHtmlDocumentInHiddenIframe(full);
+        printHtmlInNewWindow(full);
         return;
       }
       if (this.contractPreviewMode === 'image' && this.contractPreviewImageUrl) {
@@ -1375,7 +1729,7 @@ export default {
           body{margin:0;text-align:center;padding:12px;} img{max-width:100%;height:auto;}
           @media print{@page{margin:0;} body{padding:10mm;} img{max-width:100%;}}
           </style></head><body><img src="${srcEsc}" alt="" /></body></html>`;
-        printHtmlDocumentInHiddenIframe(full);
+        printHtmlInNewWindow(full);
         return;
       }
       const html = this.contractPreviewHtml;
@@ -1415,6 +1769,10 @@ export default {
       return row;
     },
     async removeTpl(row) {
+      if (row.is_system) {
+        this.$message.warning('系统默认模板不可删除');
+        return;
+      }
       try {
         await this.$confirm('删除该模板？', '提示', { type: 'warning' });
       } catch {
@@ -1688,7 +2046,125 @@ export default {
   overflow-x: auto;
 }
 .table-wrap :deep(.contracts-list-table) {
-  min-width: 920px;
+  min-width: 960px;
+}
+.contract-filter-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-bottom: 10px;
+}
+.contract-filter-tags__label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  line-height: 24px;
+}
+.contract-filter-tag {
+  max-width: min(100%, 320px);
+}
+.contract-filter-tag :deep(.el-tag__content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.contract-filter-tags__clear {
+  flex-shrink: 0;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+.contract-batch-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #eef2f7;
+}
+.contract-batch-bar__count {
+  font-size: 13px;
+  color: #64748b;
+}
+.contracts-row-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+}
+.contracts-row-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+:deep(.contracts-col-actions .cell) {
+  overflow: visible;
+}
+.contracts-mobile-list {
+  display: none;
+}
+.contracts-mobile-card {
+  border: 1px solid #ebeef5;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.contracts-mobile-card:active {
+  border-color: var(--el-color-primary-light-5);
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.08);
+}
+.contracts-mobile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.contracts-mobile-head-main {
+  min-width: 0;
+  flex: 1;
+}
+.contracts-mobile-no {
+  display: block;
+  font-size: 15px;
+  line-height: 1.35;
+  word-break: break-all;
+}
+.contracts-mobile-customer {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #909399;
+}
+.contracts-mobile-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 4px;
+  color: #606266;
+}
+.contracts-mobile-line > span:first-child {
+  flex-shrink: 0;
+  color: #909399;
+}
+.contracts-mobile-line > span:last-child {
+  text-align: right;
+  word-break: break-word;
+}
+.contracts-mobile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f0f2f5;
 }
 .upload-doc-meta {
   display: flex;
@@ -1853,6 +2329,12 @@ export default {
   font-size: 13px;
   line-height: 1.6;
 }
+.detail-drawer-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
 .meta-status {
   display: flex;
   align-items: center;
@@ -1874,6 +2356,9 @@ export default {
 }
 .meta-status-pill-hit:focus-visible {
   box-shadow: 0 0 0 2px var(--el-color-primary-light-5);
+}
+.invoice-status-na {
+  color: #c0c4cc;
 }
 .contracts-status-cell {
   display: flex;
@@ -2187,6 +2672,17 @@ export default {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+@media (max-width: 768px) {
+  .contracts-list-table.desktop-table {
+    display: none;
+  }
+  .contracts-mobile-list {
+    display: block;
+  }
+  .contract-batch-bar {
+    margin-bottom: 8px;
+  }
 }
 @media (max-width: 992px) {
   .sales-contracts .toolbar {

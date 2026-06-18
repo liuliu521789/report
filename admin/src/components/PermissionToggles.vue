@@ -93,6 +93,7 @@
     <div class="perm-block">
       <div class="perm-title">销售 · 流程（module=process_management）</div>
       <el-checkbox v-model="inner.process_management.view_flow" @change="emit">流程状态追溯</el-checkbox>
+      <el-checkbox v-model="inner.process_management.edit_flow" @change="emit">配置订单审核流程</el-checkbox>
     </div>
     <div class="perm-block">
       <div class="perm-title">销售 · 数据（module=data_management）</div>

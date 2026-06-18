@@ -1,5 +1,5 @@
 /**
- * 合同签章区买卖双方：可编辑字段名、可增删行；落库 HTML 跳过内容为空的行。
+ * 合同签章区买卖双方：可编辑字段名、可增删行。
  */
 
 /** @typedef {{ label: string, value?: string, fallback?: string }} PartyFieldItem */
@@ -20,13 +20,13 @@ export const DEFAULT_PARTY_SELLER_ITEMS = [
 
 export const DEFAULT_PARTY_BUYER_ITEMS = [
   { label: '单位', value: '', fallback: PARTY_FALLBACK_CUSTOMER },
-  { label: '地址', value: '' },
-  { label: '联系人', value: '' },
-  { label: '电话', value: '' },
-  { label: '传真', value: '' },
-  { label: '开户银行', value: '' },
-  { label: '账号', value: '' },
-  { label: '税号', value: '' }
+  { label: '地址', value: '', fallback: '{{CUSTOMER_ADDRESS}}' },
+  { label: '联系人', value: '', fallback: '{{CUSTOMER_CONTACT}}' },
+  { label: '电话', value: '', fallback: '{{CUSTOMER_PHONE}}' },
+  { label: '传真', value: '', fallback: '{{CUSTOMER_FAX}}' },
+  { label: '开户银行', value: '', fallback: '{{CUSTOMER_BANK}}' },
+  { label: '账号', value: '', fallback: '{{CUSTOMER_ACCOUNT}}' },
+  { label: '税号', value: '', fallback: '{{CUSTOMER_TAX_ID}}' }
 ];
 
 const LEGACY_SELLER = [
@@ -42,13 +42,13 @@ const LEGACY_SELLER = [
 
 const LEGACY_BUYER = [
   ['单位', 'buyerUnit', PARTY_FALLBACK_CUSTOMER],
-  ['地址', 'buyerAddress', ''],
-  ['联系人', 'buyerContact', ''],
-  ['电话', 'buyerPhone', ''],
-  ['传真', 'buyerFax', ''],
-  ['开户银行', 'buyerBank', ''],
-  ['账号', 'buyerAccount', ''],
-  ['税号', 'buyerTaxNo', '']
+  ['地址', 'buyerAddress', '{{CUSTOMER_ADDRESS}}'],
+  ['联系人', 'buyerContact', '{{CUSTOMER_CONTACT}}'],
+  ['电话', 'buyerPhone', '{{CUSTOMER_PHONE}}'],
+  ['传真', 'buyerFax', '{{CUSTOMER_FAX}}'],
+  ['开户银行', 'buyerBank', '{{CUSTOMER_BANK}}'],
+  ['账号', 'buyerAccount', '{{CUSTOMER_ACCOUNT}}'],
+  ['税号', 'buyerTaxNo', '{{CUSTOMER_TAX_ID}}']
 ];
 
 function cloneItems(items) {
@@ -124,7 +124,6 @@ export function renderPartyItemsInnerHtml(items, esc) {
       else if (item.fallback === PARTY_FALLBACK_CUSTOMER) value = '{{CUSTOMER_NAME}}';
       else value = String(item.fallback).trim();
     }
-    if (!value) continue;
     lines.push(`${esc(label)}：${esc(value)}`);
   }
   return lines.join('<br>\n        ');

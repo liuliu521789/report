@@ -434,6 +434,7 @@ router.get('/me', requireAuth, async (req, res) => {
   const [rows] = await pool.query(
     `SELECT u.id, u.username, u.real_name AS realName, u.account_type AS accountType,
             c.code AS employeeCategoryCode,
+            c.name_zh AS employeeCategoryName,
             IFNULL(force_change_password, 0) AS forceChangePassword,
             u.totp_enabled_at AS totpEnabledAt,
             IFNULL(u.require_two_factor, 0) AS userRequireTwoFactor
@@ -463,6 +464,7 @@ router.get('/me', requireAuth, async (req, res) => {
       ...req.user,
       realName: row.realName || req.user.realName || req.user.username,
       employeeCategoryCode: row.employeeCategoryCode || req.user.employeeCategoryCode || null,
+      employeeCategoryName: row.employeeCategoryName || null,
       forceChangePassword: !!row.forceChangePassword,
       totpEnabled: !!row.totpEnabledAt
     },

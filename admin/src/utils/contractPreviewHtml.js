@@ -158,11 +158,15 @@ table.contract-header-meta td,table.contract-header-meta th{border:0 none!import
 .party-table td{text-align:left;font-size:14px!important;line-height:1.35!important;padding:5px 8px!important;}
 .party-table .party-col-title{text-align:center!important;font-weight:700;margin-bottom:4px;display:block;}
 /* 屏上约 A4 版心宽：210mm - 左右页边距 */
-.print-wrap{max-width:calc(210mm - ${left + right}mm);margin:0 auto;padding:${top}mm ${right}mm ${bottom}mm ${left}mm;box-sizing:content-box;}
+.print-wrap{max-width:210mm;margin:0 auto;padding:${top}mm ${right}mm ${bottom}mm ${left}mm;box-sizing:border-box;}
 @media print{
   @page{size:A4;margin:0;}
   html,body{margin:0!important;padding:0!important;background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .print-wrap{max-width:none;margin:0;padding:${top}mm ${right}mm ${bottom}mm ${left}mm;box-sizing:border-box;}
+  table.contract-order-lines{width:100%!important;table-layout:auto;}
+  table.contract-order-lines th,table.contract-order-lines td{white-space:normal!important;font-size:11px;letter-spacing:0;padding:4px 10px!important;text-align:center!important;vertical-align:middle!important;font-variant-numeric:tabular-nums;}
+  table.contract-order-lines th:first-child,table.contract-order-lines td:first-child{white-space:nowrap!important;}
+  table.contract-order-lines tbody tr:last-child td{white-space:nowrap!important;}
 }`;
 }
 
@@ -266,9 +270,40 @@ export function printHtmlDocumentInHiddenIframe(fullDocumentHtml) {
   }
 }
 
-/** 合同正文打印：版式同 buildContractPreviewPrintWindowHtml，经隐藏 iframe 调出打印对话框 */
+/**
+ * 在新窗口中打印完整 HTML 文档，确保浏览器用文档自身的 <title> 作为 PDF 文件名。
+ * 弹窗被拦截时回退到隐藏 iframe。
+ */
+export function printHtmlInNewWindow(fullHtml) {
+  const w = window.open('', '_blank', 'width=800,height=600,left=100,top=100');
+  if (!w) {
+    printHtmlDocumentInHiddenIframe(fullHtml);
+    return;
+  }
+  w.document.write(fullHtml);
+  w.document.close();
+  const cleanup = () => {
+    try { w.close(); } catch { /* ignore */ }
+  };
+  const runPrint = () => {
+    try {
+      w.focus();
+      w.print();
+    } catch {
+      cleanup();
+    }
+  };
+  w.addEventListener('afterprint', cleanup, { once: true });
+  if (w.document.readyState === 'complete') {
+    window.setTimeout(runPrint, 100);
+  } else {
+    w.addEventListener('load', runPrint, { once: true });
+  }
+}
+
+/** 合同正文打印：版式同 buildContractPreviewPrintWindowHtml */
 export function printContractPreviewFromHtml(innerHtml, documentTitle = '合同打印') {
-  printHtmlDocumentInHiddenIframe(buildContractPreviewPrintWindowHtml(innerHtml, documentTitle));
+  printHtmlInNewWindow(buildContractPreviewPrintWindowHtml(innerHtml, documentTitle));
 }
 
 /**

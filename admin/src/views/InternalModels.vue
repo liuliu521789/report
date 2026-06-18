@@ -3,18 +3,22 @@
     <div class="page-header">
       <h2>内部型号管理</h2>
       <div class="toolbar">
-        <el-input
-          v-model="searchQuery"
-          placeholder="搜索编码 / 名称"
-          style="width: 240px"
-          clearable
-          @keyup.enter="loadData"
-          @clear="loadData"
-        >
-          <template #prefix>
-            <el-icon><Search /></el-icon>
-          </template>
-        </el-input>
+        <div class="search-group">
+          <el-input
+            v-model="searchQuery"
+            placeholder="搜索编码 / 客户型号"
+            style="width: 200px"
+            class="search-input"
+            clearable
+            @keyup.enter="loadData"
+            @clear="loadData"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <el-button type="primary" class="search-btn" @click="loadData">搜索</el-button>
+        </div>
         <el-select
           v-model="statusFilter"
           placeholder="状态"
@@ -69,6 +73,9 @@
         >
           导出选中
         </el-button>
+
+        <el-button icon="Download" @click="exportAll">导出全部</el-button>
+        <el-button v-if="hasEditPerm" @click="downloadTemplate" icon=Download>下载导入模板</el-button>
         <el-button @click="loadData" icon=Refresh>刷新</el-button>
       </div>
     </div>
@@ -77,7 +84,7 @@
       class="import-hint"
       type="info"
       :closable="false"
-      description="表格说明：两列表头为「名称」「英文代码」时，按表头列自动识别；英文代码写入内部编码，名称写入名称列。支持一格多编码（如 BP301P/NL301P），会在同一条记录中单行展示。也支持无表头时前两列依次为名称、英文代码。"
+      description="表格说明：支持「品名」「内部编码」「客户型号」三列；按表头自动识别。英文代码写入内部编码，客户型号写入客户型号列，品名写入品名列。支持一格多编码（如 BP301P/NL301P），会在同一条记录中单行展示。"
     />
 
     <el-table
@@ -93,7 +100,8 @@
     >
       <el-table-column v-if="hasEditPerm" type="selection" width="48" />
       <el-table-column prop="internal_code" label="内部编码" width="140" sortable />
-      <el-table-column prop="name" label="名称" min-width="200" sortable />
+      <el-table-column prop="name" label="客户型号" min-width="200" sortable />
+      <el-table-column prop="product_name" label="品名" min-width="200" show-overflow-tooltip />
       <el-table-column label="状态" width="100" align="center">
         <template #default="{ row }">
           <el-switch
@@ -105,7 +113,6 @@
           />
         </template>
       </el-table-column>
-      <el-table-column prop="remarks" label="备注" min-width="180" show-overflow-tooltip />
       <el-table-column label="更新时间" width="160">
         <template #default="{ row }">
           {{ formatDateTime(row.updated_at) }}
@@ -170,8 +177,11 @@
             :disabled="dialogMode === 'edit'"
           />
         </el-form-item>
-        <el-form-item label="名称" prop="name">
-          <el-input v-model="formData.name" placeholder="内部型号名称" maxlength="128" />
+        <el-form-item label="客户型号" prop="name">
+          <el-input v-model="formData.name" placeholder="客户型号" maxlength="128" />
+        </el-form-item>
+        <el-form-item label="品名">
+          <el-input v-model="formData.product_name" placeholder="产品名称（品名），用于合同自动填充" maxlength="256" />
         </el-form-item>
         <el-form-item label="状态" prop="is_active">
           <el-switch v-model="formData.is_active" active-text="启用" inactive-text="停用" />
@@ -203,7 +213,9 @@ import {
   batchDeleteInternalModels,
   batchEnableInternalModels,
   deleteAllInternalModels,
-  importInternalModelsFromExcel
+  importInternalModelsFromExcel,
+  downloadInternalModelsTemplate,
+  exportInternalModels
 } from '../api';
 import { perm } from '../utils/permissions';
 import { formatDateTime } from '../utils/formatDateTime';
@@ -230,6 +242,7 @@ export default {
       formData: {
         internal_code: '',
         name: '',
+        product_name: '',
         is_active: true,
         remarks: ''
       },
@@ -239,12 +252,13 @@ export default {
           { min: 1, max: 64, message: '编码长度1-64字符', trigger: 'blur' }
         ],
         name: [
-          { required: true, message: '请输入名称', trigger: 'blur' },
-          { min: 1, max: 128, message: '名称长度1-128字符', trigger: 'blur' }
+          { required: true, message: '请输入客户型号', trigger: 'blur' },
+          { min: 1, max: 128, message: '客户型号长度1-128字符', trigger: 'blur' }
         ]
       },
       multipleSelection: [],
-      importing: false
+      importing: false,
+
     };
   },
   computed: {
@@ -313,6 +327,7 @@ export default {
       this.formData = {
         internal_code: '',
         name: '',
+        product_name: '',
         is_active: true,
         remarks: ''
       };
@@ -324,6 +339,7 @@ export default {
       this.formData = {
         internal_code: row.internal_code || '',
         name: row.name || '',
+        product_name: row.product_name || '',
         is_active: !!row.is_active,
         remarks: row.remarks || ''
       };
@@ -333,6 +349,7 @@ export default {
       this.formData = {
         internal_code: '',
         name: '',
+        product_name: '',
         is_active: true,
         remarks: ''
       };
@@ -364,7 +381,7 @@ export default {
         if (errMsg === 'DUPLICATE_INTERNAL_CODE') {
           this.$message.error('内部编码已存在，请使用其他编码');
         } else if (errMsg.includes('VALIDATION')) {
-          this.$message.error('输入格式错误，请检查编码和名称');
+          this.$message.error('输入格式错误，请检查编码和客户型号');
         } else {
           this.$message.error(this.apiUserMsg(e, '保存失败'));
         }
@@ -438,14 +455,27 @@ export default {
         this.$message.error(this.apiUserMsg(e, '批量删除失败'));
       }
     },
+    async downloadTemplate() {
+      try {
+        const blob = await downloadInternalModelsTemplate();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '内部型号导入模板.xlsx';
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        this.$message.error(this.apiUserMsg(e, '下载模板失败'));
+      }
+    },
     exportSelected() {
       if (!this.multipleSelection.length) return;
-      const headers = ['内部编码', '名称', '状态', '备注'];
+      const headers = ['内部编码', '客户型号', '品名', '状态', '备注'];
       const lines = [headers.join(',')];
       for (const row of this.multipleSelection) {
         const status = row.is_active ? '启用' : '停用';
         const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-        lines.push([esc(row.internal_code), esc(row.name), esc(status), esc(row.remarks || '')].join(','));
+        lines.push([esc(row.internal_code), esc(row.name), esc(row.product_name || ''), esc(status), esc(row.remarks || '')].join(','));
       }
       const bom = '\uFEFF';
       const blob = new Blob([bom + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
@@ -455,6 +485,19 @@ export default {
       a.download = `内部型号导出_${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
+    },
+    async exportAll() {
+      try {
+        const blob = await exportInternalModels();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `内部型号_${new Date().toISOString().slice(0, 10)}.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        this.$message.error(this.apiUserMsg(e, '导出失败'));
+      }
     },
     async batchEnable() {
       if (!this.hasEditPerm || !this.multipleSelection.length) return;
@@ -573,5 +616,16 @@ export default {
 }
 :deep(.el-button + .el-button) {
   margin-left: 4px;
+}
+.search-group {
+  display: inline-flex;
+}
+.search-group .search-input :deep(.el-input__wrapper) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.search-group .search-btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
 </style>

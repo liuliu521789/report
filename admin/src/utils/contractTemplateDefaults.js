@@ -19,6 +19,10 @@ const TPL_PREVIEW_VARS = {
   CUSTOMER_ADDRESS: '云南省昆明市示例区工业园',
   CUSTOMER_CONTACT: '李明超',
   CUSTOMER_PHONE: '18087180880',
+  CUSTOMER_FAX: '0871-12345678',
+  CUSTOMER_BANK: '中国工商银行昆明示例支行',
+  CUSTOMER_ACCOUNT: '25020245090000EXAMPLE',
+  CUSTOMER_TAX_ID: '91530100MA6EXAMPLE',
   CONTRACT_NO: 'HT20260406DEMO01',
   SIGN_DATE_ZH: '2026年04月06日',
   ORDER_LINES: CONTRACT_TPL_PREVIEW_LINES,
@@ -106,10 +110,10 @@ export const RECOMMENDED_TPL_BODY = `<div style="width:100%;margin:0 auto;color:
       <div>地址：{{CUSTOMER_ADDRESS}}</div>
       <div>联系人：{{CUSTOMER_CONTACT}}</div>
       <div>电话：{{CUSTOMER_PHONE}}</div>
-      <div>传真：</div>
-      <div>开户银行：</div>
-      <div>账号：</div>
-      <div>税号：</div>
+      <div>传真：{{CUSTOMER_FAX}}</div>
+      <div>开户银行：{{CUSTOMER_BANK}}</div>
+      <div>账号：{{CUSTOMER_ACCOUNT}}</div>
+      <div>税号：{{CUSTOMER_TAX_ID}}</div>
     </td>
   </tr>
 </table>

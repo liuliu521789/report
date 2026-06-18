@@ -13,6 +13,7 @@ import {
   filterOrderFieldDefsForList
 } from '../routes/sales/salesShared.js';
 import { loadOrderFieldDefinitions, mergeRowDataJson } from './salesOrderFields.js';
+import { orderListCustomerDisplayName } from './salesOrderCustomerDisplay.js';
 import { formatOrderUploadTime } from './salesOrderNotifyBody.js';
 
 const EXPORT_LIMIT = 5000;
@@ -46,7 +47,9 @@ export async function buildSalesOrdersExportXlsxBuffer(pool, req, q) {
 
   const totalHit = await countSalesOrdersForExport(pool, req, q);
 
-  let sql = `SELECT o.order_no, o.data_json, o.qc_qrcode_id, c.customer_code, c.customer_name, o.product_code, o.product_name, o.product_model, o.warehouse_model,
+  const customerNameMode = q.customer_list_name_mode === 'full' ? 'full' : 'short';
+
+  let sql = `SELECT o.order_no, o.data_json, o.qc_qrcode_id, c.customer_code, c.customer_name, c.contact_name, o.product_code, o.product_name, o.product_model, o.warehouse_model,
                       o.quantity, o.unit_price, o.amount, o.remark, o.status, o.created_at, u.username AS sales_username,
                       COALESCE(NULLIF(TRIM(u_ship.real_name), ''), NULLIF(TRIM(u_ship.username), ''), '') AS shipped_by_name
                FROM sales_orders o
@@ -74,15 +77,20 @@ export async function buildSalesOrdersExportXlsxBuffer(pool, req, q) {
   ];
   let rowsWithQc = rows;
   if (showQcCol) {
-    const models = rows.map((r) => r.product_model);
-    const qcMap = await loadQcMap(pool, models);
+    const qcMap = await loadQcMap(pool, rows);
     rowsWithQc = await enrichOrdersQc(pool, rows, qcMap);
   }
   const wsData = [
     labelRow,
     ...rowsWithQc.map((o) => {
       const { dataJson } = mergeRowDataJson(o, fieldDefsAll);
-      const cells = fieldDefs.map((d) => dataJson[d.field_key] ?? '');
+      const cells = fieldDefs.map((d) => {
+        if (d.maps_to === 'customer_name') {
+          const displayName = orderListCustomerDisplayName(o, customerNameMode);
+          if (displayName) return displayName;
+        }
+        return dataJson[d.field_key] ?? '';
+      });
       const tail = [
         o.status,
         o.sales_username,

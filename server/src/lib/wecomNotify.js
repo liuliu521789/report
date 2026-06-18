@@ -15,6 +15,18 @@ import { signWecomShipToken } from './wecomShipToken.js';
 import { signWecomFinanceReviewToken } from './wecomFinanceReviewToken.js';
 import { enqueueWecomNotify } from './wecomNotifyOutbox.js';
 import { decryptSecret } from './secretCrypto.js';
+import { extractTemplateVariableNames } from './wecomTemplateSchemas.js';
+import { resolveFinanceWecomTouser } from './wecomFinanceRecipients.js';
+import { resolveWecomPublicBaseUrl } from './wecomPublicUrl.js';
+
+export { resolveWecomPublicBaseUrl } from './wecomPublicUrl.js';
+import {
+  WECOM_TEMPLATE_INVOICE_DELETED_APPLICANT,
+  WECOM_TEMPLATE_INVOICE_DELETED_FINANCE,
+  WECOM_TEMPLATE_INVOICE_FULFILLED_APPLICANT,
+  WECOM_TEMPLATE_INVOICE_SUBMIT_FINANCE,
+  WECOM_TEMPLATE_INVOICE_WITHDRAW_FINANCE
+} from './contractInvoiceWecomNotify.js';
 
 export const WECOM_TEMPLATE_SALES_ORDER_SUBMIT_FINANCE = 'sales_order_submit_finance';
 export const WECOM_TEMPLATE_SALES_ORDER_WITHDRAW_FINANCE = 'sales_order_withdraw_finance';
@@ -61,6 +73,31 @@ export const WECOM_TEMPLATE_CODE_CATALOG = [
     code: WECOM_TEMPLATE_CONTRACT_REVIEW_RESULT,
     meaning: '合同审核结果通知合同提交人',
     usedBy: ['销售合同审核通过', '销售合同审核驳回']
+  },
+  {
+    code: WECOM_TEMPLATE_INVOICE_SUBMIT_FINANCE,
+    meaning: '销售提交开票申请后通知财务（文本卡片链接可用 {{invoiceCenterUrl}}）',
+    usedBy: ['新建并提交开票', '提交开票申请']
+  },
+  {
+    code: WECOM_TEMPLATE_INVOICE_WITHDRAW_FINANCE,
+    meaning: '销售撤销待开票申请后通知财务',
+    usedBy: ['撤销开票申请']
+  },
+  {
+    code: WECOM_TEMPLATE_INVOICE_FULFILLED_APPLICANT,
+    meaning: '财务回填发票后通知开票申请人',
+    usedBy: ['财务确认已开票']
+  },
+  {
+    code: WECOM_TEMPLATE_INVOICE_DELETED_FINANCE,
+    meaning: '删除待开票申请后通知财务',
+    usedBy: ['删除待开票状态的申请']
+  },
+  {
+    code: WECOM_TEMPLATE_INVOICE_DELETED_APPLICANT,
+    meaning: '删除已开票申请后通知原申请人',
+    usedBy: ['删除已开票状态的申请']
   }
 ];
 
@@ -100,7 +137,11 @@ function resolveTextcardUrl(urlTemplate, strVars) {
   const raw = applyWecomTemplate(tmpl, strVars).trim();
   const fromTemplate = coerceToHttpUrl(raw);
   if (fromTemplate && /^https?:\/\//i.test(fromTemplate)) return fromTemplate;
-  for (const k of ['reviewUrl', 'shipConfirmUrl', 'shipUrl', 'financeReviewUrl']) {
+  const tmplVars = extractTemplateVariableNames(tmpl);
+  const fallbackKeys = tmplVars.length
+    ? tmplVars
+    : ['reviewUrl', 'shipConfirmUrl', 'shipUrl', 'financeReviewUrl', 'invoiceCenterUrl'];
+  for (const k of fallbackKeys) {
     const u = coerceToHttpUrl(strVars[k]);
     if (u && /^https?:\/\//i.test(u)) return u;
   }
@@ -118,6 +159,11 @@ function diagnoseTextcardUrlFailure(urlTemplate, strVars, substitutedTrimmed) {
   if (/\{\{\s*financeReviewUrl\s*\}\}/i.test(t) && !(String(strVars.financeReviewUrl || '').trim())) {
     hints.push(
       '模板链接含 {{financeReviewUrl}}，但变量为空：请配置 PUBLIC_BASE_URL 与 JWT_SECRET；单测发送须在 JSON 里传入 https 完整 financeReviewUrl。'
+    );
+  }
+  if (/\{\{\s*invoiceCenterUrl\s*\}\}/i.test(t) && !(String(strVars.invoiceCenterUrl || '').trim())) {
+    hints.push(
+      '模板链接含 {{invoiceCenterUrl}}，但变量为空：请配置 PUBLIC_BASE_URL（API 根，非管理后台 #/ 地址）。'
     );
   }
   if (substitutedTrimmed && /\{\{/.test(substitutedTrimmed)) {
@@ -163,19 +209,6 @@ export async function sendWecomPlainTextMessage(pool, { toUser, content }) {
   });
 }
 
-/** 拼企业微信里打开的绝对链接（合同审批、发货确认、OAuth 回调域名等） */
-export function resolveWecomPublicBaseUrl() {
-  const keys = ['PUBLIC_BASE_URL', 'WECOM_PUBLIC_BASE_URL', 'API_PUBLIC_URL'];
-  for (const k of keys) {
-    const raw = process.env[k];
-    const b = String(raw || '')
-      .trim()
-      .replace(/\/+$/, '');
-    if (b) return b;
-  }
-  return '';
-}
-
 async function resolveUserWecomUserid(pool, userId) {
   const uid = userId != null ? Number(userId) : NaN;
   if (!Number.isFinite(uid) || uid <= 0) return '';
@@ -187,34 +220,7 @@ async function resolveUserWecomUserid(pool, userId) {
   return w || '';
 }
 
-/**
- * 财务收企业微信：优先 company_settings 的「快捷财务」账号；否则所有「财务」类别且填写了 wecom_userid 的员工。
- * @param {import('mysql2/promise').Pool} pool
- * @returns {Promise<string>} pipe 拼接的 touser，可能为空
- */
-export async function resolveFinanceWecomTouser(pool) {
-  const [comp] = await pool.query(
-    'SELECT quick_role_finance_user_id AS uid FROM company_settings WHERE id=1 LIMIT 1'
-  );
-  const designated = comp?.[0]?.uid != null ? Number(comp[0].uid) : null;
-  if (designated && Number.isFinite(designated) && designated > 0) {
-    const [uRows] = await pool.query(
-      'SELECT wecom_userid FROM users WHERE id=? AND is_active=1 LIMIT 1',
-      [designated]
-    );
-    const w = uRows?.[0]?.wecom_userid != null ? String(uRows[0].wecom_userid).trim() : '';
-    if (w) return w;
-    return '';
-  }
-  const [rows] = await pool.query(
-    `SELECT u.wecom_userid FROM users u
-     INNER JOIN employee_categories c ON c.id = u.employee_category_id
-     WHERE u.account_type IN ('employee', 'manager') AND u.is_active = 1 AND c.code = 'finance'
-       AND u.wecom_userid IS NOT NULL AND TRIM(u.wecom_userid) <> ''`
-  );
-  const ids = (rows || []).map((r) => String(r.wecom_userid).trim()).filter(Boolean);
-  return [...new Set(ids)].join('|');
-}
+export { resolveFinanceWecomTouser } from './wecomFinanceRecipients.js';
 
 /**
  * 仓库收企业微信：优先 company_settings「快捷仓库」账号；否则所有「仓库」类别且填写了 wecom_userid 的员工。
@@ -498,7 +504,7 @@ export async function tryNotifyQcWecomPendingQc(pool, { notifyBody, orderRows, f
  * （企业微信文本卡片的正文区域与底部按钮共用同一 url，无法做到「只按钮可点」；确认页规避误触发货。）
  * 依赖环境变量 PUBLIC_BASE_URL（绝对 HTTPS 根地址）、JWT_SECRET。
  */
-export async function tryNotifyWarehouseWecomOrderApproved(pool, { orderRows, fromUserId }) {
+export async function tryNotifyWarehouseWecomOrderApproved(pool, { orderRows, fromUserId, intro }) {
   const list = orderRows?.length ? orderRows : [];
   if (!list.length) return;
   try {
@@ -532,11 +538,11 @@ export async function tryNotifyWarehouseWecomOrderApproved(pool, { orderRows, fr
     const definitions = await loadOrderFieldDefinitions(pool, { activeOnly: true });
     const enriched = await attachCustomerNamesToOrders(pool, list);
 
-    const intro = '订单已通过品管（质检）审核，请备货发货。';
+    const introText = String(intro || '').trim() || '订单已审核通过，请备货发货。';
     for (const row of enriched) {
       try {
         const block = formatWarehouseWecomOrderDetail(row, definitions);
-        const detail = clampWecomText(`${intro}\n\n${block}`);
+        const detail = clampWecomText(`${introText}\n\n${block}`);
         const orderNo = row.order_no != null ? String(row.order_no) : '';
         const shipToken = signWecomShipToken(row.id);
         const enc = encodeURIComponent(shipToken);

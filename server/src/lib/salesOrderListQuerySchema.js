@@ -6,6 +6,7 @@ export const listQuerySchema = z.object({
   id: z.coerce.number().int().positive().optional(),
   customer_name: z.string().optional(),
   customer_code: z.string().optional(),
+  contact_name: z.string().optional(),
   product_name: z.string().optional(),
   product_code: z.string().optional(),
   product_model: z.string().optional(),
@@ -25,8 +26,20 @@ export const listQuerySchema = z.object({
   pending_qc_only: z.preprocess((v) => v === true || v === '1' || v === 'true', z.boolean().optional()),
   /** 为 true 时列表接口附带 field_definitions（兼容旧客户端） */
   include_field_definitions: z.preprocess((v) => v === true || v === '1' || v === 'true', z.boolean().optional()),
+  /** 列表/导出「厂家」列：short=简称 full=全称（与前端 customerListNameMode 一致） */
+  customer_list_name_mode: z.enum(['short', 'full']).optional().default('short'),
   /** 流程看板快捷筛选：与 GET /orders 组合使用 */
   flow_bucket: z
-    .enum(['pending_submit', 'pending_finance', 'pending_qc', 'pending_ship', 'shipped_open', 'rejected'])
+    .enum([
+      'pending_submit',
+      'pending_finance',
+      'finance_rejected',
+      'pending_qc',
+      'qc_rejected',
+      'pending_ship',
+      'shipped_open',
+      /** @deprecated 兼容旧链接：全部驳回 */
+      'rejected'
+    ])
     .optional()
 });

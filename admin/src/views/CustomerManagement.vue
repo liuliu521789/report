@@ -3,10 +3,6 @@
     <div class="page-header">
       <h2>客户管理</h2>
       <div class="toolbar">
-        <el-tabs v-model="activeSource" type="card" class="source-tabs" @tab-change="onSourceTabChange">
-          <el-tab-pane label="康铭" name="kangming" />
-          <el-tab-pane label="物源" name="wuyuan" />
-        </el-tabs>
         <el-input
           v-model="searchQuery"
           class="search-input-with-btn"
@@ -27,12 +23,22 @@
         <el-button @click="loadData" icon=Refresh>刷新</el-button>
         <el-button
           v-if="hasEditPerm"
+          @click="downloadImportTemplate"
+          icon=Download
+        >
+          下载导入模板
+        </el-button>
+        <el-button
+          v-if="hasEditPerm"
           type="warning"
           :loading="importing"
           @click="openImportDialog"
         >
           上传 Excel 同步
         </el-button>
+        <el-checkbox v-model="duplicateRiskOnly" @change="onDuplicateFilterChange">
+          仅显示可能重复
+        </el-checkbox>
 
         <!-- 批量操作按钮 - 选中后显示 -->
         <el-button
@@ -78,21 +84,14 @@
     >
       <el-table-column type="selection" width="55" />
       <el-table-column prop="customer_code" label="客户编码" width="140" sortable />
-      <el-table-column prop="customer_name" label="客户全称" min-width="200" sortable />
-      <el-table-column prop="contact_name" label="客户简称" width="130" />
-      <el-table-column prop="phone" label="电话" width="130" />
-      <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
-      <el-table-column label="状态" width="100" align="center">
+      <el-table-column label="提示" width="100" align="center">
         <template #default="{ row }">
-          <el-switch
-            v-model="row.is_active"
-            :active-value="1"
-            :inactive-value="0"
-            :disabled="!hasDisablePerm"
-            @change="(val) => toggleStatus(row.id, val)"
-          />
+          <el-tag v-if="row.duplicate_risk" type="warning" size="small">可能重复</el-tag>
         </template>
       </el-table-column>
+      <el-table-column prop="customer_name" label="客户全称" min-width="200" sortable />
+      <el-table-column prop="contact_name" label="客户简称" width="130" />
+      <el-table-column prop="contact_person" label="联系人" width="130" />
       <el-table-column label="关联" width="140" align="center">
         <template #default="{ row }">
           <template v-if="row.order_count || row.contract_count_approved">
@@ -120,16 +119,51 @@
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="140" fixed="right">
+      <el-table-column prop="phone" label="电话" width="130" />
+      <el-table-column prop="fax" label="传真" width="120" />
+      <el-table-column prop="address" label="地址" min-width="160" show-overflow-tooltip />
+      <el-table-column prop="bank_name" label="开户银行" min-width="150" show-overflow-tooltip />
+      <el-table-column prop="bank_account" label="账号" min-width="150" show-overflow-tooltip />
+      <el-table-column prop="tax_id" label="税号" min-width="140" />
+      <el-table-column label="状态" width="100" align="center">
         <template #default="{ row }">
+          <el-switch
+            v-model="row.is_active"
+            :active-value="1"
+            :inactive-value="0"
+            :disabled="!hasDisablePerm"
+            @change="(val) => toggleStatus(row.id, val)"
+          />
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="300" fixed="right">
+        <template #default="{ row }">
+          <el-button
+            v-if="hasViewPerm"
+            link
+            type="primary"
+            size="small"
+            @click.stop="goToCustomerModels(row)"
+          >
+            产品型号设置
+          </el-button>
           <el-button
             v-if="hasEditPerm"
             link
             type="primary"
             size="small"
-            @click="openEditDialog(row)"
+            @click.stop="openEditDialog(row)"
            icon=Edit>
             编辑
+          </el-button>
+          <el-button
+            v-if="hasViewPerm"
+            link
+            type="primary"
+            size="small"
+            @click.stop="goToCustomerModels(row)"
+          >
+            单价
           </el-button>
           <el-button
             v-if="hasViewPerm"
@@ -182,11 +216,26 @@
         <el-form-item label="客户简称" prop="contact_name">
           <el-input v-model="formData.contact_name" placeholder="对内常用简称" maxlength="128" />
         </el-form-item>
+        <el-form-item label="联系人" prop="contact_person">
+          <el-input v-model="formData.contact_person" placeholder="可选联系人姓名" maxlength="128" />
+        </el-form-item>
         <el-form-item label="电话" prop="phone">
           <el-input v-model="formData.phone" placeholder="可选联系电话" maxlength="64" />
         </el-form-item>
         <el-form-item label="地址" prop="address">
           <el-input v-model="formData.address" type="textarea" placeholder="可选详细地址" maxlength="512" :rows="2" />
+        </el-form-item>
+        <el-form-item label="传真" prop="fax">
+          <el-input v-model="formData.fax" placeholder="可选传真号码" maxlength="64" />
+        </el-form-item>
+        <el-form-item label="开户银行" prop="bank_name">
+          <el-input v-model="formData.bank_name" placeholder="可选开户银行" maxlength="256" />
+        </el-form-item>
+        <el-form-item label="银行账号" prop="bank_account">
+          <el-input v-model="formData.bank_account" placeholder="可选银行账号" maxlength="128" />
+        </el-form-item>
+        <el-form-item label="税号" prop="tax_id">
+          <el-input v-model="formData.tax_id" placeholder="可选纳税人识别号" maxlength="64" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -206,8 +255,13 @@
           <el-descriptions-item label="客户编码">{{ currentStats.customer_code }}</el-descriptions-item>
           <el-descriptions-item label="客户全称">{{ currentStats.customer_name }}</el-descriptions-item>
           <el-descriptions-item label="客户简称">{{ currentStats.contact_name || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="联系人">{{ currentStats.contact_person || '—' }}</el-descriptions-item>
           <el-descriptions-item v-if="currentStats.phone" label="电话">{{ currentStats.phone }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentStats.fax" label="传真">{{ currentStats.fax }}</el-descriptions-item>
           <el-descriptions-item v-if="currentStats.address" label="地址">{{ currentStats.address }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentStats.bank_name" label="开户银行">{{ currentStats.bank_name }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentStats.bank_account" label="银行账号">{{ currentStats.bank_account }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentStats.tax_id" label="税号">{{ currentStats.tax_id }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="currentStats.is_active ? 'success' : 'info'" size="small">
               {{ currentStats.is_active ? '启用' : '停用' }}
@@ -253,13 +307,13 @@
       @close="resetImportDialog"
     >
       <p class="import-dialog-meta">
-        当前分组：<strong>{{ activeSourceLabel }}</strong>，将读取您所选文件中工作表「<strong>{{ activeSheetName }}</strong>」。
+        将读取您所选文件中工作表「<strong>客户导入模板</strong>」或「<strong>物源</strong>」。
       </p>
       <el-alert type="info" :closable="false" show-icon class="import-alert">
         <template #default>
           <div>
-            表内需含「客户名称」「简称」列。同名客户将更新简称；表中有而库中无的将新增；
-            库中有而表中无的：若无订单且无合同将删除，否则将停用。
+            支持两种格式：「客户名称 + 简称」（传统同步），或「客户全称 + 客户简称 + 联系人 + 传真 + 电话 + 地址 + 开户银行 + 账号 + 税号」（导入模板）。
+          同名客户将更新信息；表中有而库中无的将新增；库中有而表中无的：若无订单且无合同将删除，否则将停用。
           </div>
         </template>
       </el-alert>
@@ -287,6 +341,59 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- Price Management Dialog -->
+    <el-dialog
+      v-model="priceDialogVisible"
+      :title="'单价管理 - ' + (priceCustomer?.customer_name || '')"
+      width="600px"
+      @close="closePriceDialog"
+    >
+      <p class="price-suggest-hint">标注「（建议）」的行为从历史发货流水单中自动匹配，可修改后保存；其余行为已保存的单价。</p>
+      <div class="price-dialog-toolbar">
+        <el-button type="primary" size="small" @click="addPriceRow" icon=Plus>新增</el-button>
+      </div>
+      <el-table :data="priceItems" border stripe size="small" style="width: 100%" max-height="400">
+        <el-table-column type="index" label="#" width="50" align="center" />
+        <el-table-column label="产品型号" min-width="160">
+          <template #default="{ row, $index }">
+            <el-input v-model="row.product_model" size="small" placeholder="请输入产品型号" />
+          </template>
+        </el-table-column>
+        <el-table-column label="单价（元/kg）" width="160">
+          <template #default="{ row, $index }">
+            <el-input-number v-model="row.unit_price" :min="0" :precision="4" controls-position="right" size="small" style="width: 140px" />
+          </template>
+        </el-table-column>
+        <el-table-column label="备注" min-width="120">
+          <template #default="{ row, $index }">
+            <el-input v-model="row.notes" size="small" placeholder="可选" />
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="80" align="center">
+          <template #default="{ row, $index }">
+            <el-button
+              v-if="row._persisted"
+              type="danger"
+              link
+              size="small"
+              @click="deletePriceRow(row, $index)"
+            >删除</el-button>
+            <el-button
+              v-else
+              type="warning"
+              link
+              size="small"
+              @click="removeNewPriceRow($index)"
+            >取消</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="closePriceDialog" icon=Close>取消</el-button>
+        <el-button type="primary" :loading="priceSaving" @click="savePrices" icon=Check>保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -299,7 +406,13 @@ import {
   getCustomerStats,
   batchDeleteCustomers,
   exportCustomers,
-  importSalesCustomersExcel
+  importSalesCustomersExcel,
+  downloadCustomerImportTemplate,
+  listCustomerPrices,
+  createCustomerPrice,
+  patchCustomerPrice,
+  deleteCustomerPrice,
+  listCustomerPriceSuggestions
 } from '../api';
 import { perm, isSuperAdmin } from '../utils/permissions';
 import { Search, UploadFilled } from '@element-plus/icons-vue';
@@ -316,9 +429,9 @@ export default {
       loading: false,
       exporting: false,
       importing: false,
-      activeSource: 'kangming',
       customerList: [],
       searchQuery: '',
+      duplicateRiskOnly: false,
       currentPage: 1,
       pageSize: 20,
       total: 0,
@@ -335,8 +448,13 @@ export default {
         customer_code: '',
         customer_name: '',
         contact_name: '',
+        contact_person: '',
         phone: '',
-        address: ''
+        fax: '',
+        address: '',
+        bank_name: '',
+        bank_account: '',
+        tax_id: ''
       },
       formRules: {
         customer_name: [
@@ -347,7 +465,12 @@ export default {
           { required: true, message: '请输入客户简称', trigger: 'blur' },
           { min: 1, max: 128, message: '简称长度 1–128 字符', trigger: 'blur' }
         ]
-      }
+      },
+      priceDialogVisible: false,
+      priceCustomer: null,
+      priceItems: [],
+      priceSaving: false,
+      priceDeleteQueue: []
     };
   },
   computed: {
@@ -376,12 +499,6 @@ export default {
         perm('data_management', 'data_export_all')
       );
     },
-    activeSourceLabel() {
-      return this.activeSource === 'kangming' ? '康铭' : '物源';
-    },
-    activeSheetName() {
-      return this.activeSource === 'kangming' ? '康铭' : '物源';
-    }
   },
   watch: {
     searchQuery(val) {
@@ -393,6 +510,7 @@ export default {
   },
   mounted() {
     this.loadData();
+    this.maybeOpenDialogFromQuery();
   },
   methods: {
     async loadData() {
@@ -403,10 +521,12 @@ export default {
           q: this.searchQuery || undefined,
           page: this.currentPage,
           pageSize: this.pageSize,
-          customer_group: this.activeSource
+          duplicate_risk: this.duplicateRiskOnly ? '1' : undefined
         };
         const res = await listSalesCustomers(params);
-        this.customerList = res.items || [];
+        const items = Array.isArray(res?.items) ? res.items : Array.isArray(res?.data?.items) ? res.data.items : [];
+        this.customerList = items;
+        await this.fillMissingAssociationCounts(items);
         this.total = res.pagination?.total || 0;
       } catch (e) {
         this.$message.error(this.apiUserMsg(e, '加载客户列表失败'));
@@ -414,6 +534,27 @@ export default {
       } finally {
         this.loading = false;
       }
+    },
+    async fillMissingAssociationCounts(items) {
+      const list = Array.isArray(items) ? items : [];
+      if (!list.length) return;
+      const tasks = [];
+      for (const row of list) {
+        const orderMissing = row?.order_count == null;
+        const contractMissing = row?.contract_count_approved == null;
+        if (!orderMissing && !contractMissing) continue;
+        const id = Number(row?.id);
+        if (!Number.isFinite(id) || id < 1) continue;
+        tasks.push(
+          getCustomerStats(id)
+            .then((stats) => {
+              row.order_count = Number(stats?.order_count) || 0;
+              row.contract_count_approved = Number(stats?.contract_count_approved) || 0;
+            })
+            .catch(() => {})
+        );
+      }
+      if (tasks.length) await Promise.allSettled(tasks);
     },
     handleSizeChange(size) {
       this.pageSize = size;
@@ -428,9 +569,8 @@ export default {
       this.currentPage = 1;
       this.loadData();
     },
-    onSourceTabChange() {
+    onDuplicateFilterChange() {
       this.currentPage = 1;
-      this.multipleSelection = [];
       this.loadData();
     },
     handleRowDblClick(row) {
@@ -438,6 +578,21 @@ export default {
         this.viewStats(row);
       } else if (this.hasEditPerm) {
         this.openEditDialog(row);
+      }
+    },
+    async downloadImportTemplate() {
+      try {
+        const blob = await downloadCustomerImportTemplate();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '客户导入模板.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '下载失败'));
       }
     },
     openImportDialog() {
@@ -466,17 +621,16 @@ export default {
       }
       const fd = new FormData();
       fd.append('file', this.importFile);
-      fd.append('customer_group', this.activeSource);
       this.importing = true;
       try {
         const res = await importSalesCustomersExcel(fd);
         const d = res && typeof res.data === 'object' && res.data !== null ? res.data : res;
         const parts = [
           `新增 ${d.inserted ?? 0}`,
-          `更新 ${d.updated ?? 0}`,
-          `删除 ${d.deleted ?? 0}`,
-          `停用 ${d.deactivated ?? 0}`
+          `更新 ${d.updated ?? 0}`
         ];
+        if ((d.deleted ?? 0) > 0) parts.push(`删除 ${d.deleted}`);
+        if ((d.deactivated ?? 0) > 0) parts.push(`停用 ${d.deactivated}`);
         if ((d.skippedDup ?? 0) > 0) parts.push(`跳过重复行 ${d.skippedDup}`);
         this.$message.success(`同步完成：${parts.join('，')}`);
         this.importDialogVisible = false;
@@ -488,17 +642,60 @@ export default {
         this.importing = false;
       }
     },
-    openCreateDialog() {
+    openCreateDialog(prefill = {}) {
       this.dialogMode = 'create';
       this.editingId = null;
       this.formData = {
         customer_code: '',
-        customer_name: '',
-        contact_name: '',
-        phone: '',
-        address: ''
+        customer_name: prefill.customer_name || '',
+        contact_name: prefill.contact_name || '',
+        contact_person: prefill.contact_person || '',
+        phone: prefill.phone || '',
+        fax: prefill.fax || '',
+        address: prefill.address || '',
+        bank_name: prefill.bank_name || '',
+        bank_account: prefill.bank_account || '',
+        tax_id: prefill.tax_id || ''
       };
       this.dialogVisible = true;
+    },
+    maybeOpenDialogFromQuery() {
+      const q = this.$route.query || {};
+      if (q.action === 'create') {
+        this.maybeOpenCreateFromQuery();
+        return;
+      }
+      if (q.action === 'edit') {
+        this.maybeOpenEditFromQuery();
+      }
+    },
+    maybeOpenCreateFromQuery() {
+      const q = this.$route.query || {};
+      if (q.action !== 'create' || !this.hasCreatePerm) return;
+      const name = String(q.customerName || q.customer_name || '').trim();
+      this.openCreateDialog(name ? { customer_name: name, contact_name: name } : {});
+      this.$router.replace({ path: this.$route.path });
+    },
+    maybeOpenEditFromQuery() {
+      const q = this.$route.query || {};
+      if (q.action !== 'edit' || !this.hasEditPerm) return;
+      const id = Number(q.customerId || q.id);
+      if (!id) return;
+      this.$router.replace({ path: this.$route.path });
+      let row = null;
+      try {
+        const raw = sessionStorage.getItem('pendingCustomerEdit');
+        if (raw) {
+          row = JSON.parse(raw);
+          sessionStorage.removeItem('pendingCustomerEdit');
+        }
+      } catch { /* ignore */ }
+      if (row?.id === id) {
+        this.openEditDialog(row);
+        return;
+      }
+      const hit = this.customerList.find((c) => c.id === id);
+      if (hit) this.openEditDialog(hit);
     },
     openEditDialog(row) {
       this.dialogMode = 'edit';
@@ -507,8 +704,13 @@ export default {
         customer_code: row.customer_code || '',
         customer_name: row.customer_name || '',
         contact_name: row.contact_name || '',
+        contact_person: row.contact_person || '',
         phone: row.phone || '',
-        address: row.address || ''
+        fax: row.fax || '',
+        address: row.address || '',
+        bank_name: row.bank_name || '',
+        bank_account: row.bank_account || '',
+        tax_id: row.tax_id || ''
       };
       this.dialogVisible = true;
     },
@@ -517,8 +719,13 @@ export default {
         customer_code: '',
         customer_name: '',
         contact_name: '',
+        contact_person: '',
         phone: '',
-        address: ''
+        fax: '',
+        address: '',
+        bank_name: '',
+        bank_account: '',
+        tax_id: ''
       };
       this.editingId = null;
     },
@@ -531,18 +738,22 @@ export default {
       try {
         let res;
         if (this.dialogMode === 'create') {
-          const { customer_name, contact_name, phone, address } = this.formData;
+          const { customer_name, contact_name, contact_person, phone, fax, address, bank_name, bank_account, tax_id } = this.formData;
           const payload = {
             customer_name,
             contact_name,
+            contact_person,
             phone,
+            fax,
             address,
-            customer_group: this.activeSource
+            bank_name,
+            bank_account,
+            tax_id
           };
           res = await createSalesCustomer(payload);
         } else {
-          const { customer_name, contact_name, phone, address } = this.formData;
-          res = await updateSalesCustomer(this.editingId, { customer_name, contact_name, phone, address });
+          const { customer_name, contact_name, contact_person, phone, fax, address, bank_name, bank_account, tax_id } = this.formData;
+          res = await updateSalesCustomer(this.editingId, { customer_name, contact_name, contact_person, phone, fax, address, bank_name, bank_account, tax_id });
         }
         this.$message.success('操作成功');
         this.dialogVisible = false;
@@ -639,7 +850,6 @@ export default {
         const params = {};
         const q = (this.searchQuery || '').trim();
         if (q) params.q = q;
-        params.customer_group = this.activeSource;
         const blob = await exportCustomers(params);
         startDownload({
           request: blob,
@@ -667,6 +877,12 @@ export default {
       this.statsDialogVisible = false;
       this.openEditDialog(this.currentStats);
     },
+    goToCustomerModels(row) {
+      this.$router.push({
+        path: `/sales/customers/models/${row.id}`,
+        query: { customerName: row.customer_name }
+      });
+    },
     goToCustomerOrders(row) {
       const orderCount = row.order_count || 0;
       if (!orderCount) {
@@ -692,6 +908,100 @@ export default {
     apiUserMsg(e, defaultMsg) {
       const d = e?.response?.data;
       return d?.message || d?.error || e?.message || defaultMsg || '操作失败';
+    },
+    async openPriceDialog(row) {
+      this.priceCustomer = row;
+      this.priceItems = [];
+      this.priceDeleteQueue = [];
+      this.priceDialogVisible = true;
+      try {
+        const [priceRes, suggestRes] = await Promise.all([
+          listCustomerPrices(row.id),
+          listCustomerPriceSuggestions(row.id)
+        ]);
+        const savedMap = {};
+        const saved = (priceRes.items || []).map(p => {
+          const item = {
+            _id: p.id,
+            _persisted: true,
+            product_model: p.product_model,
+            unit_price: Number(p.unit_price),
+            notes: p.notes || ''
+          };
+          savedMap[p.product_model] = item;
+          return item;
+        });
+        const suggestions = (suggestRes.items || []).filter(s => !savedMap[s.product_model]);
+        this.priceItems = [...saved, ...suggestions.map(s => ({
+          _id: null,
+          _persisted: false,
+          product_model: s.product_model,
+          unit_price: Number(s.unit_price),
+          notes: '（建议）'
+        }))];
+      } catch (e) {
+        this.$message.error(this.apiUserMsg(e, '加载单价失败'));
+      }
+    },
+    closePriceDialog() {
+      this.priceDialogVisible = false;
+      this.priceCustomer = null;
+      this.priceItems = [];
+      this.priceDeleteQueue = [];
+    },
+    addPriceRow() {
+      this.priceItems.push({
+        _id: null,
+        _persisted: false,
+        product_model: '',
+        unit_price: 0,
+        notes: ''
+      });
+    },
+    removeNewPriceRow(index) {
+      this.priceItems.splice(index, 1);
+    },
+    async deletePriceRow(row, index) {
+      if (row._persisted && row._id) {
+        this.priceDeleteQueue.push(row._id);
+      }
+      this.priceItems.splice(index, 1);
+    },
+    async savePrices() {
+      const customerId = this.priceCustomer?.id;
+      if (!customerId) return;
+      for (const item of this.priceItems) {
+        if (!item.product_model || !String(item.product_model).trim()) {
+          this.$message.warning('产品型号不能为空');
+          return;
+        }
+      }
+      this.priceSaving = true;
+      try {
+        for (const pid of this.priceDeleteQueue) {
+          await deleteCustomerPrice(customerId, pid).catch(() => {});
+        }
+        for (const item of this.priceItems) {
+          let notes = String(item.notes || '').trim();
+          if (notes === '（建议）') notes = '';
+          const payload = {
+            product_model: String(item.product_model).trim(),
+            unit_price: Number(item.unit_price),
+            notes
+          };
+          if (item._persisted && item._id) {
+            await patchCustomerPrice(customerId, item._id, payload);
+          } else {
+            await createCustomerPrice(customerId, payload);
+          }
+        }
+        this.$message.success('单价已保存');
+        this.closePriceDialog();
+      } catch (e) {
+        this.$message.error(this.apiUserMsg(e, '保存失败'));
+      } finally {
+        this.priceSaving = false;
+      }
     }
   }
 };
@@ -718,17 +1028,6 @@ export default {
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
-}
-.source-tabs {
-  flex: 0 0 auto;
-}
-.source-tabs :deep(.el-tabs__header) {
-  margin-bottom: 0;
-}
-.source-tabs :deep(.el-tabs__item) {
-  height: 36px;
-  line-height: 36px;
-  padding: 0 16px;
 }
 .toolbar .search-input-with-btn {
   width: 360px;
@@ -786,5 +1085,13 @@ export default {
 }
 .import-upload :deep(.el-upload-dragger) {
   width: 100%;
+}
+.price-dialog-toolbar {
+  margin-bottom: 12px;
+}
+.price-suggest-hint {
+  color: #909399;
+  font-size: 12px;
+  margin-bottom: 8px;
 }
 </style>

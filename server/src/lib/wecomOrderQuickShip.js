@@ -33,7 +33,7 @@ async function notifyShipStakeholders(pool, row) {
 }
 
 /**
- * 企业微信一键发货：仅允许 待发货 → 已发货。
+ * 企业微信一键发货：仅允许 待备货发货 → 已发货。
  * OAuth 识别到操作人时写入 shipped_by / updated_by；关闭 OAuth 调试时为 NULL。
  * @param {{ actorUserId?: number|null }} [opts]
  * @returns {Promise<{ ok: true, orderId: number } | { ok: false, code: string, message: string }>}

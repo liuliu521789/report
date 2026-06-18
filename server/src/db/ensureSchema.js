@@ -118,6 +118,16 @@ export async function ensureSupportContactSettingsTable() {
   await pool.query(
     "INSERT IGNORE INTO support_contact_settings (id, engineer_wechat_id) VALUES (1, '')"
   );
+  if (!(await columnExists(pool, 'support_contact_settings', 'engineer_wecom_userid'))) {
+    await pool.query(
+      "ALTER TABLE support_contact_settings ADD COLUMN engineer_wecom_userid VARCHAR(64) NOT NULL DEFAULT '' AFTER engineer_wechat_id"
+    );
+  }
+  if (!(await columnExists(pool, 'support_contact_settings', 'engineer_display_name'))) {
+    await pool.query(
+      "ALTER TABLE support_contact_settings ADD COLUMN engineer_display_name VARCHAR(64) NOT NULL DEFAULT '' AFTER engineer_wecom_userid"
+    );
+  }
 }
 
 async function columnExists(pool, table, column) {
@@ -270,6 +280,7 @@ const DDL_SALES_PIECES = [
     customer_code VARCHAR(64) NOT NULL DEFAULT '',
     customer_name VARCHAR(256) NOT NULL DEFAULT '',
     contact_name VARCHAR(128) NULL,
+    contact_person VARCHAR(128) NULL,
     phone VARCHAR(64) NULL,
     address VARCHAR(512) NULL,
     customer_group VARCHAR(32) NOT NULL DEFAULT '',
@@ -287,6 +298,23 @@ const DDL_SALES_PIECES = [
     CONSTRAINT fk_sales_customers_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
   ) ENGINE=InnoDB`,
   DDL_SALES_INTERNAL_MODELS,
+  `CREATE TABLE IF NOT EXISTS sales_customer_model_mappings (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    customer_id BIGINT UNSIGNED NOT NULL,
+    customer_model VARCHAR(256) NOT NULL DEFAULT '',
+    internal_model VARCHAR(256) NOT NULL DEFAULT '',
+    is_hidden TINYINT(1) NOT NULL DEFAULT 0,
+    created_by BIGINT UNSIGNED NULL,
+    updated_by BIGINT UNSIGNED NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_mapping_customer_model (customer_id, customer_model(128)),
+    KEY idx_mappings_customer (customer_id),
+    CONSTRAINT fk_mappings_customer FOREIGN KEY (customer_id) REFERENCES sales_customers(id) ON DELETE CASCADE,
+    CONSTRAINT fk_mappings_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT fk_mappings_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+  ) ENGINE=InnoDB COMMENT='客户型号对照手动维护（覆盖 Excel 导入的对照数据）'`,
   `CREATE TABLE IF NOT EXISTS sales_order_field_definitions (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     field_key VARCHAR(64) NOT NULL,
@@ -376,6 +404,7 @@ const DDL_SALES_PIECES = [
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     name VARCHAR(128) NOT NULL,
     body_html MEDIUMTEXT NOT NULL,
+    is_system TINYINT(1) NOT NULL DEFAULT 0,
     created_by BIGINT UNSIGNED NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
@@ -425,6 +454,19 @@ const DDL_SALES_PIECES = [
     KEY idx_sales_contract_audit_contract (contract_id, created_at),
     CONSTRAINT fk_sales_contract_audit_contract FOREIGN KEY (contract_id) REFERENCES sales_contracts(id) ON DELETE CASCADE,
     CONSTRAINT fk_sales_contract_audit_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+  ) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS order_calc_rules (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name VARCHAR(128) NOT NULL,
+    formulas_json JSON NOT NULL,
+    is_current TINYINT(1) NOT NULL DEFAULT 0,
+    created_by BIGINT UNSIGNED NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_order_calc_rules_name (name),
+    KEY idx_order_calc_rules_current (is_current),
+    CONSTRAINT fk_order_calc_rules_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
   ) ENGINE=InnoDB`,
   DDL_SALES_INTERNAL_MESSAGES
 ];
@@ -492,6 +534,11 @@ export async function ensureCompanySettingsColumns() {
   if (!(await columnExists(pool, 'company_settings', 'company_address'))) {
     await pool.query(
       'ALTER TABLE company_settings ADD COLUMN company_address VARCHAR(256) NULL DEFAULT NULL AFTER company_email'
+    );
+  }
+  if (!(await columnExists(pool, 'company_settings', 'footer_seal_position'))) {
+    await pool.query(
+      "ALTER TABLE company_settings ADD COLUMN footer_seal_position VARCHAR(16) NOT NULL DEFAULT 'below' AFTER logo_url"
     );
   }
 }
@@ -609,6 +656,80 @@ export async function ensureSalesInternalMessagesTable() {
 export async function ensureSalesInternalModelsTable() {
   const pool = getPool();
   await pool.query(DDL_SALES_INTERNAL_MODELS);
+  if (!(await columnExists(pool, 'sales_internal_models', 'product_name'))) {
+    await pool.query('ALTER TABLE sales_internal_models ADD COLUMN product_name VARCHAR(256) NULL AFTER `name`');
+  }
+}
+
+/** 启动自检 sales_contract_templates 表：添加 is_system 列并写入系统默认模板 */
+export async function ensureContractTemplatesSystemDefault() {
+  const pool = getPool();
+  const RECOMMENDED_BODY = `<div style="width:100%;margin:0 auto;color:#000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.5">
+<div style="text-align:center;margin-bottom:16px">
+  <div style="font-size:22px;letter-spacing:4px;line-height:1.2;font-family:FZXiaoBiaoSong-S05,FZXiaoBiaoSong,方正小标宋简体,方正小标宋,方正小标宋_GBK,FZShuSong_GB2312,SimSun"></div>
+  <div style="font-size:22px;letter-spacing:6px;line-height:1.2;margin-top:4px;font-family:FZXiaoBiaoSong-S05,FZXiaoBiaoSong,方正小标宋简体,方正小标宋,方正小标宋_GBK,FZShuSong_GB2312,SimSun">销售合同</div>
+</div>
+<div style="text-align:center;margin:12px 0 16px 0">
+<table class="contract-header-meta" style="width:auto;max-width:100%;margin:0 auto;border-collapse:collapse;border:none;font-size:16px;line-height:1.5">
+  <tr>
+    <td style="border:none;padding:4px 8px 4px 0;width:58%;vertical-align:top;text-align:left">
+      <div>买方：{{CUSTOMER_NAME}}</div>
+      <div>卖方：{{COMPANY_NAME_ZH}}</div>
+    </td>
+    <td style="border:none;padding:4px 0 4px 8px;vertical-align:top;text-align:left">
+      <div>合同编号：{{CONTRACT_NO}}</div>
+      <div>履约地点：</div>
+      <div>签订时间：{{SIGN_DATE_ZH}}</div>
+    </td>
+  </tr>
+</table>
+</div>
+<p style="margin:8px 0;text-indent:2em"><strong>一、产品名称、单价、数量、金额、交货期：</strong></p>
+{{ORDER_LINES}}
+<p style="margin:8px 0;text-indent:2em"><strong>二、交货地点、交货期限、运费：</strong></p>
+<p style="margin:8px 0;text-indent:2em"><strong>三、包装标准：</strong></p>
+<p style="margin:8px 0;text-indent:2em"><strong>四、验收标准：方法及提出异议期限：</strong></p>
+<p style="margin:8px 0;text-indent:2em"><strong>五、结算方式及期限：</strong></p>
+<p style="margin:8px 0;text-indent:2em"><strong>六、违约责任：</strong></p>
+<p style="margin:8px 0;text-indent:2em"><strong>七、解决合同纠纷方式：</strong></p>
+<p style="margin:8px 0;text-indent:2em"><strong>八、其他约定事项：</strong></p>
+<table class="party-table" style="width:100%;border-collapse:collapse;border:1px solid #000;margin-top:12px;font-size:14px;line-height:1.35">
+  <tr>
+    <td style="border:1px solid #000;vertical-align:top;padding:5px 8px;width:50%">
+      <div class="party-col-title">卖方</div>
+      <div>单位：{{COMPANY_NAME_ZH}}</div>
+      <div>地址：</div>
+      <div>联系人：</div>
+      <div>电话：</div>
+      <div>传真：</div>
+      <div>开户银行：</div>
+      <div>账号：</div>
+      <div>行号：</div>
+    </td>
+    <td style="border:1px solid #000;vertical-align:top;padding:5px 8px;width:50%">
+      <div class="party-col-title">买方</div>
+      <div>单位：{{CUSTOMER_NAME}}</div>
+      <div>地址：{{CUSTOMER_ADDRESS}}</div>
+      <div>联系人：{{CUSTOMER_CONTACT}}</div>
+      <div>电话：{{CUSTOMER_PHONE}}</div>
+      <div>传真：{{CUSTOMER_FAX}}</div>
+      <div>开户银行：{{CUSTOMER_BANK}}</div>
+      <div>账号：{{CUSTOMER_ACCOUNT}}</div>
+      <div>税号：{{CUSTOMER_TAX_ID}}</div>
+    </td>
+  </tr>
+</table>
+</div>`;
+  if (!(await columnExists(pool, 'sales_contract_templates', 'is_system'))) {
+    await pool.query('ALTER TABLE sales_contract_templates ADD COLUMN is_system TINYINT(1) NOT NULL DEFAULT 0 AFTER body_html');
+  }
+  const [rows] = await pool.query('SELECT COUNT(*) AS cnt FROM sales_contract_templates WHERE is_system = 1');
+  if (rows[0].cnt === 0) {
+    await pool.query(
+      `INSERT INTO sales_contract_templates (name, body_html, is_system) VALUES (?, ?, 1)`,
+      ['默认模板（推荐版式）', RECOMMENDED_BODY]
+    );
+  }
 }
 
 export async function ensureSalesModuleTables() {
@@ -679,6 +800,21 @@ export async function ensureSalesModuleTables() {
       /* index may already exist */
     }
   }
+  if (!(await columnExists(pool, 'sales_customers', 'contact_person'))) {
+    await pool.query("ALTER TABLE sales_customers ADD COLUMN contact_person VARCHAR(128) NULL DEFAULT NULL AFTER contact_name");
+  }
+  if (!(await columnExists(pool, 'sales_customers', 'fax'))) {
+    await pool.query("ALTER TABLE sales_customers ADD COLUMN fax VARCHAR(64) NULL DEFAULT NULL AFTER phone");
+  }
+  if (!(await columnExists(pool, 'sales_customers', 'bank_name'))) {
+    await pool.query("ALTER TABLE sales_customers ADD COLUMN bank_name VARCHAR(256) NULL DEFAULT NULL AFTER address");
+  }
+  if (!(await columnExists(pool, 'sales_customers', 'bank_account'))) {
+    await pool.query("ALTER TABLE sales_customers ADD COLUMN bank_account VARCHAR(128) NULL DEFAULT NULL AFTER bank_name");
+  }
+  if (!(await columnExists(pool, 'sales_customers', 'tax_id'))) {
+    await pool.query("ALTER TABLE sales_customers ADD COLUMN tax_id VARCHAR(64) NULL DEFAULT NULL AFTER bank_account");
+  }
 
   await pool.query(
     `INSERT IGNORE INTO sales_settings (id, order_no_prefix, last_order_seq) VALUES (1, 'SO', 0)`
@@ -734,8 +870,41 @@ export async function ensureSalesModuleTables() {
   );
   await ensureBuiltinCategoryPermissionDefaults(pool);
   await ensureSalesOrdersRowVersionColumn(pool);
+  await ensureSalesOrderFlowConfigColumns(pool);
   await ensureSalesOrderFieldSchemaVersionColumns(pool);
   await ensureSalesCustomersNgramFulltextIndex(pool);
+}
+
+async function ensureSalesOrderFlowConfigColumns(pool) {
+  if (!(await columnExists(pool, 'sales_settings', 'order_flow_json'))) {
+    await pool.query(
+      "ALTER TABLE sales_settings ADD COLUMN order_flow_json JSON NULL COMMENT '订单审核流程定义' AFTER order_field_schema_version"
+    );
+  }
+  if (!(await columnExists(pool, 'sales_settings', 'order_flow_version'))) {
+    await pool.query(
+      'ALTER TABLE sales_settings ADD COLUMN order_flow_version INT UNSIGNED NOT NULL DEFAULT 1 AFTER order_flow_json'
+    );
+  }
+  if (!(await columnExists(pool, 'sales_orders', 'flow_config_version'))) {
+    await pool.query(
+      "ALTER TABLE sales_orders ADD COLUMN flow_config_version INT UNSIGNED NULL COMMENT '提交审核时锁定的流程版本' AFTER row_version"
+    );
+  }
+  if (!(await columnExists(pool, 'sales_orders', 'flow_step_index'))) {
+    await pool.query(
+      "ALTER TABLE sales_orders ADD COLUMN flow_step_index INT UNSIGNED NULL COMMENT '当前审核节点索引' AFTER flow_config_version"
+    );
+  }
+  const [seed] = await pool.query('SELECT order_flow_json FROM sales_settings WHERE id = 1 LIMIT 1');
+  if (seed?.[0] && seed[0].order_flow_json == null) {
+    const { defaultOrderFlowDefinition } = await import('../lib/salesOrderFlowConfig.js');
+    const def = defaultOrderFlowDefinition();
+    await pool.query(
+      'UPDATE sales_settings SET order_flow_json = CAST(? AS JSON), order_flow_version = 1 WHERE id = 1',
+      [JSON.stringify(def)]
+    );
+  }
 }
 
 async function ensureSalesOrderFieldSchemaVersionColumns(pool) {
@@ -778,11 +947,17 @@ async function ensureSalesOrdersRowVersionColumn(pool) {
 /** 客户名称/编号检索：大数据量下 LIKE 前后模糊难走索引，增加 ngram 全文索引（失败时仅记录警告） */
 async function ensureSalesCustomersNgramFulltextIndex(pool) {
   await refreshSalesCustomersNgramFlag(pool);
-  if (salesCustomersNgramFtReady) return;
+  if (salesCustomersNgramFtReady) {
+    try {
+      await pool.query('ALTER TABLE sales_customers DROP INDEX ft_sales_customers_ngram');
+    } catch {
+      /* index may not exist */
+    }
+  }
   try {
     await pool.query(
       `ALTER TABLE sales_customers
-       ADD FULLTEXT INDEX ft_sales_customers_ngram (customer_name, customer_code, contact_name) WITH PARSER ngram`
+       ADD FULLTEXT INDEX ft_sales_customers_ngram (customer_name, customer_code, contact_name, contact_person) WITH PARSER ngram`
     );
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -855,6 +1030,126 @@ export async function ensureSalesContractVersioning() {
   if (!(await columnExists(pool, 'sales_contracts', 'data_json'))) {
     await pool.query('ALTER TABLE sales_contracts ADD COLUMN data_json JSON NULL');
   }
+  if (!(await columnExists(pool, 'sales_contracts', 'signature_stored_rel_path'))) {
+    await pool.query(
+      "ALTER TABLE sales_contracts ADD COLUMN signature_stored_rel_path VARCHAR(512) NULL DEFAULT NULL COMMENT '签章图片相对路径' AFTER data_json"
+    );
+  }
+}
+
+/** 合同开票记录 + 开票审批日志；与 migrations/056_sales_contract_invoices.sql 一致 */
+const DDL_SALES_CONTRACT_INVOICES = `
+CREATE TABLE IF NOT EXISTS sales_contract_invoices (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  contract_id BIGINT UNSIGNED NOT NULL,
+  invoice_no VARCHAR(64) NULL,
+  invoice_type ENUM('special', 'normal', 'electronic') NOT NULL DEFAULT 'special',
+  amount DECIMAL(18, 4) NOT NULL DEFAULT 0,
+  tax_rate DECIMAL(6, 4) NULL,
+  tax_amount DECIMAL(18, 4) NULL,
+  invoice_date DATE NULL,
+  buyer_name VARCHAR(256) NULL,
+  buyer_tax_id VARCHAR(64) NULL,
+  buyer_address VARCHAR(512) NULL,
+  buyer_phone VARCHAR(64) NULL,
+  buyer_bank_name VARCHAR(256) NULL,
+  buyer_bank_account VARCHAR(128) NULL,
+  item_name VARCHAR(512) NULL,
+  item_unit VARCHAR(32) NULL,
+  item_quantity DECIMAL(18, 4) NULL,
+  item_unit_price DECIMAL(18, 4) NULL,
+  remark VARCHAR(1024) NULL,
+  status ENUM('draft', 'pending_finance', 'issued', 'cancelled') NOT NULL DEFAULT 'draft',
+  invoice_code VARCHAR(64) NULL,
+  invoice_url VARCHAR(512) NULL,
+  issued_at DATETIME(3) NULL,
+  issued_by BIGINT UNSIGNED NULL,
+  reviewer_user_id BIGINT UNSIGNED NULL,
+  approval_flow_json JSON NULL,
+  created_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_sales_contract_invoices_contract (contract_id, created_at),
+  KEY idx_sales_contract_invoices_status (status),
+  KEY idx_sales_contract_invoices_reviewer (reviewer_user_id),
+  CONSTRAINT fk_sales_contract_invoices_contract FOREIGN KEY (contract_id) REFERENCES sales_contracts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sales_contract_invoices_reviewer FOREIGN KEY (reviewer_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_sales_contract_invoices_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_sales_contract_invoices_issued_by FOREIGN KEY (issued_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+`;
+
+const DDL_SALES_CONTRACT_INVOICE_AUDIT_LOGS = `
+CREATE TABLE IF NOT EXISTS sales_contract_invoice_audit_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  invoice_id BIGINT UNSIGNED NOT NULL,
+  actor_id BIGINT UNSIGNED NULL,
+  action VARCHAR(32) NOT NULL,
+  result VARCHAR(32) NULL,
+  comment_text VARCHAR(2048) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_sales_contract_invoice_audit_invoice (invoice_id, created_at),
+  CONSTRAINT fk_sales_contract_invoice_audit_invoice FOREIGN KEY (invoice_id) REFERENCES sales_contract_invoices(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sales_contract_invoice_audit_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+`;
+
+/** 将 status 从旧审批枚举迁移为 draft / pending_finance / issued / cancelled */
+async function migrateSalesContractInvoiceStatusEnum(pool) {
+  const [rows] = await pool.query(
+    `SELECT COLUMN_TYPE AS column_type FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sales_contract_invoices' AND COLUMN_NAME = 'status'`
+  );
+  const colType = String(rows[0]?.column_type || rows[0]?.COLUMN_TYPE || '').toLowerCase();
+  if (!colType || colType.includes('pending_finance')) return;
+
+  if (colType.includes('pending_review') || colType.includes('approved')) {
+    await pool.query(
+      `ALTER TABLE sales_contract_invoices
+       MODIFY COLUMN status ENUM(
+         'draft', 'pending_review', 'approved', 'rejected',
+         'pending_finance', 'issued', 'cancelled'
+       ) NOT NULL DEFAULT 'draft'`
+    );
+    await pool.query(
+      `UPDATE sales_contract_invoices SET status = 'pending_finance' WHERE status = 'pending_review'`
+    );
+    await pool.query(`UPDATE sales_contract_invoices SET status = 'issued' WHERE status = 'approved'`);
+    await pool.query(`UPDATE sales_contract_invoices SET status = 'draft' WHERE status = 'rejected'`);
+  }
+
+  await pool.query(
+    `ALTER TABLE sales_contract_invoices
+     MODIFY COLUMN status ENUM('draft', 'pending_finance', 'issued', 'cancelled') NOT NULL DEFAULT 'draft'`
+  );
+}
+
+/** 启动时幂等创建开票相关表，避免未执行迁移的环境开票接口 500 */
+export async function ensureSalesContractInvoiceTables() {
+  const pool = getPool();
+  await pool.query(DDL_SALES_CONTRACT_INVOICES);
+  await pool.query(DDL_SALES_CONTRACT_INVOICE_AUDIT_LOGS);
+  const addCol = async (col, ddl) => {
+    if (!(await columnExists(pool, 'sales_contract_invoices', col))) {
+      await pool.query(ddl);
+    }
+  };
+  await addCol('invoice_code', 'ALTER TABLE sales_contract_invoices ADD COLUMN invoice_code VARCHAR(64) NULL AFTER invoice_no');
+  await addCol('invoice_url', 'ALTER TABLE sales_contract_invoices ADD COLUMN invoice_url VARCHAR(512) NULL AFTER invoice_code');
+  await addCol('issued_at', 'ALTER TABLE sales_contract_invoices ADD COLUMN issued_at DATETIME(3) NULL AFTER invoice_url');
+  await addCol('issued_by', 'ALTER TABLE sales_contract_invoices ADD COLUMN issued_by BIGINT UNSIGNED NULL AFTER issued_at');
+  await addCol('approval_flow_json', 'ALTER TABLE sales_contract_invoices ADD COLUMN approval_flow_json JSON NULL AFTER reviewer_user_id');
+  await addCol('buyer_address', 'ALTER TABLE sales_contract_invoices ADD COLUMN buyer_address VARCHAR(512) NULL AFTER buyer_tax_id');
+  await addCol('buyer_phone', 'ALTER TABLE sales_contract_invoices ADD COLUMN buyer_phone VARCHAR(64) NULL AFTER buyer_address');
+  await addCol('buyer_bank_name', 'ALTER TABLE sales_contract_invoices ADD COLUMN buyer_bank_name VARCHAR(256) NULL AFTER buyer_phone');
+  await addCol('buyer_bank_account', 'ALTER TABLE sales_contract_invoices ADD COLUMN buyer_bank_account VARCHAR(128) NULL AFTER buyer_bank_name');
+  await addCol('item_name', 'ALTER TABLE sales_contract_invoices ADD COLUMN item_name VARCHAR(512) NULL AFTER buyer_bank_account');
+  await addCol('item_unit', 'ALTER TABLE sales_contract_invoices ADD COLUMN item_unit VARCHAR(32) NULL AFTER item_name');
+  await addCol('item_quantity', 'ALTER TABLE sales_contract_invoices ADD COLUMN item_quantity DECIMAL(18, 4) NULL AFTER item_unit');
+  await addCol('item_unit_price', 'ALTER TABLE sales_contract_invoices ADD COLUMN item_unit_price DECIMAL(18, 4) NULL AFTER item_quantity');
+  await migrateSalesContractInvoiceStatusEnum(pool);
 }
 
 /** 文档上传合同 + 弃用旧附件表；与 migrations/031_sales_contract_upload_document.sql 一致 */
@@ -901,6 +1196,76 @@ CREATE TABLE IF NOT EXISTS departments (
   CONSTRAINT fk_departments_parent FOREIGN KEY (parent_id) REFERENCES departments(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 `;
+
+const DDL_ORDER_CALC_RULES = `
+CREATE TABLE IF NOT EXISTS order_calc_rules (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name VARCHAR(128) NOT NULL,
+  formulas_json JSON NOT NULL,
+  total_amount_target_col_index TINYINT UNSIGNED NOT NULL DEFAULT 9,
+  decimal_places TINYINT UNSIGNED NOT NULL DEFAULT 2,
+  rounding_mode VARCHAR(16) NOT NULL DEFAULT 'round',
+  is_current TINYINT(1) NOT NULL DEFAULT 0,
+  created_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_order_calc_rules_name (name),
+  KEY idx_order_calc_rules_current (is_current),
+  CONSTRAINT fk_order_calc_rules_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+`;
+
+const DEFAULT_CALC_RULE_NAME = '默认含税转不含税计算';
+const DEFAULT_CALC_RULE_FORMULAS = JSON.stringify([
+  { formulaText: 'ROUND(C/(1+H),2)', targetColIndex: 3 },
+  { formulaText: 'D*E', targetColIndex: 6 },
+  { formulaText: 'C*E', targetColIndex: 9 },
+  { formulaText: 'J-G', targetColIndex: 8 }
+]);
+
+const DDL_CUSTOMER_PRICES = `
+CREATE TABLE IF NOT EXISTS customer_prices (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  customer_id BIGINT UNSIGNED NOT NULL,
+  product_model VARCHAR(128) NOT NULL,
+  unit_price DECIMAL(18,4) NOT NULL DEFAULT 0,
+  notes VARCHAR(255) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_customer_prices_model (customer_id, product_model),
+  KEY idx_customer_prices_customer (customer_id),
+  CONSTRAINT fk_customer_prices_customer FOREIGN KEY (customer_id) REFERENCES sales_customers(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+`;
+
+export async function ensureCustomerPricesTable() {
+  const pool = getPool();
+  await pool.query(DDL_CUSTOMER_PRICES);
+}
+
+/** 启动自检 order_calc_rules 表并写入默认规则 */
+export async function ensureOrderCalcRulesTable() {
+  const pool = getPool();
+  await pool.query(DDL_ORDER_CALC_RULES);
+  if (!(await columnExists(pool, 'order_calc_rules', 'total_amount_target_col_index'))) {
+    await pool.query('ALTER TABLE order_calc_rules ADD COLUMN total_amount_target_col_index TINYINT UNSIGNED NOT NULL DEFAULT 9 AFTER formulas_json');
+  }
+  if (!(await columnExists(pool, 'order_calc_rules', 'decimal_places'))) {
+    await pool.query('ALTER TABLE order_calc_rules ADD COLUMN decimal_places TINYINT UNSIGNED NOT NULL DEFAULT 2 AFTER total_amount_target_col_index');
+  }
+  if (!(await columnExists(pool, 'order_calc_rules', 'rounding_mode'))) {
+    await pool.query("ALTER TABLE order_calc_rules ADD COLUMN rounding_mode VARCHAR(16) NOT NULL DEFAULT 'round' AFTER decimal_places");
+  }
+  const [rows] = await pool.query('SELECT COUNT(*) AS cnt FROM order_calc_rules');
+  if (rows[0].cnt === 0) {
+    await pool.query(
+      'INSERT INTO order_calc_rules (name, formulas_json, total_amount_target_col_index, is_current) VALUES (?, ?, 9, 1)',
+      [DEFAULT_CALC_RULE_NAME, DEFAULT_CALC_RULE_FORMULAS]
+    );
+  }
+}
 
 /** 与 migrations/016_departments.sql 一致 */
 export async function ensureDepartmentsTable() {
@@ -1044,7 +1409,12 @@ VALUES
 ('sales_order_approved_warehouse', '财务通过→仓库备货（系统）', 'textcard', '订单待发货', '{{detail}}', '{{shipConfirmUrl}}', '完成发货'),
 ('sales_order_rejected_sales', '财务驳回→销售（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
 ('sales_contract_submit_reviewer', '提交合同发送信息给审核人', 'textcard', '{{notificationTitle}}', '{{detail}}', '{{reviewUrl}}', '打开审批'),
-('sales_contract_review_result', '合同审核结果通知提交审核人', 'text', NULL, '📢{{customerName}}销售合同审核状态更新\n🔒状态：{{contractReviewStatus}}\n💾备注：{{reviewComment}}', NULL, '详情')
+('sales_contract_review_result', '合同审核结果通知提交审核人', 'text', NULL, '📢{{customerName}}销售合同审核状态更新\n🔒状态：{{contractReviewStatus}}\n💾备注：{{reviewComment}}', NULL, '详情'),
+('sales_invoice_submit_finance', '开票申请提交→财务（系统）', 'textcard', '合同开票待处理', '{{detail}}', '{{invoiceCenterUrl}}', '打开开票中心'),
+('sales_invoice_withdraw_finance', '开票申请撤销→财务（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
+('sales_invoice_fulfilled_applicant', '开票完成→申请人（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
+('sales_invoice_deleted_finance', '开票申请删除→财务（系统）', 'text', NULL, '{{detail}}', NULL, '详情'),
+('sales_invoice_deleted_applicant', '开票申请删除→申请人（系统）', 'text', NULL, '{{detail}}', NULL, '详情')
 `;
 
 /** 与 migrations/021_users_wecom_userid.sql 一致 */
@@ -1094,6 +1464,27 @@ export async function ensureReportsReportUidColumn() {
   await pool.query(
     "UPDATE reports SET report_uid = CONCAT('ZJ-', LPAD(id, 10, '0')) WHERE report_uid IS NULL OR report_uid = ''"
   );
+}
+
+/** 与 migrations/063_reports_customer_id.sql 一致 */
+export async function ensureReportsCustomerIdColumn() {
+  const pool = getPool();
+  if (!(await columnExists(pool, 'reports', 'customer_id'))) {
+    await pool.query(
+      "ALTER TABLE reports ADD COLUMN customer_id BIGINT UNSIGNED NULL DEFAULT NULL COMMENT '关联客户（从订单生成时写入）' AFTER product_name_en"
+    );
+  }
+  if (!(await indexExists(pool, 'reports', 'idx_reports_customer_id'))) {
+    await pool.query('ALTER TABLE reports ADD KEY idx_reports_customer_id (customer_id)');
+  }
+  try {
+    await pool.query(
+      `ALTER TABLE reports ADD CONSTRAINT fk_reports_customer
+       FOREIGN KEY (customer_id) REFERENCES sales_customers(id) ON DELETE SET NULL`
+    );
+  } catch {
+    /* 已存在或 sales_customers 未就绪时跳过 */
+  }
 }
 
 const WY_CUSTOMER_CODE_RE = /^WY[A-Z0-9]{8}$/;

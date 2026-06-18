@@ -9,6 +9,7 @@ import { logOperationFromReq } from '../lib/audit.js';
 import { isYearbookXlsxBasename, resolveQcYearbookPublicDir } from '../lib/qcYearbookPublic.js';
 import { importYearbookXlsxIntoDb } from '../lib/qcYearbookXlsxImport.js';
 import { requireAuth, requireAnyPermission, requirePermission } from '../middleware/auth.js';
+import { lookupQcYearbookForReport } from '../lib/qcYearbookReportLookup.js';
 
 export const router = Router();
 
@@ -16,6 +17,7 @@ router.use(requireAuth);
 
 const canRead = requireAnyPermission('qc_yearbooks', ['view', 'upload']);
 const canMutate = requirePermission('qc_yearbooks', 'upload');
+const canLookupForReport = requireAnyPermission('reports', ['create', 'edit', 'view']);
 
 const uploadImport = multer({
   storage: multer.memoryStorage(),
@@ -368,6 +370,24 @@ async function handleDeleteFinishedProductRow(req, res, next) {
 }
 
 /** public 目录下可导入的物源年度品质管控 xlsx 列表 */
+router.get('/lookup-for-report', canLookupForReport, async (req, res, next) => {
+  try {
+    const productModel = String(req.query.productModel || req.query.productName || '').trim();
+    const batchNo = String(req.query.batchNo || req.query.batch || '').trim();
+    const orderId = Number(req.query.orderId || req.query.fromOrder || 0);
+    const pool = getPool();
+    const qcYearbook = await lookupQcYearbookForReport(pool, {
+      orderId: Number.isFinite(orderId) ? orderId : 0,
+      productModel,
+      batchNo
+    });
+    res.json({ code: 0, message: 'OK', data: { qcYearbook } });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** public 目录下可导入的物源年度品质管控 xlsx 列表 */
 router.get('/public-excel-files', canRead, async (_req, res, next) => {
   try {
     const dir = resolveQcYearbookPublicDir();
@@ -552,6 +572,20 @@ router.delete('/years/:yearId', canMutate, async (req, res, next) => {
     const pool = getPool();
     const y = await loadYearById(pool, yearId);
     if (!y) return res.status(404).json({ error: 'NOT_FOUND', message: '年份不存在' });
+    const calendarYear = new Date().getFullYear();
+    if (Number(y.year) === calendarYear) {
+      const [cntRows] = await pool.query(
+        'SELECT COUNT(*) AS c FROM qc_yearbook_finished_product_rows WHERE year_id = ?',
+        [yearId]
+      );
+      const fpCount = Number(cntRows?.[0]?.c) || 0;
+      if (fpCount > 0) {
+        return res.status(400).json({
+          error: 'CURRENT_YEAR_HAS_DATA',
+          message: `当前年度（${calendarYear} 年）已有 ${fpCount} 条成品数据，不允许删除`
+        });
+      }
+    }
     const [del] = await pool.query('DELETE FROM qc_yearbook_years WHERE id = ?', [yearId]);
     await logOperationFromReq(req, {
       module: 'qc_yearbooks',

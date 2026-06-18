@@ -6,13 +6,33 @@
 import { buildOrderNotifyBody } from '../lib/salesOrderNotifyBody.js';
 import {
   tryNotifyFinanceWecomOrderEvent,
-  tryNotifyWarehouseWecomOrderApproved,
-  tryNotifySalesWecomOrderRejected,
-  tryNotifyQcWecomPendingQc,
   WECOM_TEMPLATE_SALES_ORDER_WITHDRAW_FINANCE
 } from '../lib/wecomNotify.js';
 import { notifyUsersByCategory, notifyUser } from '../lib/salesInternalInbox.js';
 import { uniquePositiveIds } from '../lib/idList.js';
+import { resolveCurrentReviewStep, notifyStepAssignees, statusForStep } from '../lib/salesOrderFlowConfig.js';
+import {
+  loadActiveOrderFlowDefinition,
+  assertOrderInReviewStep,
+  applyOrderSubmit,
+  applyStepApprove,
+  applyStepReject,
+  notifyAfterSubmit,
+  notifyAfterApproveNext,
+  notifyAfterApproveFinal,
+  notifyAfterReject,
+  notifyWithdraw,
+  healOrphanPendingQc
+} from '../lib/salesOrderFlowRuntime.js';
+
+function throwFlowError(code, httpStatus = 400, payload = {}) {
+  throw new SalesOrderFlowError(code, httpStatus, payload);
+}
+
+function mapRuntimeError(e) {
+  if (e?.code) throw new SalesOrderFlowError(e.code, e.code === 'ORDER_STATE_CHANGED' ? 409 : 400);
+  throw e;
+}
 
 export class SalesOrderFlowError extends Error {
   /**
@@ -37,99 +57,150 @@ async function loadFinanceStaffUserIds(pool) {
   return fin.map((f) => f.id);
 }
 
-/** 提交财务审核（单条） */
+/** 提交审核（单条，按流程配置进入首节点） */
 export async function submitSalesOrderForFinanceReview(pool, { orderId, actorUserId, row }) {
   const id = Number(orderId);
-  if (!Number.isFinite(id) || id < 1) throw new SalesOrderFlowError('BAD_REQUEST', 400);
-  if (!row) throw new SalesOrderFlowError('NOT_FOUND', 404);
-  if (!['pending_review', 'rejected'].includes(row.status)) {
-    throw new SalesOrderFlowError('INVALID_STATUS', 400);
+  if (!Number.isFinite(id) || id < 1) throwFlowError('BAD_REQUEST');
+  if (!row) throwFlowError('NOT_FOUND', 404);
+  if (!['pending_review', 'rejected'].includes(row.status)) throwFlowError('INVALID_STATUS');
+  if (row.submitted_for_review_at) throwFlowError('ALREADY_SUBMITTED');
+
+  const { definition, version } = await loadActiveOrderFlowDefinition(pool);
+  if (!definition.steps.length) throwFlowError('FLOW_EMPTY');
+
+  const conn = await pool.getConnection();
+  let firstStep;
+  try {
+    await conn.beginTransaction();
+    ({ firstStep } = await applyOrderSubmit(conn, {
+      orderId: id,
+      actorUserId,
+      row,
+      flowVersion: version,
+      definition
+    }));
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    mapRuntimeError(e);
+  } finally {
+    conn.release();
   }
-  if (row.submitted_for_review_at) throw new SalesOrderFlowError('ALREADY_SUBMITTED', 400);
 
-  const isResubmit = row.status === 'rejected';
-  const [submitResult] = isResubmit
-    ? await pool.query(
-        `UPDATE sales_orders
-         SET status = ?, finance_reviewed_at = NULL, finance_reviewed_by = NULL, finance_comment = NULL,
-             qc_reviewed_at = NULL, qc_reviewed_by = NULL, qc_comment = NULL,
-             submitted_for_review_at = NOW(3), updated_by = ?, row_version = row_version + 1
-         WHERE id = ? AND status = ? AND submitted_for_review_at IS NULL`,
-        ['pending_review', actorUserId, id, row.status]
-      )
-    : await pool.query(
-        `UPDATE sales_orders
-         SET submitted_for_review_at = NOW(3), updated_by = ?, row_version = row_version + 1
-         WHERE id = ? AND status = ? AND submitted_for_review_at IS NULL`,
-        [actorUserId, id, row.status]
-      );
-  if (!submitResult.affectedRows) throw new SalesOrderFlowError('ORDER_STATE_CHANGED', 409);
-
-  await pool.query(
-    `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-     VALUES (?, ?, 'pending_review', ?, '提交财务审核')`,
-    [id, row.status, actorUserId]
-  );
-
-  const submitBody = await buildOrderNotifyBody(pool, [row], {
-    intro: '有新的订单已提交财务审核，请及时处理。'
-  });
-  await notifyUsersByCategory(pool, 'finance', {
-    title: '待审核订单',
-    bodyText: submitBody,
-    fromUserId: actorUserId,
-    refType: 'order',
-    refId: id,
-    msgCategory: 'todo'
-  });
-  await tryNotifyFinanceWecomOrderEvent(pool, {
-    event: 'submit',
-    notifyBody: submitBody,
-    orderRows: [row],
-    fromUserId: actorUserId
-  });
+  await notifyAfterSubmit(pool, { firstStep, orderRows: [row], actorUserId });
 }
 
-/** 撤回财务审核申请（单条） */
+/** 撤回审核申请（单条，仅首节点待审时可撤回） */
 export async function withdrawSalesOrderFinanceReview(pool, { orderId, actorUserId, row }) {
   const id = Number(orderId);
-  if (!Number.isFinite(id) || id < 1) throw new SalesOrderFlowError('BAD_REQUEST', 400);
-  if (!row) throw new SalesOrderFlowError('NOT_FOUND', 404);
-  if (row.status !== 'pending_review' || !row.submitted_for_review_at) {
-    throw new SalesOrderFlowError('NOT_SUBMITTED', 400);
-  }
+  if (!Number.isFinite(id) || id < 1) throwFlowError('BAD_REQUEST');
+  if (!row) throwFlowError('NOT_FOUND', 404);
+
+  const { definition } = await loadActiveOrderFlowDefinition(pool);
+  const firstStep = definition.steps[0];
+  if (!firstStep) throwFlowError('FLOW_EMPTY');
+  const ctx = resolveCurrentReviewStep(row, definition);
+  if (!ctx || ctx.index !== 0) throwFlowError('NOT_SUBMITTED');
 
   const [withdrawResult] = await pool.query(
     `UPDATE sales_orders
-     SET submitted_for_review_at = NULL, updated_by = ?, row_version = row_version + 1
-     WHERE id = ? AND status = 'pending_review' AND submitted_for_review_at IS NOT NULL`,
+     SET submitted_for_review_at = NULL,
+         status = CASE WHEN status = 'pending_qc' THEN 'pending_review' ELSE status END,
+         flow_step_index = NULL,
+         updated_by = ?,
+         row_version = row_version + 1
+     WHERE id = ? AND (flow_step_index = 0 OR (flow_step_index IS NULL AND submitted_for_review_at IS NOT NULL))`,
     [actorUserId, id]
   );
-  if (!withdrawResult.affectedRows) throw new SalesOrderFlowError('ORDER_STATE_CHANGED', 409);
+  if (!withdrawResult.affectedRows) throwFlowError('ORDER_STATE_CHANGED', 409);
 
   await pool.query(
     `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-     VALUES (?, 'pending_review', 'pending_review', ?, '撤回审核申请')`,
-    [id, actorUserId]
+     VALUES (?, ?, ?, ?, '撤回审核申请')`,
+    [id, row.status, row.status, actorUserId]
   );
 
-  const withdrawBody = await buildOrderNotifyBody(pool, [row], {
-    intro: '销售已撤回财务审核申请，该订单不再在待审队列中。'
-  });
-  await notifyUsersByCategory(pool, 'finance', {
-    title: '订单已撤回审核申请',
-    bodyText: withdrawBody,
-    fromUserId: actorUserId,
-    refType: 'order_withdraw',
-    refId: id,
-    msgCategory: 'notice'
-  });
-  await tryNotifyFinanceWecomOrderEvent(pool, {
-    event: 'withdraw',
-    notifyBody: withdrawBody,
-    orderRows: [row],
-    fromUserId: actorUserId
-  });
+  await notifyWithdraw(pool, { orderRows: [row], actorUserId, firstStep });
+}
+
+/**
+ * 批量撤回审核申请（仅首节点待审时可撤回）
+ * @param {import('mysql2/promise').Pool} pool
+ * @param {{ rawIds: unknown[], actorUserId: number, mayActOnOrder: (row: object) => boolean }} ctx
+ */
+export async function batchWithdrawSalesOrdersFinanceReview(pool, { rawIds, actorUserId, mayActOnOrder }) {
+  const wanted = uniquePositiveIds(rawIds);
+  if (!wanted.length) throw new SalesOrderFlowError('NO_IDS', 400);
+
+  const { definition } = await loadActiveOrderFlowDefinition(pool);
+  const firstStep = definition.steps[0];
+  if (!firstStep) throwFlowError('FLOW_EMPTY');
+
+  const conn = await pool.getConnection();
+  const failed = [];
+  let okRows = [];
+  try {
+    await conn.beginTransaction();
+    const ph = wanted.map(() => '?').join(',');
+    const [rows] = await conn.query(`SELECT * FROM sales_orders WHERE id IN (${ph}) FOR UPDATE`, wanted);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const okIds = [];
+    for (const id of wanted) {
+      const row = byId.get(id);
+      if (!row) {
+        failed.push({ id, error: 'NOT_FOUND' });
+        continue;
+      }
+      if (!mayActOnOrder(row)) {
+        failed.push({ id, error: 'FORBIDDEN' });
+        continue;
+      }
+      const ctx = resolveCurrentReviewStep(row, definition);
+      if (!ctx || ctx.index !== 0) {
+        failed.push({ id, error: 'NOT_SUBMITTED' });
+        continue;
+      }
+      const [withdrawResult] = await conn.query(
+        `UPDATE sales_orders
+         SET submitted_for_review_at = NULL,
+             status = CASE WHEN status = 'pending_qc' THEN 'pending_review' ELSE status END,
+             flow_step_index = NULL,
+             updated_by = ?,
+             row_version = row_version + 1
+         WHERE id = ? AND (flow_step_index = 0 OR (flow_step_index IS NULL AND submitted_for_review_at IS NOT NULL))`,
+        [actorUserId, id]
+      );
+      if (!withdrawResult.affectedRows) {
+        failed.push({ id, error: 'ORDER_STATE_CHANGED' });
+        continue;
+      }
+      await conn.query(
+        `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
+         VALUES (?, ?, ?, ?, '撤回审核申请')`,
+        [id, row.status, row.status, actorUserId]
+      );
+      okIds.push(id);
+    }
+    okRows = okIds.map((oid) => byId.get(oid));
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+
+  if (okRows.length) {
+    await notifyWithdraw(pool, { orderRows: okRows, actorUserId, firstStep });
+  }
+
+  const okItems = okRows.map((r) => ({
+    id: r.id,
+    order_no: r.order_no || null,
+    from_status: r.status,
+    to_status: r.status
+  }));
+  return { okCount: okRows.length, failed, okItems };
 }
 
 /**
@@ -140,6 +211,10 @@ export async function withdrawSalesOrderFinanceReview(pool, { orderId, actorUser
 export async function batchSubmitSalesOrdersForFinanceReview(pool, { rawIds, actorUserId, mayActOnOrder }) {
   const wanted = uniquePositiveIds(rawIds);
   if (!wanted.length) throw new SalesOrderFlowError('NO_IDS', 400);
+
+  const { definition, version } = await loadActiveOrderFlowDefinition(pool);
+  if (!definition.steps.length) throwFlowError('FLOW_EMPTY');
+  const firstStep = definition.steps[0];
 
   const conn = await pool.getConnection();
   const failed = [];
@@ -168,45 +243,17 @@ export async function batchSubmitSalesOrdersForFinanceReview(pool, { rawIds, act
         failed.push({ id, error: 'ALREADY_SUBMITTED' });
         continue;
       }
-      okIds.push(id);
-    }
-    if (okIds.length) {
-      const rejectedIds = okIds.filter((oid) => byId.get(oid)?.status === 'rejected');
-      const pendingIds = okIds.filter((oid) => byId.get(oid)?.status === 'pending_review');
-      if (pendingIds.length) {
-        const pendingPh = pendingIds.map(() => '?').join(',');
-        await conn.query(
-          `UPDATE sales_orders
-           SET submitted_for_review_at = NOW(3), updated_by = ?, row_version = row_version + 1
-           WHERE id IN (${pendingPh})`,
-          [actorUserId, ...pendingIds]
-        );
-      }
-      if (rejectedIds.length) {
-        const rejectedPh = rejectedIds.map(() => '?').join(',');
-        await conn.query(
-          `UPDATE sales_orders
-           SET status = 'pending_review',
-               submitted_for_review_at = NOW(3),
-               finance_reviewed_at = NULL,
-               finance_reviewed_by = NULL,
-               finance_comment = NULL,
-               qc_reviewed_at = NULL,
-               qc_reviewed_by = NULL,
-               qc_comment = NULL,
-               updated_by = ?,
-               row_version = row_version + 1
-           WHERE id IN (${rejectedPh})`,
-          [actorUserId, ...rejectedIds]
-        );
-      }
-      for (const oid of okIds) {
-        const r = byId.get(oid);
-        await conn.query(
-          `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-           VALUES (?, ?, 'pending_review', ?, '提交财务审核')`,
-          [oid, r?.status || 'pending_review', actorUserId]
-        );
+      try {
+        await applyOrderSubmit(conn, {
+          orderId: id,
+          actorUserId,
+          row,
+          flowVersion: version,
+          definition
+        });
+        okIds.push(id);
+      } catch (e) {
+        failed.push({ id, error: e.code || 'FAILED' });
       }
     }
     okRows = okIds.map((oid) => byId.get(oid));
@@ -219,33 +266,14 @@ export async function batchSubmitSalesOrdersForFinanceReview(pool, { rawIds, act
   }
 
   if (okRows.length) {
-    const batchSubmitBody =
-      okRows.length === 1
-        ? await buildOrderNotifyBody(pool, okRows, {
-            intro: '有新的订单已提交财务审核，请及时处理。'
-          })
-        : '有批量订单已提交财务审核，请到订单管理查看详情。';
-    await notifyUsersByCategory(pool, 'finance', {
-      title: '待审核订单',
-      bodyText: batchSubmitBody,
-      fromUserId: actorUserId,
-      refType: 'order_batch_submit',
-      refId: okRows[0].id,
-      msgCategory: 'todo'
-    });
-    await tryNotifyFinanceWecomOrderEvent(pool, {
-      event: 'batch_submit',
-      notifyBody: batchSubmitBody,
-      orderRows: okRows,
-      fromUserId: actorUserId
-    });
+    await notifyAfterSubmit(pool, { firstStep, orderRows: okRows, actorUserId });
   }
 
   const okItems = okRows.map((r) => ({
     id: r.id,
     order_no: r.order_no || null,
     from_status: r.status,
-    to_status: 'pending_review'
+    to_status: statusForStep(firstStep)
   }));
   return { okCount: okRows.length, failed, okItems };
 }
@@ -254,416 +282,136 @@ export async function batchSubmitSalesOrdersForFinanceReview(pool, { rawIds, act
  * 批量财务审核
  */
 export async function batchFinanceReviewSalesOrders(pool, { rawIds, result, comment, actorUserId }) {
+  return batchReviewSalesOrdersByKind(pool, { rawIds, result, comment, actorUserId, expectedKind: 'finance' });
+}
+
+async function batchReviewSalesOrdersByKind(pool, { rawIds, result, comment, actorUserId, expectedKind }) {
   if (result === 'rejected' && !String(comment || '').trim()) {
     throw new SalesOrderFlowError('COMMENT_REQUIRED', 400);
   }
   const wanted = uniquePositiveIds(rawIds);
   if (!wanted.length) throw new SalesOrderFlowError('NO_IDS', 400);
 
-  const conn = await pool.getConnection();
+  const ph = wanted.map(() => '?').join(',');
+  const [rows] = await pool.query(`SELECT * FROM sales_orders WHERE id IN (${ph})`, wanted);
+  const byId = new Map(rows.map((r) => [r.id, r]));
   const failed = [];
-  let okRows = [];
+  const okRows = [];
+
+  for (const id of wanted) {
+    const row = byId.get(id);
+    if (!row) {
+      failed.push({ id, error: 'NOT_FOUND' });
+      continue;
+    }
+    try {
+      const stepResult = await reviewSingleOrderStep(pool, {
+        orderId: id,
+        row,
+        result,
+        comment,
+        actorUserId,
+        expectedKind
+      });
+      okRows.push({ row, result: stepResult });
+    } catch (e) {
+      failed.push({ id, error: e instanceof SalesOrderFlowError ? e.code : 'FAILED' });
+    }
+  }
+
+  const okItems = okRows.map(({ row: r, result: stepResult }) => ({
+    id: r.id,
+    order_no: r.order_no || null,
+    from_status: r.status,
+    to_status: stepResult?.toStatus || (result === 'approved' ? 'approved' : 'rejected')
+  }));
+  return { okCount: okRows.length, failed, okItems };
+}
+
+async function reviewSingleOrderStep(pool, { orderId, row, result, comment, actorUserId, expectedKind }) {
+  if (result === 'rejected' && !String(comment || '').trim()) throwFlowError('COMMENT_REQUIRED');
+  if (!row) throwFlowError('NOT_FOUND', 404);
+
+  const { definition } = await loadActiveOrderFlowDefinition(pool);
+
+  const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const ph = wanted.map(() => '?').join(',');
-    const [rows] = await conn.query(`SELECT * FROM sales_orders WHERE id IN (${ph}) FOR UPDATE`, wanted);
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const okIds = [];
-    for (const id of wanted) {
-      const row = byId.get(id);
-      if (!row) {
-        failed.push({ id, error: 'NOT_FOUND' });
-        continue;
-      }
-      if (row.status !== 'pending_review' || !row.submitted_for_review_at) {
-        failed.push({ id, error: 'NOT_IN_REVIEW_QUEUE' });
-        continue;
-      }
-      okIds.push(id);
+    const healed = await healOrphanPendingQc(conn, row, definition);
+    const workingRow = healed || row;
+
+    if (healed) {
+      await conn.commit();
+      return { outcome: 'approved', toStatus: 'approved', healedOrphan: true };
     }
 
-    if (okIds.length) {
-      const ph2 = okIds.map(() => '?').join(',');
-      if (result === 'approved') {
-        await conn.query(
-          `UPDATE sales_orders SET status = 'pending_qc', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?,
-             qc_reviewed_at = NULL, qc_reviewed_by = NULL, qc_comment = NULL, updated_by = ?, row_version = row_version + 1
-           WHERE id IN (${ph2})`,
-          [actorUserId, comment || null, actorUserId, ...okIds]
-        );
-        for (const oid of okIds) {
-          await conn.query(
-            `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-             VALUES (?, 'pending_review', 'pending_qc', ?, ?)`,
-            [oid, actorUserId, comment || '财务通过']
-          );
-        }
-      } else {
-        await conn.query(
-          `UPDATE sales_orders SET status = 'rejected', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, submitted_for_review_at = NULL, updated_by = ?, row_version = row_version + 1
-           WHERE id IN (${ph2})`,
-          [actorUserId, comment, actorUserId, ...okIds]
-        );
-        for (const oid of okIds) {
-          await conn.query(
-            `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-             VALUES (?, 'pending_review', 'rejected', ?, ?)`,
-            [oid, actorUserId, comment]
-          );
-        }
-      }
+    let ctx;
+    try {
+      ctx = assertOrderInReviewStep(workingRow, definition, expectedKind);
+    } catch (e) {
+      mapRuntimeError(e);
     }
-    okRows = okIds.map((oid) => byId.get(oid));
+
+    if (result === 'approved') {
+      const out = await applyStepApprove(conn, { orderId, row: workingRow, ctx, actorUserId, comment });
+      await conn.commit();
+      if (out.outcome === 'next') {
+        await notifyAfterApproveNext(pool, {
+          nextStep: out.nextStep,
+          orderRows: [workingRow],
+          actorUserId,
+          prevStep: ctx.step
+        });
+      } else {
+        await notifyAfterApproveFinal(pool, { orderRows: [workingRow], actorUserId, step: ctx.step });
+      }
+      return out;
+    }
+    await applyStepReject(conn, { orderId, row: workingRow, ctx, actorUserId, comment });
     await conn.commit();
+    await notifyAfterReject(pool, { orderRows: [workingRow], actorUserId, step: ctx.step, comment });
+    return { outcome: 'rejected', toStatus: 'rejected' };
   } catch (e) {
     await conn.rollback();
-    throw e;
+    mapRuntimeError(e);
   } finally {
     conn.release();
   }
-
-  if (okRows.length && result === 'approved') {
-    const pendingQcBody =
-      okRows.length === 1
-        ? await buildOrderNotifyBody(pool, okRows, {
-            intro: '订单已通过财务审核，请进行品管（质检）审核；通过后仓库方可发货。'
-          })
-        : '批量订单已通过财务审核，请品管进行质检审核。请到订单管理查看详情。';
-    await notifyUsersByCategory(pool, 'qc', {
-      title: '待品管审核订单',
-      bodyText: pendingQcBody,
-      fromUserId: actorUserId,
-      refType: 'order_batch_finance_pass',
-      refId: okRows[0].id,
-      msgCategory: 'todo'
-    });
-    await tryNotifyQcWecomPendingQc(pool, {
-      orderRows: okRows,
-      fromUserId: actorUserId,
-      notifyBody: pendingQcBody
-    });
-  }
-
-  if (okRows.length && result === 'rejected') {
-    const byCreator = new Map();
-    for (const row of okRows) {
-      if (!row.created_by) continue;
-      if (!byCreator.has(row.created_by)) byCreator.set(row.created_by, []);
-      byCreator.get(row.created_by).push(row);
-    }
-    const c = comment;
-    for (const [uid, list] of byCreator) {
-      const rejectBody =
-        list.length === 1
-          ? await buildOrderNotifyBody(pool, list, {
-              intro: `订单已被财务驳回。\n驳回原因：${c}`
-            })
-          : `批量订单已被财务驳回。\n驳回原因：${c}\n请到订单管理查看详情。`;
-      await notifyUser(pool, uid, {
-        title: '订单审核驳回',
-        bodyText: rejectBody,
-        fromUserId: actorUserId,
-        refType: 'order_batch_rejected',
-        refId: list[0].id,
-        msgCategory: 'notice'
-      });
-      await tryNotifySalesWecomOrderRejected(pool, {
-        notifyBody: rejectBody,
-        orderRows: list,
-        fromUserId: actorUserId,
-        toUserId: uid
-      });
-    }
-  }
-
-  const okItems = okRows.map((r) => ({
-    id: r.id,
-    order_no: r.order_no || null,
-    from_status: 'pending_review',
-    to_status: result === 'approved' ? 'pending_qc' : 'rejected'
-  }));
-  return { okCount: okRows.length, failed, okItems };
 }
 
 /** 单条财务审核 */
 export async function financeReviewSalesOrder(pool, { orderId, result, comment, actorUserId, row }) {
   const id = Number(orderId);
-  if (!Number.isFinite(id) || id < 1) throw new SalesOrderFlowError('BAD_REQUEST', 400);
-  if (result === 'rejected' && !String(comment || '').trim()) {
-    throw new SalesOrderFlowError('COMMENT_REQUIRED', 400);
-  }
-  if (!row) throw new SalesOrderFlowError('NOT_FOUND', 404);
-  if (row.status !== 'pending_review' || !row.submitted_for_review_at) {
-    throw new SalesOrderFlowError('NOT_IN_REVIEW_QUEUE', 400);
-  }
-
-  if (result === 'approved') {
-    const [approveResult] = await pool.query(
-      `UPDATE sales_orders SET status = 'pending_qc', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?,
-           qc_reviewed_at = NULL, qc_reviewed_by = NULL, qc_comment = NULL, updated_by = ?, row_version = row_version + 1
-       WHERE id = ? AND status = 'pending_review' AND submitted_for_review_at IS NOT NULL`,
-      [actorUserId, comment || null, actorUserId, id]
-    );
-    if (!approveResult.affectedRows) throw new SalesOrderFlowError('ORDER_STATE_CHANGED', 409);
-    await pool.query(
-      `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-       VALUES (?, 'pending_review', 'pending_qc', ?, ?)`,
-      [id, actorUserId, comment || '财务通过']
-    );
-    const pendingQcBody = await buildOrderNotifyBody(pool, [row], {
-      intro: '订单已通过财务审核，请进行品管（质检）审核；通过后仓库方可发货。'
-    });
-    await notifyUsersByCategory(pool, 'qc', {
-      title: '待品管审核订单',
-      bodyText: pendingQcBody,
-      fromUserId: actorUserId,
-      refType: 'order',
-      refId: id,
-      msgCategory: 'todo'
-    });
-    await tryNotifyQcWecomPendingQc(pool, {
-      orderRows: [row],
-      fromUserId: actorUserId,
-      notifyBody: pendingQcBody
-    });
-  } else {
-    const [rejectResult] = await pool.query(
-      `UPDATE sales_orders SET status = 'rejected', finance_reviewed_at = NOW(3), finance_reviewed_by = ?, finance_comment = ?, submitted_for_review_at = NULL, updated_by = ?, row_version = row_version + 1
-       WHERE id = ? AND status = 'pending_review' AND submitted_for_review_at IS NOT NULL`,
-      [actorUserId, comment, actorUserId, id]
-    );
-    if (!rejectResult.affectedRows) throw new SalesOrderFlowError('ORDER_STATE_CHANGED', 409);
-    await pool.query(
-      `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-       VALUES (?, 'pending_review', 'rejected', ?, ?)`,
-      [id, actorUserId, comment]
-    );
-    if (row.created_by) {
-      const rejectOneBody = await buildOrderNotifyBody(pool, [row], {
-        intro: `订单已被财务驳回。\n驳回原因：${comment}`
-      });
-      await notifyUser(pool, row.created_by, {
-        title: '订单审核驳回',
-        bodyText: rejectOneBody,
-        fromUserId: actorUserId,
-        refType: 'order',
-        refId: id,
-        msgCategory: 'notice'
-      });
-      await tryNotifySalesWecomOrderRejected(pool, {
-        notifyBody: rejectOneBody,
-        orderRows: [row],
-        fromUserId: actorUserId,
-        toUserId: row.created_by
-      });
-    }
-  }
+  if (!Number.isFinite(id) || id < 1) throwFlowError('BAD_REQUEST');
+  await reviewSingleOrderStep(pool, {
+    orderId: id,
+    row,
+    result,
+    comment,
+    actorUserId,
+    expectedKind: 'finance'
+  });
 }
 
 /**
- * 批量品管（质检）审核：仅 `pending_qc`；通过后进入 `approved` 并通知仓库。
+ * 批量品管（质检）审核
  */
 export async function batchQcReviewSalesOrders(pool, { rawIds, result, comment, actorUserId }) {
-  if (result === 'rejected' && !String(comment || '').trim()) {
-    throw new SalesOrderFlowError('COMMENT_REQUIRED', 400);
-  }
-  const wanted = uniquePositiveIds(rawIds);
-  if (!wanted.length) throw new SalesOrderFlowError('NO_IDS', 400);
-
-  const conn = await pool.getConnection();
-  const failed = [];
-  let okRows = [];
-  try {
-    await conn.beginTransaction();
-    const ph = wanted.map(() => '?').join(',');
-    const [rows] = await conn.query(`SELECT * FROM sales_orders WHERE id IN (${ph}) FOR UPDATE`, wanted);
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const okIds = [];
-    for (const id of wanted) {
-      const row = byId.get(id);
-      if (!row) {
-        failed.push({ id, error: 'NOT_FOUND' });
-        continue;
-      }
-      if (row.status !== 'pending_qc') {
-        failed.push({ id, error: 'NOT_IN_QC_QUEUE' });
-        continue;
-      }
-      okIds.push(id);
-    }
-
-    if (okIds.length) {
-      const ph2 = okIds.map(() => '?').join(',');
-      if (result === 'approved') {
-        await conn.query(
-          `UPDATE sales_orders SET status = 'approved', qc_reviewed_at = NOW(3), qc_reviewed_by = ?, qc_comment = ?, updated_by = ?, row_version = row_version + 1
-           WHERE id IN (${ph2})`,
-          [actorUserId, comment || null, actorUserId, ...okIds]
-        );
-        for (const oid of okIds) {
-          await conn.query(
-            `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-             VALUES (?, 'pending_qc', 'approved', ?, ?)`,
-            [oid, actorUserId, comment || '品管通过']
-          );
-        }
-      } else {
-        await conn.query(
-          `UPDATE sales_orders SET status = 'rejected', qc_reviewed_at = NOW(3), qc_reviewed_by = ?, qc_comment = ?, submitted_for_review_at = NULL, updated_by = ?, row_version = row_version + 1
-           WHERE id IN (${ph2})`,
-          [actorUserId, comment, actorUserId, ...okIds]
-        );
-        for (const oid of okIds) {
-          await conn.query(
-            `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-             VALUES (?, 'pending_qc', 'rejected', ?, ?)`,
-            [oid, actorUserId, comment]
-          );
-        }
-      }
-    }
-    okRows = okIds.map((oid) => byId.get(oid));
-    await conn.commit();
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
-  }
-
-  if (okRows.length && result === 'approved') {
-    const approvedBody =
-      okRows.length === 1
-        ? await buildOrderNotifyBody(pool, okRows, {
-            intro: '订单已通过品管（质检）审核，请备货发货。'
-          })
-        : '批量订单已通过品管审核，请备货发货。请到订单管理查看详情。';
-    await notifyUsersByCategory(pool, 'warehouse', {
-      title: '订单待发货',
-      bodyText: approvedBody,
-      fromUserId: actorUserId,
-      refType: 'order_batch_approved',
-      refId: okRows[0].id,
-      msgCategory: 'todo'
-    });
-    await tryNotifyWarehouseWecomOrderApproved(pool, {
-      orderRows: okRows,
-      fromUserId: actorUserId
-    });
-  }
-
-  if (okRows.length && result === 'rejected') {
-    const byCreator = new Map();
-    for (const row of okRows) {
-      if (!row.created_by) continue;
-      if (!byCreator.has(row.created_by)) byCreator.set(row.created_by, []);
-      byCreator.get(row.created_by).push(row);
-    }
-    const c = comment;
-    for (const [uid, list] of byCreator) {
-      const rejectBody =
-        list.length === 1
-          ? await buildOrderNotifyBody(pool, list, {
-              intro: `订单已被品管（质检）驳回。\n驳回原因：${c}`
-            })
-          : `批量订单已被品管驳回。\n驳回原因：${c}\n请到订单管理查看详情。`;
-      await notifyUser(pool, uid, {
-        title: '订单审核驳回',
-        bodyText: rejectBody,
-        fromUserId: actorUserId,
-        refType: 'order_batch_qc_rejected',
-        refId: list[0].id,
-        msgCategory: 'notice'
-      });
-      await tryNotifySalesWecomOrderRejected(pool, {
-        notifyBody: rejectBody,
-        orderRows: list,
-        fromUserId: actorUserId,
-        toUserId: uid
-      });
-    }
-  }
-
-  const okItems = okRows.map((r) => ({
-    id: r.id,
-    order_no: r.order_no || null,
-    from_status: 'pending_qc',
-    to_status: result === 'approved' ? 'approved' : 'rejected'
-  }));
-  return { okCount: okRows.length, failed, okItems };
+  return batchReviewSalesOrdersByKind(pool, { rawIds, result, comment, actorUserId, expectedKind: 'qc' });
 }
 
 /** 单品管审核 */
 export async function qcReviewSalesOrder(pool, { orderId, result, comment, actorUserId, row }) {
   const id = Number(orderId);
-  if (!Number.isFinite(id) || id < 1) throw new SalesOrderFlowError('BAD_REQUEST', 400);
-  if (result === 'rejected' && !String(comment || '').trim()) {
-    throw new SalesOrderFlowError('COMMENT_REQUIRED', 400);
-  }
-  if (!row) throw new SalesOrderFlowError('NOT_FOUND', 404);
-  if (row.status !== 'pending_qc') {
-    throw new SalesOrderFlowError('NOT_IN_QC_QUEUE', 400);
-  }
-
-  if (result === 'approved') {
-    const [approveResult] = await pool.query(
-      `UPDATE sales_orders SET status = 'approved', qc_reviewed_at = NOW(3), qc_reviewed_by = ?, qc_comment = ?, updated_by = ?, row_version = row_version + 1
-       WHERE id = ? AND status = 'pending_qc'`,
-      [actorUserId, comment || null, actorUserId, id]
-    );
-    if (!approveResult.affectedRows) throw new SalesOrderFlowError('ORDER_STATE_CHANGED', 409);
-    await pool.query(
-      `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-       VALUES (?, 'pending_qc', 'approved', ?, ?)`,
-      [id, actorUserId, comment || '品管通过']
-    );
-    const approveOneBody = await buildOrderNotifyBody(pool, [row], {
-      intro: '订单已通过品管（质检）审核，请备货发货。'
-    });
-    await notifyUsersByCategory(pool, 'warehouse', {
-      title: '订单待发货',
-      bodyText: approveOneBody,
-      fromUserId: actorUserId,
-      refType: 'order',
-      refId: id,
-      msgCategory: 'todo'
-    });
-    await tryNotifyWarehouseWecomOrderApproved(pool, {
-      orderRows: [row],
-      fromUserId: actorUserId
-    });
-  } else {
-    const [rejectResult] = await pool.query(
-      `UPDATE sales_orders SET status = 'rejected', qc_reviewed_at = NOW(3), qc_reviewed_by = ?, qc_comment = ?, submitted_for_review_at = NULL, updated_by = ?, row_version = row_version + 1
-       WHERE id = ? AND status = 'pending_qc'`,
-      [actorUserId, comment, actorUserId, id]
-    );
-    if (!rejectResult.affectedRows) throw new SalesOrderFlowError('ORDER_STATE_CHANGED', 409);
-    await pool.query(
-      `INSERT INTO sales_order_status_logs (order_id, from_status, to_status, actor_id, remark)
-       VALUES (?, 'pending_qc', 'rejected', ?, ?)`,
-      [id, actorUserId, comment]
-    );
-    if (row.created_by) {
-      const rejectOneBody = await buildOrderNotifyBody(pool, [row], {
-        intro: `订单已被品管（质检）驳回。\n驳回原因：${comment}`
-      });
-      await notifyUser(pool, row.created_by, {
-        title: '订单审核驳回',
-        bodyText: rejectOneBody,
-        fromUserId: actorUserId,
-        refType: 'order',
-        refId: id,
-        msgCategory: 'notice'
-      });
-      await tryNotifySalesWecomOrderRejected(pool, {
-        notifyBody: rejectOneBody,
-        orderRows: [row],
-        fromUserId: actorUserId,
-        toUserId: row.created_by
-      });
-    }
-  }
+  if (!Number.isFinite(id) || id < 1) throwFlowError('BAD_REQUEST');
+  await reviewSingleOrderStep(pool, {
+    orderId: id,
+    row,
+    result,
+    comment,
+    actorUserId,
+    expectedKind: 'qc'
+  });
 }
 
 /** 批量发货 */

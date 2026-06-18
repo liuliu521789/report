@@ -8,11 +8,46 @@ import {
 export {
   generateUniqueOrderNo,
   insertOrderWithData,
+  lookupCustomerUnitPriceTon,
+  lookupCustomerUnitPriceTonByCustomerName,
+  applyLegUnitPriceAndAmount,
+  extractUserImportUnitPriceTon,
   randomWyCustomerCode,
   allocateUniqueCustomerCode,
   generateCustomerCode,
   getOrCreateCustomer
 } from '../../lib/salesOrderCrudShared.js';
+
+/** Excel 导入：单价列表头同义词（字段未启用时也识别） */
+export const IMPORT_UNIT_PRICE_HEADER_LABELS = [
+  '单价',
+  '价格',
+  '含税单价',
+  '不含税单价',
+  '销售单价'
+];
+
+/**
+ * @param {Map<string, number>} colIndexByNorm normalizeImportHeaderLabel 后的表头 → 列下标
+ * @param {number[]} [excludeIndexes] 已由其它字段占用的列（避免重复读取）
+ */
+export function resolveImportUnitPriceColumnIndex(colIndexByNorm, excludeIndexes = []) {
+  const exclude = new Set(excludeIndexes.filter((i) => typeof i === 'number'));
+  for (const label of IMPORT_UNIT_PRICE_HEADER_LABELS) {
+    const norm = normalizeImportHeaderLabel(label);
+    const idx = colIndexByNorm.get(norm);
+    if (typeof idx === 'number' && !exclude.has(idx)) return idx;
+  }
+  return null;
+}
+
+/** 导入表内单价为元/kg，订单物理列存元/吨 */
+export function parseImportUnitPriceKgToTon(cell) {
+  if (cell == null || cell === '') return null;
+  const n = typeof cell === 'number' ? cell : Number(String(cell).trim());
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return roundOrderDecimal4(n * 1000);
+}
 
 /** 导入表头与模板对齐：去 BOM、空白、可选前导 *（截图常用）、全角斜杠等 */
 export function normalizeImportHeaderLabel(raw) {
@@ -140,7 +175,10 @@ export async function fetchSalesContractRow(pool, id) {
   const nid = Number(id);
   if (!Number.isFinite(nid) || nid < 1) return null;
   const [rows] = await pool.query(
-    `SELECT c.*, cu.customer_name FROM sales_contracts c
+    `SELECT c.*, cu.customer_name,
+            cu.address AS customer_address, cu.contact_person AS customer_contact, cu.phone AS customer_phone,
+            cu.fax AS customer_fax, cu.bank_name AS customer_bank, cu.bank_account AS customer_account, cu.tax_id AS customer_tax_id
+     FROM sales_contracts c
      INNER JOIN sales_customers cu ON cu.id = c.customer_id WHERE c.id = ? LIMIT 1`,
     [nid]
   );
@@ -150,6 +188,13 @@ export async function fetchSalesContractRow(pool, id) {
 /** 与 GET /contracts/:id 一致：能否查看该合同 */
 export async function assertSalesContractVisible(req, pool, c) {
   if (!c) return { ok: false, code: 'NOT_FOUND' };
+  if (
+    isPureFinanceOrderScope(req) &&
+    String(c.status || '') === 'draft' &&
+    !isOrderCreatedByCurrentUser(c, req)
+  ) {
+    return { ok: false, code: 'FORBIDDEN' };
+  }
   const seeAll = canViewAllSalesOrders(req);
   if (seeAll) return { ok: true, contract: c };
   if (isOrderCreatedByCurrentUser(c, req)) return { ok: true, contract: c };
@@ -203,6 +248,15 @@ export function financeOrderListScopeSql(req) {
   if (!isPureFinanceOrderScope(req)) return { sql: '', args: [] };
   return {
     sql: ' AND o.submitted_for_review_at IS NOT NULL',
+    args: []
+  };
+}
+
+/** 纯财务合同列表：不展示销售未提交审核的草稿（与订单 submitted_for_review_at 过滤一致） */
+export function financeContractListScopeSql(req) {
+  if (!isPureFinanceOrderScope(req)) return { sql: '', args: [] };
+  return {
+    sql: " AND c.status <> 'draft'",
     args: []
   };
 }
@@ -267,7 +321,9 @@ export function appendOrderListDateRange(sql, args, q, req, opts = {}) {
 const FLOW_BUCKETS = new Set([
   'pending_submit',
   'pending_finance',
+  'finance_rejected',
   'pending_qc',
+  'qc_rejected',
   'pending_ship',
   'shipped_open',
   'rejected'
@@ -297,6 +353,10 @@ export function appendSalesOrderListFilters(sql, args, req, q, { uid, seeAll }, 
   if (q.customer_code) {
     sql += ' AND c.customer_code LIKE ?';
     args.push(`%${q.customer_code}%`);
+  }
+  if (q.contact_name) {
+    sql += ' AND c.contact_name LIKE ?';
+    args.push(`%${q.contact_name}%`);
   }
   if (q.product_name) {
     sql += ' AND o.product_name LIKE ?';
@@ -331,6 +391,10 @@ export function appendSalesOrderListFilters(sql, args, req, q, { uid, seeAll }, 
       sql += " AND o.status = 'approved'";
     } else if (fb === 'shipped_open') {
       sql += " AND o.status = 'shipped'";
+    } else if (fb === 'finance_rejected') {
+      sql += " AND o.status = 'rejected' AND o.qc_reviewed_at IS NULL";
+    } else if (fb === 'qc_rejected') {
+      sql += " AND o.status = 'rejected' AND o.qc_reviewed_at IS NOT NULL";
     } else if (fb === 'rejected') {
       sql += " AND o.status = 'rejected'";
     }
@@ -415,27 +479,75 @@ export function orderImportRowFingerprint(definitions, obj) {
   return parts.join('\x1f');
 }
 
-export async function loadQcMap(pool, productModels) {
-  const keys = [...new Set(productModels.map((m) => String(m || '').trim().toLowerCase()).filter(Boolean))];
+/** 质检自动匹配键：客户 + 标签型号 + 批号（均 trim、小写），缺型号或批号则无法自动匹配 */
+export function qcAutoMatchKey(customerId, productModel, batchNo) {
+  const cid =
+    customerId != null && Number.isFinite(Number(customerId)) && Number(customerId) > 0
+      ? String(Number(customerId))
+      : '';
+  const model = String(productModel || '').trim().toLowerCase();
+  const batch = String(batchNo || '').trim().toLowerCase();
+  if (!model || !batch) return null;
+  return `${cid}\x00${model}\x00${batch}`;
+}
+
+/** 订单自动匹配时使用的 map 键（有客户时仅客户维度，无客户时才走通用键） */
+export function qcLookupKeysForOrder(customerId, productModel, batchNo) {
+  const hasCustomer =
+    customerId != null && Number.isFinite(Number(customerId)) && Number(customerId) > 0;
+  if (hasCustomer) {
+    const k = qcAutoMatchKey(customerId, productModel, batchNo);
+    return k ? [k] : [];
+  }
+  const k = qcAutoMatchKey(null, productModel, batchNo);
+  return k ? [k] : [];
+}
+
+export async function loadQcMap(pool, orderRows) {
+  const keys = [
+    ...new Set(
+      orderRows.flatMap((r) => qcLookupKeysForOrder(r.customer_id, r.product_model, r.product_code))
+    )
+  ];
   const map = new Map();
   if (!keys.length) return map;
-  const placeholders = keys.map(() => '?').join(',');
+
+  const modelBatchPairs = new Set();
+  for (const key of keys) {
+    const [, model, batch] = key.split('\x00');
+    modelBatchPairs.add(`${model}\x00${batch}`);
+  }
+
+  const pairArgs = [];
+  const pairTuples = [];
+  for (const pair of modelBatchPairs) {
+    const [model, batch] = pair.split('\x00');
+    pairTuples.push('(?, ?)');
+    pairArgs.push(model, batch);
+  }
+
   const [rows] = await pool.query(
-    `SELECT LOWER(TRIM(r.product_name)) AS pk, MIN(q.id) AS qrcode_id, MIN(q.token) AS token
+    `SELECT LOWER(TRIM(r.product_name)) AS pk_model, LOWER(TRIM(r.batch_no)) AS pk_batch,
+            r.customer_id AS pk_customer_id,
+            MIN(q.id) AS qrcode_id, MIN(q.token) AS token
      FROM reports r
      INNER JOIN qrcode_reports qr ON qr.report_id = r.id
      INNER JOIN qrcodes q ON q.id = qr.qrcode_id
-     WHERE r.status = 'active' AND LOWER(TRIM(r.product_name)) IN (${placeholders})
-     GROUP BY LOWER(TRIM(r.product_name))`,
-    keys
+     WHERE r.status = 'active'
+       AND r.batch_no IS NOT NULL AND TRIM(r.batch_no) <> ''
+       AND (LOWER(TRIM(r.product_name)), LOWER(TRIM(r.batch_no))) IN (${pairTuples.join(', ')})
+     GROUP BY LOWER(TRIM(r.product_name)), LOWER(TRIM(r.batch_no)), r.customer_id`,
+    pairArgs
   );
   for (const r of rows) {
-    map.set(r.pk, { qrcodeId: r.qrcode_id, token: r.token });
+    const cid =
+      r.pk_customer_id != null && Number(r.pk_customer_id) > 0 ? String(Number(r.pk_customer_id)) : '';
+    map.set(`${cid}\x00${r.pk_model}\x00${r.pk_batch}`, { qrcodeId: r.qrcode_id, token: r.token });
   }
   return map;
 }
 
-/** 质检展示：手动绑定 qc_qrcode_id 优先；否则按标签型号匹配报告。生成列表用缩略图 data URL */
+/** 质检展示：手动绑定 qc_qrcode_id 优先；否则按客户+标签型号+批号严格匹配（不同客户互不串绑） */
 export async function enrichOrdersQc(pool, rows, qcMap) {
   const manualIds = [
     ...new Set(rows.map((r) => Number(r.qc_qrcode_id)).filter((n) => Number.isFinite(n) && n > 0))
@@ -456,8 +568,14 @@ export async function enrichOrdersQc(pool, rows, qcMap) {
       token = tokenByQrId.get(qrcodeId) || null;
       qcBoundManual = true;
     } else {
-      const pk = String(o.product_model || '').trim().toLowerCase();
-      const qc = pk ? qcMap.get(pk) : null;
+      let qc = null;
+      for (const pk of qcLookupKeysForOrder(o.customer_id, o.product_model, o.product_code)) {
+        const hit = qcMap.get(pk);
+        if (hit?.token) {
+          qc = hit;
+          break;
+        }
+      }
       if (qc?.token) {
         qrcodeId = Number(qc.qrcodeId);
         token = qc.token;

@@ -1,37 +1,64 @@
 <template>
   <div class="designer-page">
     <div class="designer-toolbar">
-      <el-button @click="$router.push('/reports')" icon=Back>返回报告管理</el-button>
+      <div class="toolbar-left">
+        <el-button @click="goBack" icon=Back>返回</el-button>
+        <span class="page-title">报告样式设计器</span>
+        <el-tag v-if="dirty" type="warning" size="small" effect="plain">有未保存修改</el-tag>
+      </div>
       <div class="toolbar-right">
-        <el-button @click="openSaveStyleDialog" icon=Check>保存为报告样式</el-button>
-        <el-button @click="openStyleManager">报告样式管理</el-button>
-        <el-button @click="clearCanvas">清空画布</el-button>
-        <el-button type="primary" @click="saveToLocal" icon=Check>保存样式（本地）</el-button>
+        <el-tooltip content="Delete 删除选中 · Esc 取消选中" placement="bottom">
+          <el-button text class="shortcut-hint" icon=QuestionFilled>快捷键</el-button>
+        </el-tooltip>
+        <el-button @click="openStyleManager" icon=FolderOpened>样式库</el-button>
+        <el-dropdown split-button type="primary" @click="openSaveStyleDialog" @command="onSaveCommand">
+          保存到服务器
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="local">保存草稿到浏览器</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-button @click="clearCanvas" icon=Delete>清空画布</el-button>
       </div>
     </div>
 
+    <el-alert
+      v-if="showGuide"
+      type="info"
+      show-icon
+      closable
+      class="designer-guide"
+      @close="dismissGuide"
+    >
+      <template #title>
+        拖拽组件排版 A4 画布，完成后「保存到服务器」供新建报告套用；「保存草稿到浏览器」仅本机临时备份。
+      </template>
+    </el-alert>
+
     <div class="designer-main">
       <aside class="toolbox">
-        <div class="toolbox-title">组件库</div>
-        <el-button class="tool-btn" @click="addElement('text')">单行文本</el-button>
-        <el-button class="tool-btn" @click="addElement('multiline')">多行文本</el-button>
-        <el-button class="tool-btn" @click="addElement('bilingualText')">中英文双行文本</el-button>
-        <el-button class="tool-btn" @click="addElement('table')">表格</el-button>
-        <el-button class="tool-btn" @click="addElement('underline')">下划线</el-button>
-        <el-button class="tool-btn" @click="addElement('image')">图片</el-button>
-        <div class="tips">
-          - 点击按钮向画布添加元素
-          <br />
-          - 鼠标拖拽元素可调整位置
-          <br />
-          - 拖拽时会显示对齐辅助线
-          <template v-if="isSuperAdminUser">
-            <br />
-            - 系统图片库仅超级管理员维护，与侧栏「系统图片库」一致
-          </template>
-        </div>
+        <el-tabs v-model="sidebarTab" class="toolbox-tabs">
+          <el-tab-pane label="组件" name="components">
+            <div class="component-grid">
+              <button
+                v-for="item in componentCatalog"
+                :key="item.type"
+                type="button"
+                class="component-card"
+                @click="addElement(item.type)"
+              >
+                <el-icon :size="18"><component :is="item.icon" /></el-icon>
+                <span>{{ item.label }}</span>
+              </button>
+            </div>
+            <ul class="tips-list">
+              <li>点击上方卡片向画布添加元素</li>
+              <li>拖拽元素调整位置，靠近边缘或彼此对齐时出现辅助线</li>
+              <li>选中元素后在「属性」页调整字体、表格等</li>
+            </ul>
 
-        <div v-if="isSuperAdminUser" class="image-lib-panel">
+            <div v-if="isSuperAdminUser" class="image-lib-panel">
           <div class="toolbox-title">系统图片库</div>
           <input
             ref="imageLibFileInput"
@@ -58,179 +85,262 @@
               </button>
             </div>
           </div>
-          <div v-else class="tips">暂无图片，上传后可点击缩略图赋给选中的「图片」组件（数据来自服务器）</div>
-        </div>
-
-        <div v-if="selectedElement?.type === 'underline'" class="typography-panel">
-          <div class="typography-title">下划线宽度</div>
-          <div class="underline-width-row">
-            <el-button size="small" @click="bumpUnderlineWidth(-40)">变短</el-button>
-            <el-input-number
-              v-model="selectedElement.w"
-              :min="40"
-              :max="underlineMaxW"
-              size="small"
-              controls-position="right"
-              class="underline-width-num"
-              @change="commitUnderlineWidth"
-            />
-            <el-button size="small" @click="bumpUnderlineWidth(40)">变长</el-button>
-          </div>
-          <div class="tips">也可直接修改中间数字（像素）</div>
-        </div>
-
-        <div v-if="selectedElement?.type === 'image'" class="typography-panel">
-          <div class="typography-title">图片组件</div>
-          <div v-if="isSuperAdminUser" class="tips">
-            在上方「系统图片库」点击缩略图即可替换当前图片；拖拽右下角手柄可等比例缩放。
-          </div>
-          <div v-else class="tips">配图由超级管理员在「系统图片库」维护；您可拖拽右下角手柄缩放或清除图片。</div>
-          <el-button v-if="selectedElement.imageSrc" size="small" type="warning" plain @click="clearSelectedImage">
-            清除图片
-          </el-button>
-        </div>
-
-        <div v-if="selectedElement" class="typography-panel">
-          <div class="typography-title">位置对齐</div>
-          <div class="align-row">
-            <el-button size="small" @click="alignSelectedElement('left')">左对齐</el-button>
-            <el-button size="small" @click="alignSelectedElement('center')">居中对齐</el-button>
-            <el-button size="small" @click="alignSelectedElement('right')">右对齐</el-button>
-          </div>
-        </div>
-
-        <div v-if="showTextTypographyPanel" class="typography-panel">
-          <div class="typography-title">文字样式</div>
-          <template v-if="selectedElement.type === 'bilingualText'">
-            <div class="typography-sub">中文行</div>
-            <el-select v-model="selectedElement.fontFamily" size="small" class="typo-row" @change="onTextTypographyChange">
-              <el-option label="微软雅黑" value="yahei" />
-              <el-option label="宋体" value="simsun" />
-              <el-option label="仿宋" value="fangsong" />
-              <el-option label="楷体" value="kaiti" />
-            </el-select>
-            <div class="typo-row-num">
-              <span class="typo-label">字号</span>
-              <el-input-number
-                v-model="selectedElement.fontSize"
-                :min="8"
-                :max="96"
-                size="small"
-                controls-position="right"
-                @change="onTextTypographyChange"
-              />
+          <div v-else class="tips">暂无图片，上传后可点击缩略图赋给选中的「图片」组件</div>
             </div>
-            <el-select v-model="selectedElement.fontWeight" size="small" class="typo-row" @change="onTextTypographyChange">
-              <el-option label="常规" value="normal" />
-              <el-option label="加粗" value="bold" />
-            </el-select>
-            <div class="typography-sub">英文行</div>
-            <el-select v-model="selectedElement.fontFamilyEn" size="small" class="typo-row" @change="onTextTypographyChange">
-              <el-option label="微软雅黑" value="yahei" />
-              <el-option label="宋体" value="simsun" />
-              <el-option label="仿宋" value="fangsong" />
-              <el-option label="楷体" value="kaiti" />
-            </el-select>
-            <div class="typo-row-num">
-              <span class="typo-label">字号</span>
-              <el-input-number
-                v-model="selectedElement.fontSizeEn"
-                :min="8"
-                :max="96"
-                size="small"
-                controls-position="right"
-                @change="onTextTypographyChange"
-              />
-            </div>
-            <el-select v-model="selectedElement.fontWeightEn" size="small" class="typo-row" @change="onTextTypographyChange">
-              <el-option label="常规" value="normal" />
-              <el-option label="加粗" value="bold" />
-            </el-select>
-          </template>
-          <template v-else>
-            <el-select v-model="selectedElement.fontFamily" size="small" class="typo-row" @change="onTextTypographyChange">
-              <el-option label="微软雅黑" value="yahei" />
-              <el-option label="宋体" value="simsun" />
-              <el-option label="仿宋" value="fangsong" />
-              <el-option label="楷体" value="kaiti" />
-            </el-select>
-            <div class="typo-row-num">
-              <span class="typo-label">字号</span>
-              <el-input-number
-                v-model="selectedElement.fontSize"
-                :min="8"
-                :max="96"
-                size="small"
-                controls-position="right"
-                @change="onTextTypographyChange"
-              />
-            </div>
-            <el-select v-model="selectedElement.fontWeight" size="small" class="typo-row" @change="onTextTypographyChange">
-              <el-option label="常规" value="normal" />
-              <el-option label="加粗" value="bold" />
-            </el-select>
-          </template>
-        </div>
+          </el-tab-pane>
 
-        <div v-if="tableTypographyTarget" class="typography-panel">
-          <div class="typography-title">{{ tableTypographyLabel }}</div>
-          <el-select v-model="tableTypographyTarget.fontFamily" size="small" class="typo-row">
-            <el-option label="微软雅黑" value="yahei" />
-            <el-option label="宋体" value="simsun" />
-            <el-option label="仿宋" value="fangsong" />
-            <el-option label="楷体" value="kaiti" />
-          </el-select>
-          <div class="typo-row-num">
-            <span class="typo-label">字号</span>
-            <el-input-number
-              v-model="tableTypographyTarget.fontSize"
-              :min="8"
-              :max="96"
-              size="small"
-              controls-position="right"
-            />
-          </div>
-          <el-select v-model="tableTypographyTarget.fontWeight" size="small" class="typo-row">
-            <el-option label="常规" value="normal" />
-            <el-option label="加粗" value="bold" />
-          </el-select>
-        </div>
-
-        <div v-if="selectedTableElement" class="table-editor">
-          <div class="table-editor-title">表格编辑（类 Excel）</div>
-          <div class="tips table-editor-hint">
-            拖拽列边界调列宽、行边界调行高；表头下沿调表头高度。表格右侧/下侧「+」可增列/增行。
-          </div>
-          <div class="table-editor-grid">
-            <el-button size="small" @click="addTableColumn" icon=Plus>新增列</el-button>
-            <el-button size="small" @click="addTableRow" icon=Plus>新增行</el-button>
-            <el-button size="small" @click="removeTableColumn" icon=Delete>删除列</el-button>
-            <el-button size="small" @click="removeTableRow" icon=Delete>删除行</el-button>
-            <el-button size="small" @click="mergeCellRight">合并（向右）</el-button>
-            <el-button size="small" @click="mergeCellDown">合并（向下）</el-button>
-            <el-button size="small" @click="splitCell" icon=Close>取消合并</el-button>
-          </div>
-          <div class="tips">
-            <template v-if="selectedTableHeaderCol != null">
-              已选表头：第 {{ selectedTableHeaderCol + 1 }} 列
-            </template>
+          <el-tab-pane label="属性" name="properties">
+            <div v-if="!selectedElement" class="properties-empty">
+              <el-empty description="请先在画布上选中一个组件" :image-size="72" />
+            </div>
             <template v-else>
-              已选单元格：
-              {{ selectedTableCell ? `${selectedTableCell.row + 1}-${selectedTableCell.col + 1}` : '未选择' }}
+              <div class="selected-type-badge">{{ elementTypeLabel(selectedElement.type) }}</div>
+
+              <div v-if="selectedElement.type === 'underline'" class="typography-panel">
+                <div class="typography-title">下划线宽度</div>
+                <div class="underline-width-row">
+                  <el-button size="small" @click="bumpUnderlineWidth(-40)">变短</el-button>
+                  <el-input-number
+                    v-model="selectedElement.w"
+                    :min="40"
+                    :max="underlineMaxW"
+                    size="small"
+                    controls-position="right"
+                    class="underline-width-num"
+                    @change="commitUnderlineWidth"
+                  />
+                  <el-button size="small" @click="bumpUnderlineWidth(40)">变长</el-button>
+                </div>
+                <div class="tips">也可直接修改中间数字（像素）</div>
+              </div>
+
+              <div v-if="selectedElement.type === 'image'" class="typography-panel">
+                <div class="typography-title">图片组件</div>
+                <div v-if="isSuperAdminUser" class="tips">
+                  在「组件」页系统图片库点击缩略图替换；拖拽右下角手柄等比例缩放。
+                </div>
+                <div v-else class="tips">配图由超级管理员维护；可拖拽右下角手柄缩放或清除图片。</div>
+                <el-button v-if="selectedElement.imageSrc" size="small" type="warning" plain @click="clearSelectedImage">
+                  清除图片
+                </el-button>
+              </div>
+
+              <div class="typography-panel">
+                <div class="typography-title">位置对齐</div>
+                <div class="align-row">
+                  <el-button size="small" @click="alignSelectedElement('left')">左对齐</el-button>
+                  <el-button size="small" @click="alignSelectedElement('center')">居中对齐</el-button>
+                  <el-button size="small" @click="alignSelectedElement('right')">右对齐</el-button>
+                </div>
+              </div>
+
+              <div v-if="showTextTypographyPanel" class="typography-panel">
+                <div class="typography-title">文字样式</div>
+                <template v-if="selectedElement.type === 'bilingualText'">
+                  <div class="typography-sub">中文行</div>
+                  <el-select v-model="selectedElement.fontFamily" size="small" class="typo-row" @change="onTextTypographyChange">
+                    <el-option label="微软雅黑" value="yahei" />
+                    <el-option label="宋体" value="simsun" />
+                    <el-option label="仿宋" value="fangsong" />
+                    <el-option label="楷体" value="kaiti" />
+                  </el-select>
+                  <div class="typo-row-num">
+                    <span class="typo-label">字号</span>
+                    <el-input-number
+                      v-model="selectedElement.fontSize"
+                      :min="8"
+                      :max="96"
+                      size="small"
+                      controls-position="right"
+                      @change="onTextTypographyChange"
+                    />
+                  </div>
+                  <el-select v-model="selectedElement.fontWeight" size="small" class="typo-row" @change="onTextTypographyChange">
+                    <el-option label="常规" value="normal" />
+                    <el-option label="加粗" value="bold" />
+                  </el-select>
+                  <div class="typography-sub">英文行</div>
+                  <el-select v-model="selectedElement.fontFamilyEn" size="small" class="typo-row" @change="onTextTypographyChange">
+                    <el-option label="微软雅黑" value="yahei" />
+                    <el-option label="宋体" value="simsun" />
+                    <el-option label="仿宋" value="fangsong" />
+                    <el-option label="楷体" value="kaiti" />
+                  </el-select>
+                  <div class="typo-row-num">
+                    <span class="typo-label">字号</span>
+                    <el-input-number
+                      v-model="selectedElement.fontSizeEn"
+                      :min="8"
+                      :max="96"
+                      size="small"
+                      controls-position="right"
+                      @change="onTextTypographyChange"
+                    />
+                  </div>
+                  <el-select v-model="selectedElement.fontWeightEn" size="small" class="typo-row" @change="onTextTypographyChange">
+                    <el-option label="常规" value="normal" />
+                    <el-option label="加粗" value="bold" />
+                  </el-select>
+                </template>
+                <template v-else>
+                  <el-select v-model="selectedElement.fontFamily" size="small" class="typo-row" @change="onTextTypographyChange">
+                    <el-option label="微软雅黑" value="yahei" />
+                    <el-option label="宋体" value="simsun" />
+                    <el-option label="仿宋" value="fangsong" />
+                    <el-option label="楷体" value="kaiti" />
+                  </el-select>
+                  <div class="typo-row-num">
+                    <span class="typo-label">字号</span>
+                    <el-input-number
+                      v-model="selectedElement.fontSize"
+                      :min="8"
+                      :max="96"
+                      size="small"
+                      controls-position="right"
+                      @change="onTextTypographyChange"
+                    />
+                  </div>
+                  <el-select v-model="selectedElement.fontWeight" size="small" class="typo-row" @change="onTextTypographyChange">
+                    <el-option label="常规" value="normal" />
+                    <el-option label="加粗" value="bold" />
+                  </el-select>
+                </template>
+              </div>
+
+              <div v-if="tableTypographyTarget" class="typography-panel">
+                <div class="typography-title">{{ tableTypographyLabel }}</div>
+                <el-select v-model="tableTypographyTarget.fontFamily" size="small" class="typo-row">
+                  <el-option label="微软雅黑" value="yahei" />
+                  <el-option label="宋体" value="simsun" />
+                  <el-option label="仿宋" value="fangsong" />
+                  <el-option label="楷体" value="kaiti" />
+                </el-select>
+                <div class="typo-row-num">
+                  <span class="typo-label">字号</span>
+                  <el-input-number
+                    v-model="tableTypographyTarget.fontSize"
+                    :min="8"
+                    :max="96"
+                    size="small"
+                    controls-position="right"
+                  />
+                </div>
+                <el-select v-model="tableTypographyTarget.fontWeight" size="small" class="typo-row">
+                  <el-option label="常规" value="normal" />
+                  <el-option label="加粗" value="bold" />
+                </el-select>
+              </div>
+
+              <div v-if="selectedTableElement" class="table-editor">
+                <div class="table-editor-title">表格编辑（类 Excel）</div>
+                <div class="tips table-editor-hint">
+                  拖拽列边界调列宽、行边界调行高；表头下沿调表头高度。表格右侧/下侧「+」可增列/增行。
+                </div>
+                <div class="table-editor-grid">
+                  <el-button size="small" @click="addTableColumn" icon=Plus>新增列</el-button>
+                  <el-button size="small" @click="addTableRow" icon=Plus>新增行</el-button>
+                  <el-button size="small" @click="removeTableColumn" icon=Delete>删除列</el-button>
+                  <el-button size="small" @click="removeTableRow" icon=Delete>删除行</el-button>
+                  <el-button size="small" @click="mergeCellRight">合并（向右）</el-button>
+                  <el-button size="small" @click="mergeCellDown">合并（向下）</el-button>
+                  <el-button size="small" @click="splitCell" icon=Close>取消合并</el-button>
+                </div>
+                <div class="tips">
+                  <template v-if="selectedTableHeaderCol != null">
+                    已选表头：第 {{ selectedTableHeaderCol + 1 }} 列
+                  </template>
+                  <template v-else>
+                    已选单元格：
+                    {{ selectedTableCell ? `${selectedTableCell.row + 1}-${selectedTableCell.col + 1}` : '未选择' }}
+                  </template>
+                </div>
+              </div>
             </template>
-          </div>
-        </div>
+          </el-tab-pane>
+
+          <el-tab-pane name="layers">
+            <template #label>
+              图层
+              <el-badge v-if="elements.length" :value="elements.length" class="layer-badge" />
+            </template>
+            <div v-if="!elements.length" class="properties-empty">
+              <el-empty description="画布暂无组件" :image-size="72" />
+            </div>
+            <ul v-else class="layer-list">
+              <li
+                v-for="(el, idx) in layerListReversed"
+                :key="el.id"
+                class="layer-item"
+                :class="{ active: selectedId === el.id }"
+                @click="selectElementById(el.id)"
+              >
+                <span class="layer-name">{{ elementTypeLabel(el.type) }}</span>
+                <span class="layer-preview">{{ elementPreviewText(el) }}</span>
+                <span class="layer-actions" @click.stop>
+                  <el-button
+                    text
+                    size="small"
+                    :disabled="idx === 0"
+                    title="上移一层"
+                    @click="moveLayer(el.id, 1)"
+                  >
+                    ↑
+                  </el-button>
+                  <el-button
+                    text
+                    size="small"
+                    :disabled="idx === elements.length - 1"
+                    title="下移一层"
+                    @click="moveLayer(el.id, -1)"
+                  >
+                    ↓
+                  </el-button>
+                  <el-button text size="small" type="danger" title="删除" @click="removeElement(el.id)" icon=Delete />
+                </span>
+              </li>
+            </ul>
+          </el-tab-pane>
+        </el-tabs>
       </aside>
 
       <section class="canvas-area">
-        <div
-          ref="canvasRef"
-          class="a4-canvas"
-          @mousemove="onCanvasMouseMove"
-          @mouseup="onCanvasMouseUp"
-          @mouseleave="onCanvasMouseUp"
-        >
-          <div class="safe-area" />
+        <div class="canvas-toolbar">
+          <span class="canvas-meta">{{ elements.length }} 个组件</span>
+          <div class="zoom-controls">
+            <el-button size="small" text :disabled="canvasZoom <= 50" @click="adjustZoom(-10)">−</el-button>
+            <el-select v-model="canvasZoom" size="small" class="zoom-select">
+              <el-option v-for="z in zoomOptions" :key="z" :label="`${z}%`" :value="z" />
+            </el-select>
+            <el-button size="small" text :disabled="canvasZoom >= 150" @click="adjustZoom(10)">+</el-button>
+            <el-button size="small" text @click="canvasZoom = 100">适应</el-button>
+          </div>
+        </div>
+        <div class="canvas-scroll">
+          <div class="canvas-zoom-wrap" :style="canvasZoomStyle">
+            <div
+              ref="canvasRef"
+              class="a4-canvas"
+              @mousedown.self="deselectAll"
+              @mousemove="onCanvasMouseMove"
+              @mouseup="onCanvasMouseUp"
+              @mouseleave="onCanvasMouseUp"
+            >
+              <div v-if="!elements.length" class="canvas-empty">
+                <p class="canvas-empty-title">空白 A4 画布</p>
+                <p class="canvas-empty-desc">从左侧添加组件，或套用已有样式快速开始</p>
+                <div class="empty-quick-btns">
+                  <el-button
+                    v-for="item in componentCatalog.slice(0, 4)"
+                    :key="item.type"
+                    size="small"
+                    @click="addElement(item.type)"
+                  >
+                    {{ item.label }}
+                  </el-button>
+                </div>
+                <el-button type="primary" link @click="openStyleManager">打开样式库套用</el-button>
+              </div>
+              <div class="safe-area" />
           <div class="measure-host" aria-hidden="true">
             <span ref="measureSpan" class="measure-span" />
             <div ref="measureBlock" class="measure-block" />
@@ -428,9 +538,19 @@
               </div>
             </template>
           </div>
+            </div>
+          </div>
         </div>
       </section>
     </div>
+
+    <footer v-if="selectedElement" class="designer-statusbar">
+      已选：{{ elementTypeLabel(selectedElement.type) }}
+      <span class="status-sep">·</span>
+      位置 ({{ Math.round(selectedElement.x) }}, {{ Math.round(selectedElement.y) }})
+      <span class="status-sep">·</span>
+      尺寸 {{ Math.round(selectedElement.w) }} × {{ Math.round(selectedElement.h) }}
+    </footer>
 
     <el-dialog title="保存为报告样式" v-model="styleSaveDialog" width="520px">
       <el-form :model="styleForm" label-width="96px">
@@ -475,6 +595,23 @@
 
 <script>
 import {
+  Back,
+  Check,
+  Close,
+  Connection,
+  Delete,
+  Document,
+  EditPen,
+  FolderOpened,
+  Grid,
+  Minus,
+  Picture,
+  Plus,
+  QuestionFilled,
+  Refresh,
+  Upload
+} from '@element-plus/icons-vue';
+import {
   createReportStyle,
   deleteReportStyle,
   listReportStyles,
@@ -490,6 +627,7 @@ import { isSuperAdmin } from '../utils/permissions';
 const A4_WIDTH = 794;
 const A4_HEIGHT = 1123;
 const STORAGE_KEY = 'report-designer-style-v1';
+const GUIDE_DISMISS_KEY = 'report-designer-guide-dismissed';
 const ALIGN_THRESHOLD = 6;
 const SAFE_MARGIN = 32;
 const SAFE_INNER_MAX_W = A4_WIDTH - SAFE_MARGIN * 2;
@@ -536,6 +674,15 @@ function bodyCell(text) {
 const DEFAULT_COL_WIDTH = 92;
 const DEFAULT_HEADER_ROW_H = 34;
 const DEFAULT_BODY_ROW_H = 32;
+
+const ELEMENT_TYPE_LABELS = {
+  text: '单行文本',
+  multiline: '多行文本',
+  bilingualText: '中英文双行',
+  table: '表格',
+  underline: '下划线',
+  image: '图片'
+};
 
 function createTableModel() {
   return {
@@ -643,6 +790,29 @@ export default {
   name: 'ReportDesigner',
   data() {
     return {
+      Back,
+      Check,
+      Close,
+      Delete,
+      FolderOpened,
+      Plus,
+      QuestionFilled,
+      Refresh,
+      Upload,
+      componentCatalog: [
+        { type: 'text', label: '单行文本', icon: EditPen },
+        { type: 'multiline', label: '多行文本', icon: Document },
+        { type: 'bilingualText', label: '中英文', icon: Connection },
+        { type: 'table', label: '表格', icon: Grid },
+        { type: 'underline', label: '下划线', icon: Minus },
+        { type: 'image', label: '图片', icon: Picture }
+      ],
+      sidebarTab: 'components',
+      showGuide: !localStorage.getItem(GUIDE_DISMISS_KEY),
+      dirty: false,
+      suppressDirty: true,
+      canvasZoom: 100,
+      zoomOptions: [50, 75, 100, 125, 150],
       elements: [],
       selectedId: null,
       selectedTableCell: null,
@@ -668,7 +838,29 @@ export default {
       this.elements.forEach((e) => {
         if (e.type === 'table') this.syncTableElementSize(e);
       });
+      this.suppressDirty = false;
     });
+    window.addEventListener('keydown', this.onKeyDown);
+  },
+  beforeUnmount() {
+    window.removeEventListener('keydown', this.onKeyDown);
+  },
+  beforeRouteLeave(to, from, next) {
+    if (!this.dirty) {
+      next();
+      return;
+    }
+    this.$confirm('当前有未保存的修改，确认离开设计器？', '提示', { type: 'warning' })
+      .then(() => next())
+      .catch(() => next(false));
+  },
+  watch: {
+    elements: {
+      deep: true,
+      handler() {
+        if (!this.suppressDirty) this.dirty = true;
+      }
+    }
   },
   computed: {
     selectedElement() {
@@ -705,9 +897,98 @@ export default {
     },
     isSuperAdminUser() {
       return isSuperAdmin();
+    },
+    layerListReversed() {
+      return [...this.elements].reverse();
+    },
+    canvasZoomStyle() {
+      const s = this.canvasZoom / 100;
+      return {
+        transform: `scale(${s})`,
+        transformOrigin: 'top center',
+        width: `${794 * s}px`,
+        margin: '0 auto'
+      };
     }
   },
   methods: {
+    dismissGuide() {
+      this.showGuide = false;
+      localStorage.setItem(GUIDE_DISMISS_KEY, '1');
+    },
+    goBack() {
+      if (!this.dirty) {
+        this.$router.push('/reports');
+        return;
+      }
+      this.$confirm('当前有未保存的修改，确认返回报告列表？', '提示', { type: 'warning' })
+        .then(() => this.$router.push('/reports'))
+        .catch(() => {});
+    },
+    onSaveCommand(command) {
+      if (command === 'local') this.saveToLocal();
+    },
+    elementTypeLabel(type) {
+      return ELEMENT_TYPE_LABELS[type] || type || '组件';
+    },
+    elementPreviewText(el) {
+      if (!el) return '';
+      if (el.type === 'text' || el.type === 'multiline') return String(el.text || '').slice(0, 24);
+      if (el.type === 'bilingualText') return String(el.text || el.subtext || '').slice(0, 24);
+      if (el.type === 'table') {
+        const col = el.table?.columns?.[0];
+        const label = typeof col === 'object' ? col.text : col;
+        return label ? `表头：${String(label).slice(0, 16)}` : '表格';
+      }
+      if (el.type === 'image') return el.imageSrc ? '已配图' : '未配图';
+      return '';
+    },
+    selectElementById(id) {
+      this.selectedId = id;
+      this.selectedTableCell = null;
+      this.selectedTableHeaderCol = null;
+      this.sidebarTab = 'properties';
+    },
+    deselectAll() {
+      this.selectedId = null;
+      this.selectedTableCell = null;
+      this.selectedTableHeaderCol = null;
+    },
+    moveLayer(id, direction) {
+      const idx = this.elements.findIndex((e) => e.id === id);
+      if (idx < 0) return;
+      const next = idx + direction;
+      if (next < 0 || next >= this.elements.length) return;
+      const copy = [...this.elements];
+      const [item] = copy.splice(idx, 1);
+      copy.splice(next, 0, item);
+      this.elements = copy;
+      this.selectedId = id;
+    },
+    adjustZoom(delta) {
+      const opts = this.zoomOptions;
+      const cur = this.canvasZoom;
+      const i = opts.indexOf(cur);
+      if (i >= 0) {
+        const ni = Math.max(0, Math.min(opts.length - 1, i + (delta > 0 ? 1 : -1)));
+        this.canvasZoom = opts[ni];
+        return;
+      }
+      this.canvasZoom = Math.max(50, Math.min(150, cur + delta));
+    },
+    onKeyDown(event) {
+      const tag = String(event.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || event.target?.isContentEditable) return;
+      if (event.key === 'Escape') {
+        this.deselectAll();
+        return;
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (!this.selectedId) return;
+        event.preventDefault();
+        this.removeElement(this.selectedId);
+      }
+    },
     fontCss(obj) {
       return toCssTypography({
         fontFamily: obj.fontFamily,
@@ -857,7 +1138,8 @@ export default {
           elements: this.elements.map((e) => ({ ...e }))
         };
         await createReportStyle(payload);
-        this.$message.success('已保存到数据库');
+        this.$message.success('已保存到服务器');
+        this.dirty = false;
         this.styleSaveDialog = false;
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '保存报告样式失败'));
@@ -882,6 +1164,7 @@ export default {
           });
         });
         this.$message.success('已套用报告样式');
+        this.dirty = false;
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '套用报告样式失败'));
       }
@@ -1119,6 +1402,7 @@ export default {
       this.selectedId = base.id;
       this.selectedTableCell = null;
       this.selectedTableHeaderCol = null;
+      this.sidebarTab = 'properties';
       if (this.isFlowTextType(type)) {
         this.$nextTick(() => this.syncCanvasTextBox(base));
       }
@@ -1494,7 +1778,8 @@ export default {
     },
     saveToLocal() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.elements));
-      this.$message.success('已保存到本地浏览器');
+      this.$message.success('草稿已保存到本机浏览器');
+      this.dirty = false;
     },
     restoreFromLocal() {
       try {
@@ -1516,6 +1801,7 @@ export default {
           this.selectedTableHeaderCol = null;
           this.guideLineX = null;
           this.guideLineY = null;
+          this.dirty = false;
         })
         .catch(() => {});
     }
@@ -1531,16 +1817,39 @@ export default {
   height: calc(100vh - 110px);
 }
 
+.designer-guide {
+  flex-shrink: 0;
+}
+
 .designer-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
 }
 
 .toolbar-right {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.shortcut-hint {
+  color: #6b7280;
 }
 
 .style-manage-toolbar {
@@ -1558,12 +1867,141 @@ export default {
 }
 
 .toolbox {
-  width: 248px;
+  width: 268px;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 12px;
+  padding: 0;
   background: #fff;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbox-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbox-tabs :deep(.el-tabs__header) {
+  margin: 0;
+  padding: 8px 8px 0;
+}
+
+.toolbox-tabs :deep(.el-tabs__content) {
+  flex: 1;
   overflow: auto;
+  padding: 10px 12px 12px;
+}
+
+.component-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.component-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+  cursor: pointer;
+  font-size: 12px;
+  color: #374151;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.component-card:hover {
+  border-color: #409eff;
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.tips-list {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.55;
+}
+
+.tips-list li + li {
+  margin-top: 4px;
+}
+
+.properties-empty {
+  padding: 12px 0;
+}
+
+.selected-type-badge {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #ecf5ff;
+  color: #409eff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.layer-badge {
+  margin-left: 4px;
+}
+
+.layer-badge :deep(.el-badge__content) {
+  transform: translateY(-2px) scale(0.85);
+}
+
+.layer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.layer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.layer-item:hover,
+.layer-item.active {
+  background: #f0f9ff;
+  border-color: #bfdbfe;
+}
+
+.layer-name {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+  min-width: 64px;
+}
+
+.layer-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
 }
 
 .toolbox-title {
@@ -1607,8 +2045,98 @@ export default {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #f5f6f8;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.canvas-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.canvas-meta {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.zoom-select {
+  width: 88px;
+}
+
+.canvas-scroll {
+  flex: 1;
   overflow: auto;
   padding: 14px;
+}
+
+.canvas-zoom-wrap {
+  min-height: 1123px;
+}
+
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px;
+  pointer-events: none;
+}
+
+.canvas-empty-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.canvas-empty-desc {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.empty-quick-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 10px;
+  pointer-events: auto;
+}
+
+.canvas-empty .el-button--primary.is-link {
+  pointer-events: auto;
+}
+
+.designer-statusbar {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.status-sep {
+  margin: 0 6px;
+  color: #d1d5db;
 }
 
 .a4-canvas {

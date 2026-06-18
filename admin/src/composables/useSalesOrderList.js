@@ -9,7 +9,15 @@ export function createDefaultSalesOrderFilters() {
   };
 }
 
-export function buildSalesOrderQueryParams({ filters, dateRange, page, pageSize, sort, focusOrderId }) {
+export function buildSalesOrderQueryParams({
+  filters,
+  dateRange,
+  page,
+  pageSize,
+  sort,
+  focusOrderId,
+  customerListNameMode
+}) {
   const hasDateRange = Array.isArray(dateRange) && dateRange.length === 2;
   const [df, dt] = hasDateRange ? dateRange : [];
   const searchParam = {};
@@ -18,6 +26,7 @@ export function buildSalesOrderQueryParams({ filters, dateRange, page, pageSize,
   }
   const params = {
     ...searchParam,
+    customer_code: filters.customer_code || undefined,
     status: filters.status || undefined,
     date_from: df || undefined,
     date_to: dt || undefined,
@@ -30,6 +39,9 @@ export function buildSalesOrderQueryParams({ filters, dateRange, page, pageSize,
   };
   if (Number.isFinite(focusOrderId) && focusOrderId > 0) {
     params.id = focusOrderId;
+  }
+  if (customerListNameMode === 'full' || customerListNameMode === 'short') {
+    params.customer_list_name_mode = customerListNameMode;
   }
   return params;
 }

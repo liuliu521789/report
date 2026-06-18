@@ -10,11 +10,13 @@ const DEFAULT_VAT_RATE = 0.13;
 const TITLE_FONT = '方正小标宋简体';
 const BODY_FONT = '仿宋_GB2312';
 
-async function fetchContractData(pool, contractId) {
+export async function fetchContractData(pool, contractId) {
   const [rows] = await pool.query(
     `SELECT c.*, cu.customer_name,
-            cu.address AS customer_address, cu.contact_name AS customer_contact,
+            cu.address AS customer_address, cu.contact_person AS customer_contact,
             cu.phone AS customer_phone,
+            cu.fax AS customer_fax, cu.bank_name AS customer_bank,
+            cu.bank_account AS customer_account, cu.tax_id AS customer_tax_id,
             (SELECT company_name_zh FROM company_settings WHERE id = 1 LIMIT 1) AS company_name_zh
      FROM sales_contracts c
      INNER JOIN sales_customers cu ON cu.id = c.customer_id WHERE c.id = ?`,
@@ -29,7 +31,7 @@ async function fetchContractData(pool, contractId) {
   );
   const listFieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
   const orders = orderRows.map((r) => prepareOrderRowForContractHtml(r, listFieldDefs));
-  return { contract, orders };
+  return { contract, orders, listFieldDefs };
 }
 
 function resolveVatRateFraction(order) {
@@ -77,7 +79,11 @@ function placeholderValues(contract) {
     SIGN_DATE_ZH: contract.created_at ? formatSigningDateZhShanghai(new Date(contract.created_at)) : '',
     CUSTOMER_ADDRESS: contract.customer_address || '',
     CUSTOMER_CONTACT: contract.customer_contact || '',
-    CUSTOMER_PHONE: contract.customer_phone || ''
+    CUSTOMER_PHONE: contract.customer_phone || '',
+    CUSTOMER_FAX: contract.customer_fax || '',
+    CUSTOMER_BANK: contract.customer_bank || '',
+    CUSTOMER_ACCOUNT: contract.customer_account || '',
+    CUSTOMER_TAX_ID: contract.customer_tax_id || ''
   };
 }
 

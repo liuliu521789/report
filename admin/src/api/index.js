@@ -136,6 +136,11 @@ async function requestWithQcYearbook404PathFallback(urls, requester) {
 }
 
 /** 年度品质管控台账：年份与成品行 */
+export async function lookupQcYearbookForReport(params) {
+  const { data } = await http.get('/api/qc-yearbooks/lookup-for-report', { params });
+  return data?.data?.qcYearbook ?? data?.qcYearbook ?? null;
+}
+
 export async function listQcYearbookYears() {
   const urls = ['/api/qc-yearbooks/years', ...qcStripApiFallback('/api/qc-yearbooks/years')];
   const res = await requestWithQcYearbook404PathFallback(urls, (url) => http.get(url));
@@ -339,6 +344,14 @@ export async function getReport(id) {
   return data;
 }
 
+/** 产品名称联想（历史报告、内部型号、订单标签型号） */
+export async function suggestReportProductNames(q, extraParams = {}) {
+  const { data } = await http.get('/api/reports/suggest-product-names', {
+    params: { q, ...extraParams }
+  });
+  return data;
+}
+
 export async function createReport(payload) {
   const { data } = await http.post('/api/reports', payload);
   return data;
@@ -416,6 +429,14 @@ export async function listTemplates(params) {
 
 export async function getTemplate(id) {
   const { data } = await http.get(`/api/templates/${id}`);
+  return data;
+}
+
+/** 按产品名称联想报告模板检验项目（支持带 fromOrder 做客户型号->内部编码映射） */
+export async function suggestTemplateByProduct(productName, extraParams = {}) {
+  const { data } = await http.get('/api/templates/suggest-by-product', {
+    params: { productName, ...extraParams }
+  });
   return data;
 }
 
@@ -528,6 +549,31 @@ export async function switchStampImage(id, imageType) {
   return data;
 }
 
+export async function uploadContractSignature(contractId, signatureDataUrl) {
+  const fd = new FormData();
+  const blob = await (await fetch(signatureDataUrl)).blob();
+  fd.append('signature', blob, 'signature.png');
+  const { data } = await http.post(`/api/sales/contracts/${contractId}/signature`, fd, {
+    timeout: 30000,
+    silentProgress: true
+  });
+  return data;
+}
+
+export async function getContractSignature(contractId) {
+  const { data } = await http.get(`/api/sales/contracts/${contractId}/signature`);
+  return data;
+}
+
+export async function stampContractPdf(contractId) {
+  const { data } = await http.post(`/api/sales/contracts/${contractId}/stamp-pdf`, {}, {
+    responseType: 'blob',
+    timeout: 60000,
+    silentProgress: true
+  });
+  return data;
+}
+
 export async function getCompanySettings() {
   const { data } = await http.get('/api/company/settings');
   return data;
@@ -535,6 +581,13 @@ export async function getCompanySettings() {
 
 export async function updateCompanySettings(payload) {
   const { data } = await http.put('/api/company/settings', payload);
+  return data;
+}
+
+export async function updateFooterSealPosition(footerSealPosition) {
+  const { data } = await http.patch('/api/company/settings/footer-seal-position', {
+    footerSealPosition
+  });
   return data;
 }
 
@@ -558,8 +611,18 @@ export async function updateSupportContact(payload) {
   return data;
 }
 
+export async function requestSupportContact(payload = {}) {
+  const { data } = await http.post('/api/support-contact/request', payload);
+  return data;
+}
+
 export async function getDashboardSummary() {
   const { data } = await http.get('/api/dashboard/summary');
+  return data;
+}
+
+export async function getDashboardActivityHeatmap(params = {}) {
+  const { data } = await http.get('/api/dashboard/activity-heatmap', { params });
   return data;
 }
 
@@ -640,6 +703,16 @@ export async function patchSalesSettings(payload) {
   return data;
 }
 
+export async function getSalesOrderFlowConfig() {
+  const { data } = await http.get('/api/sales/order-flow');
+  return data;
+}
+
+export async function saveSalesOrderFlowConfig(payload) {
+  const { data } = await http.put('/api/sales/order-flow', payload);
+  return data;
+}
+
 export async function listSalesCustomers(params) {
   const { data } = await http.get('/api/sales/customers', { params });
   return data;
@@ -652,6 +725,12 @@ export async function createSalesCustomer(payload) {
 
 export async function updateSalesCustomer(id, payload) {
   const { data } = await http.patch(`/api/sales/customers/${id}`, payload);
+  return data;
+}
+
+/** 下载客户导入模板 xlsx */
+export async function downloadCustomerImportTemplate() {
+  const { data } = await http.get('/api/sales/customers/template', { responseType: 'blob' });
   return data;
 }
 
@@ -684,6 +763,55 @@ export async function importSalesCustomersExcel(formData) {
   const { data } = await http.post('/api/sales/customers/import', formData, {
     timeout: 120000
   });
+  return data;
+}
+
+/** 客户产品单价管理 API */
+export async function listCustomerPrices(customerId) {
+  const { data } = await http.get(`/api/sales/customers/${customerId}/prices`);
+  return data;
+}
+
+export async function createCustomerPrice(customerId, payload) {
+  const { data } = await http.post(`/api/sales/customers/${customerId}/prices`, payload);
+  return data;
+}
+
+export async function patchCustomerPrice(customerId, priceId, payload) {
+  const { data } = await http.patch(`/api/sales/customers/${customerId}/prices/${priceId}`, payload);
+  return data;
+}
+
+export async function deleteCustomerPrice(customerId, priceId) {
+  const { data } = await http.delete(`/api/sales/customers/${customerId}/prices/${priceId}`);
+  return data;
+}
+
+export async function listCustomerPriceSuggestions(customerId) {
+  const { data } = await http.get(`/api/sales/customers/${customerId}/price-suggestions`);
+  return data;
+}
+
+export async function listCustomerModelMappings(customerId) {
+  const { data } = await http.get(`/api/sales/customers/${customerId}/model-mappings`);
+  return data;
+}
+
+export async function updateCustomerModelMapping(customerId, mappingId, payload) {
+  const { data } = await http.put(`/api/sales/customers/${customerId}/model-mappings/${mappingId}`, payload);
+  return data;
+}
+
+export async function deleteCustomerModelMapping(customerId, mappingId, body) {
+  const config = body !== undefined ? { data: body } : {};
+  const { data } = await http.delete(`/api/sales/customers/${customerId}/model-mappings/${mappingId}`, config);
+  return data;
+}
+
+export async function lookupCustomerPrice({ customerName, productModel, customerId }) {
+  const params = { customerName, productModel };
+  if (customerId != null && customerId !== '') params.customerId = customerId;
+  const { data } = await http.get('/api/sales/customer-price', { params });
   return data;
 }
 
@@ -721,6 +849,26 @@ export async function deleteAllInternalModels(payload) {
 /** 上传 Excel 批量导入内部型号（multipart，字段名 file；勿手动设 Content-Type，需带 boundary） */
 export async function importInternalModelsFromExcel(formData) {
   const { data } = await http.post('/api/sales/internal-models/import', formData);
+  return data;
+}
+
+/** 下载内部型号导入模板 xlsx */
+export async function downloadInternalModelsTemplate() {
+  const { data } = await http.get('/api/sales/internal-models/template', { responseType: 'blob' });
+  return data;
+}
+
+/** 导出全部内部型号 xlsx */
+export async function exportInternalModels() {
+  const { data } = await http.get('/api/sales/internal-models/export', { responseType: 'blob' });
+  return data;
+}
+
+/** 根据型号编码查询品名（支持 customerId 参数，通过客户型号对照兜底） */
+export async function lookupInternalModelProductName(model, customerId) {
+  const params = { model };
+  if (customerId) params.customerId = customerId;
+  const { data } = await http.get('/api/sales/internal-models/lookup', { params });
   return data;
 }
 
@@ -791,6 +939,12 @@ export async function patchSalesOrder(id, payload) {
   return data;
 }
 
+/** 从订单获取新建报告预填（刷新页面后可恢复） */
+export async function getSalesOrderReportPrefill(orderId) {
+  const { data } = await http.get(`/api/sales/orders/${orderId}/report-prefill`);
+  return data?.data ?? data;
+}
+
 export async function listSalesQrcodeBindCandidates(params) {
   const { data } = await http.get('/api/sales/qrcodes/bind-candidates', { params });
   return data;
@@ -813,6 +967,11 @@ export async function batchSubmitSalesOrderReview(ids) {
 
 export async function withdrawSalesOrderReview(id) {
   const { data } = await http.post(`/api/sales/orders/${id}/withdraw`);
+  return data;
+}
+
+export async function batchWithdrawSalesOrderReview(ids) {
+  const { data } = await http.post('/api/sales/orders/batch-withdraw', { ids });
   return data;
 }
 
@@ -1051,6 +1210,61 @@ export async function downloadSalesContractDocx(contractId) {
     timeout: 60000,
     silentProgress: true
   });
+  return data;
+}
+
+export async function downloadSalesContractPdf(contractId) {
+  const { data } = await http.get(`/api/sales/contracts/${contractId}/export-pdf`, {
+    responseType: 'blob',
+    timeout: 120000,
+    silentProgress: true
+  });
+  return data;
+}
+
+/** ---------- 合同开票 ---------- */
+export async function listContractInvoices(contractId) {
+  const { data } = await http.get(`/api/sales/contracts/${contractId}/invoices`);
+  return data;
+}
+
+export async function listAllContractInvoices(params) {
+  const { data } = await http.get('/api/sales/invoices', { params });
+  return data;
+}
+
+export async function getContractInvoiceAudits(invoiceId) {
+  const { data } = await http.get(`/api/sales/invoices/${invoiceId}/audits`);
+  return data;
+}
+
+export async function createContractInvoice(contractId, payload) {
+  const { data } = await http.post(`/api/sales/contracts/${contractId}/invoices`, payload);
+  return data;
+}
+
+export async function updateContractInvoice(invoiceId, payload) {
+  const { data } = await http.patch(`/api/sales/invoices/${invoiceId}`, payload);
+  return data;
+}
+
+export async function deleteContractInvoice(invoiceId) {
+  const { data } = await http.delete(`/api/sales/invoices/${invoiceId}`);
+  return data;
+}
+
+export async function submitContractInvoice(invoiceId) {
+  const { data } = await http.post(`/api/sales/invoices/${invoiceId}/submit`);
+  return data;
+}
+
+export async function fulfillContractInvoice(invoiceId, payload) {
+  const { data } = await http.post(`/api/sales/invoices/${invoiceId}/fulfill`, payload);
+  return data;
+}
+
+export async function withdrawContractInvoice(invoiceId) {
+  const { data } = await http.post(`/api/sales/invoices/${invoiceId}/withdraw`);
   return data;
 }
 

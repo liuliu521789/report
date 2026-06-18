@@ -25,30 +25,32 @@ router.get('/my-operations', async (req, res) => {
   const to = String(req.query.to || '').trim();
 
   const pool = getPool();
-  const where = ['user_id = ?'];
+  const where = ['l.user_id = ?'];
   const params = [uid];
   if (module) {
-    where.push('module = ?');
+    where.push('l.module = ?');
     params.push(module);
   }
   if (from) {
-    where.push('created_at >= ?');
+    where.push('l.created_at >= ?');
     params.push(from);
   }
   if (to) {
-    where.push('created_at <= ?');
+    where.push('l.created_at <= ?');
     params.push(to);
   }
   const sqlWhere = `WHERE ${where.join(' AND ')}`;
   const [rows] = await pool.query(
-    `SELECT id, user_id AS userId, username, module, action, detail_json AS detailJson, success,
-            ip, user_agent AS userAgent, created_at AS createdAt
-     FROM operation_logs ${sqlWhere}
-     ORDER BY id DESC
+    `SELECT l.id, l.user_id AS userId, l.username, u.real_name AS realName, l.module, l.action,
+            l.detail_json AS detailJson, l.success, l.ip, l.user_agent AS userAgent, l.created_at AS createdAt
+     FROM operation_logs l
+     LEFT JOIN users u ON u.id = l.user_id
+     ${sqlWhere}
+     ORDER BY l.id DESC
      LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
-  const [cRows] = await pool.query(`SELECT COUNT(*) AS c FROM operation_logs ${sqlWhere}`, params);
+  const [cRows] = await pool.query(`SELECT COUNT(*) AS c FROM operation_logs l ${sqlWhere}`, params);
   res.json({ items: rows, total: Number(cRows?.[0]?.c || 0) });
 });
 
@@ -71,31 +73,34 @@ router.get(
     const where = ['1=1'];
     const params = [];
     if (username) {
-      where.push('username = ?');
+      where.push('l.username = ?');
       params.push(username);
     }
     if (success === '1' || success === '0') {
-      where.push('success = ?');
+      where.push('l.success = ?');
       params.push(success === '1' ? 1 : 0);
     }
     if (from) {
-      where.push('created_at >= ?');
+      where.push('l.created_at >= ?');
       params.push(from);
     }
     if (to) {
-      where.push('created_at <= ?');
+      where.push('l.created_at <= ?');
       params.push(to);
     }
     const sqlWhere = `WHERE ${where.join(' AND ')}`;
     const [rows] = await pool.query(
-      `SELECT id, user_id AS userId, username, ip, user_agent AS userAgent, device_summary AS deviceSummary,
-            success, fail_reason AS failReason, created_at AS createdAt
-     FROM login_logs ${sqlWhere}
-     ORDER BY id DESC
+      `SELECT l.id, l.user_id AS userId, l.username, u.real_name AS realName, l.ip,
+            l.user_agent AS userAgent, l.device_summary AS deviceSummary, l.success,
+            l.fail_reason AS failReason, l.created_at AS createdAt
+     FROM login_logs l
+     LEFT JOIN users u ON u.id = l.user_id
+     ${sqlWhere}
+     ORDER BY l.id DESC
      LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     );
-    const [cRows] = await pool.query(`SELECT COUNT(*) AS c FROM login_logs ${sqlWhere}`, params);
+    const [cRows] = await pool.query(`SELECT COUNT(*) AS c FROM login_logs l ${sqlWhere}`, params);
     if (req.user.accountType !== 'super_admin') {
       await logOperationFromReq(req, {
         module: '审计日志',
@@ -135,11 +140,13 @@ router.post(
     const { ids } = parsed.data;
     const pool = getPool();
     const [rows] = await pool.query(
-      `SELECT id, user_id AS userId, username, ip, user_agent AS userAgent, device_summary AS deviceSummary,
-            success, fail_reason AS failReason, created_at AS createdAt
-     FROM login_logs
-     WHERE id IN (${ids.map(() => '?').join(',')})
-     ORDER BY id DESC`,
+      `SELECT l.id, l.user_id AS userId, l.username, u.real_name AS realName, l.ip,
+            l.user_agent AS userAgent, l.device_summary AS deviceSummary, l.success,
+            l.fail_reason AS failReason, l.created_at AS createdAt
+     FROM login_logs l
+     LEFT JOIN users u ON u.id = l.user_id
+     WHERE l.id IN (${ids.map(() => '?').join(',')})
+     ORDER BY l.id DESC`,
       ids
     );
     await logOperationFromReq(req, {
@@ -173,35 +180,37 @@ router.get(
     const where = ['1=1'];
     const params = [];
     if (username) {
-      where.push('username = ?');
+      where.push('l.username = ?');
       params.push(username);
     }
     if (userId != null && Number.isFinite(userId)) {
-      where.push('user_id = ?');
+      where.push('l.user_id = ?');
       params.push(userId);
     }
     if (module) {
-      where.push('module = ?');
+      where.push('l.module = ?');
       params.push(module);
     }
     if (from) {
-      where.push('created_at >= ?');
+      where.push('l.created_at >= ?');
       params.push(from);
     }
     if (to) {
-      where.push('created_at <= ?');
+      where.push('l.created_at <= ?');
       params.push(to);
     }
     const sqlWhere = `WHERE ${where.join(' AND ')}`;
     const [rows] = await pool.query(
-      `SELECT id, user_id AS userId, username, module, action, detail_json AS detailJson, success,
-            ip, user_agent AS userAgent, created_at AS createdAt
-     FROM operation_logs ${sqlWhere}
-     ORDER BY id DESC
+      `SELECT l.id, l.user_id AS userId, l.username, u.real_name AS realName, l.module, l.action,
+            l.detail_json AS detailJson, l.success, l.ip, l.user_agent AS userAgent, l.created_at AS createdAt
+     FROM operation_logs l
+     LEFT JOIN users u ON u.id = l.user_id
+     ${sqlWhere}
+     ORDER BY l.id DESC
      LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     );
-    const [cRows] = await pool.query(`SELECT COUNT(*) AS c FROM operation_logs ${sqlWhere}`, params);
+    const [cRows] = await pool.query(`SELECT COUNT(*) AS c FROM operation_logs l ${sqlWhere}`, params);
     if (req.user.accountType !== 'super_admin') {
       await logOperationFromReq(req, {
         module: '审计日志',
@@ -244,11 +253,12 @@ router.post(
     const { ids } = parsed.data;
     const pool = getPool();
     const [rows] = await pool.query(
-      `SELECT id, user_id AS userId, username, module, action, detail_json AS detailJson, success,
-            ip, user_agent AS userAgent, created_at AS createdAt
-     FROM operation_logs
-     WHERE id IN (${ids.map(() => '?').join(',')})
-     ORDER BY id DESC`,
+      `SELECT l.id, l.user_id AS userId, l.username, u.real_name AS realName, l.module, l.action,
+            l.detail_json AS detailJson, l.success, l.ip, l.user_agent AS userAgent, l.created_at AS createdAt
+     FROM operation_logs l
+     LEFT JOIN users u ON u.id = l.user_id
+     WHERE l.id IN (${ids.map(() => '?').join(',')})
+     ORDER BY l.id DESC`,
       ids
     );
     await logOperationFromReq(req, {

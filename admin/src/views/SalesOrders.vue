@@ -1,9 +1,44 @@
 <template>
-  <div class="sales-orders">
+  <div class="sales-orders" :class="{ 'sales-orders--touch': isTouchLike || isMobile }">
      <el-card class="toolbar-card" shadow="never">
-       <div class="toolbar">
+       <div v-if="isMobile" class="mobile-filters">
+          <el-select v-model="filters.searchField" placeholder="搜索字段" class="w-full">
+            <el-option label="客户名称" value="customer_name" />
+            <el-option label="客户编号" value="customer_code" />
+            <el-option label="标签型号" value="product_model" />
+            <el-option label="仓库型号" value="warehouse_model" />
+            <el-option label="订单号" value="order_no" />
+          </el-select>
+          <el-input
+            v-model="filters.searchValue"
+            placeholder="输入搜索内容"
+            clearable
+            class="w-full"
+            @input="onSearchInput"
+            @clear="onSearchInput"
+            @keyup.enter="loadNow"
+          />
+          <el-select v-model="statusFilterSelection" placeholder="订单状态" clearable class="w-full" @change="onStatusFilterChange">
+            <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
+          </el-select>
+          <el-date-picker
+            v-model="dateRange"
+            type="daterange"
+            range-separator="至"
+            :start-placeholder="orderDateRangeStartPh"
+            :end-placeholder="orderDateRangeEndPh"
+            value-format="YYYY-MM-DD"
+            class="w-full mobile-date-range"
+            @change="load"
+          />
+          <div class="mobile-filter-actions">
+            <el-button type="primary" class="mobile-filter-actions__primary" @click="loadNow" icon="Search">查询</el-button>
+            <el-button class="mobile-filter-actions__reset" :disabled="!hasActiveFilters" @click="resetFilters">重置</el-button>
+          </div>
+       </div>
+       <div v-else class="toolbar">
           <div class="left">
-            <el-input v-model="filters.searchValue" placeholder="输入搜索内容" clearable @keyup.enter="load" class="search-bar">
+            <el-input v-model="filters.searchValue" placeholder="输入搜索内容" clearable @input="onSearchInput" @clear="onSearchInput" @keyup.enter="loadNow" class="search-bar">
               <template #prepend>
                 <el-select v-model="filters.searchField" placeholder="搜索" style="width:110px">
                   <el-option label="客户名称" value="customer_name" />
@@ -14,7 +49,7 @@
                 </el-select>
               </template>
             </el-input>
-           <el-select v-model="filters.status" placeholder="订单状态" clearable class="field-select" @change="onStatusFilterChange">
+           <el-select v-model="statusFilterSelection" placeholder="订单状态" clearable class="field-select" @change="onStatusFilterChange">
              <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
            </el-select>
            <el-date-picker
@@ -27,163 +62,260 @@
              class="field-date"
              @change="load"
            />
-          <el-button type="primary" @click="load" icon=Search>查询</el-button>
+          <el-button type="primary" @click="loadNow" :icon="Search">查询</el-button>
+          <el-button :disabled="!hasActiveFilters" @click="resetFilters">重置</el-button>
+          </div>
+          <div class="right">
+            <el-button v-if="perm('order_management', 'order_input')" type="primary" @click="openCreate">手动录入</el-button>
+            <el-dropdown
+              v-if="showToolbarManageMenu"
+              trigger="click"
+              @command="onToolbarManageCommand"
+            >
+              <el-button>
+                管理
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-if="perm('process_management', 'edit_flow')"
+                    command="flow-config"
+                  >
+                    审核流程
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="perm('order_management', 'order_field_config')"
+                    command="field-manage"
+                  >
+                    表单字段
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
-      <div class="batch-actions">
-        <span class="selected-tip" v-if="effectiveSelected.length > 0">已选 {{ effectiveSelected.length }} 条</span>
-        <el-divider v-if="effectiveSelected.length > 0" direction="vertical" />
-        <el-upload
-          v-if="perm('order_management', 'order_input')"
-          :show-file-list="false"
-          accept=".xlsx,.xls"
-          :before-upload="onImportFile"
+      <div v-if="activeFilterTags.length" class="order-filter-tags">
+        <span class="order-filter-tags__label">当前筛选</span>
+        <el-tag
+          v-for="tag in activeFilterTags"
+          :key="tag.key"
+          closable
+          size="small"
+          type="info"
+          effect="plain"
+          class="order-filter-tag"
+          @close="tag.onClose()"
         >
-          <el-button type="primary" icon=UploadFilled>Excel 导入</el-button>
-        </el-upload>
+          {{ tag.label }}
+        </el-tag>
+        <el-button link type="primary" size="small" class="order-filter-tags__clear" @click="resetFilters">
+          清空全部
+        </el-button>
+      </div>
+      <div class="batch-actions" :class="{ 'batch-actions--mobile': isMobile }">
         <el-button
-          v-if="canExport"
-          :loading="exporting"
-          @click="exportXlsx"
+          v-if="isMobile"
+          text
           type="primary"
-          plain
-          icon=Download>导出 Excel</el-button>
-        <el-button v-if="perm('order_management', 'order_input')" @click="downloadTpl" icon=Download>下载导入模板</el-button>
-        <el-button
-          v-if="perm('order_management', 'order_field_config')"
-          @click="openFieldManage"
-        >表单字段</el-button>
-        <el-button v-if="perm('order_management', 'order_input')" type="primary" @click="openCreate">手动录入</el-button>
-        <el-tooltip
-          placement="top"
-          :disabled="batchSubmitTipDisabled"
-          content="批量提交仅支持您本人创建且当前可提交审核的订单。请先取消不符合条件的勾选项。"
+          class="mobile-batch-toggle"
+          @click="mobileBatchOpen = !mobileBatchOpen"
         >
-          <span class="batch-del-tooltip-host">
+          {{ mobileBatchOpen ? '收起更多操作' : '更多操作（导入/导出/批量）' }}
+          <el-icon class="el-icon--right"><ArrowDown v-if="!mobileBatchOpen" /><ArrowUp v-else /></el-icon>
+        </el-button>
+        <div v-show="!isMobile || mobileBatchOpen" class="batch-actions-inner">
+          <div class="batch-actions-group">
+            <span v-if="!isMobile" class="batch-actions-group__label">数据</span>
+            <el-upload
+              v-if="perm('order_management', 'order_input')"
+              :show-file-list="false"
+              accept=".xlsx,.xls"
+              :before-upload="onImportFile"
+            >
+              <el-button type="primary" :icon="UploadFilled">Excel 导入</el-button>
+            </el-upload>
             <el-button
-              v-if="perm('order_management', 'order_submit')"
+              v-if="canExport"
+              :loading="exporting"
+              @click="exportXlsx"
               type="primary"
               plain
-              :disabled="batchSubmitDisabled"
-              @click="batchSubmitReview"
-             icon=Check>
-              批量提交审核
-            </el-button>
-          </span>
-        </el-tooltip>
-        <el-button
-          v-if="perm('order_management', 'order_status_finance')"
-          type="warning"
-          plain
-          :disabled="batchFinanceReviewableList.length === 0"
-          @click="openFinanceBatch"
-        >
-          批量审核
-        </el-button>
-        <el-button
-          v-if="perm('order_management', 'order_status_qc')"
-          type="warning"
-          plain
-          :disabled="batchQcReviewableList.length === 0"
-          @click="openQcReviewBatch"
-        >
-          批量质检审核
-        </el-button>
-        <el-button
-          v-if="batchShipActionVisible"
-          type="primary"
-          plain
-          :disabled="batchShippableList.length === 0"
-          @click="openShipBatch"
-        >
-          批量发货
-        </el-button>
-        <el-tooltip
-          placement="top"
-          :disabled="batchDeleteTipDisabled"
-          content="批量删除仅支持当前账号有删除权限且状态允许的订单。请先取消不符合条件的勾选项。"
-        >
-          <span class="batch-del-tooltip-host">
+              :icon="Download">导出 Excel</el-button>
+            <el-button v-if="perm('order_management', 'order_input')" @click="downloadTpl" :icon="Download">下载导入模板</el-button>
+            <template v-if="isMobile">
+              <el-dropdown
+                v-if="showToolbarManageMenu"
+                trigger="click"
+                @command="onToolbarManageCommand"
+              >
+                <el-button>管理</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-if="perm('process_management', 'edit_flow')"
+                      command="flow-config"
+                    >
+                      审核流程
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="perm('order_management', 'order_field_config')"
+                      command="field-manage"
+                    >
+                      表单字段
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <el-button v-if="perm('order_management', 'order_input')" type="primary" @click="openCreate">手动录入</el-button>
+            </template>
+          </div>
+          <el-divider v-if="!isMobile" direction="vertical" class="batch-group-divider" />
+          <div class="batch-actions-group batch-actions-group--batch">
+            <span v-if="!isMobile" class="batch-actions-group__label">批量</span>
+            <span class="selected-tip" v-if="effectiveSelected.length > 0">已选 {{ effectiveSelected.length }} 条</span>
+            <el-tooltip
+              placement="top"
+              :disabled="batchSubmitTipDisabled"
+              :content="batchSubmitTooltip"
+            >
+              <span class="batch-del-tooltip-host">
+                <el-button
+                  v-if="perm('order_management', 'order_submit')"
+                  type="primary"
+                  plain
+                  :disabled="batchSubmitDisabled"
+                  @click="batchSubmitReview"
+                 :icon="Check">
+                  {{ batchSubmitButtonLabel }}
+                </el-button>
+              </span>
+            </el-tooltip>
+            <el-tooltip
+              placement="top"
+              :disabled="batchWithdrawTipDisabled"
+              :content="batchWithdrawTooltip"
+            >
+              <span class="batch-del-tooltip-host">
+                <el-button
+                  v-if="perm('order_management', 'order_withdraw')"
+                  type="warning"
+                  plain
+                  :disabled="batchWithdrawDisabled"
+                  @click="batchWithdrawReview"
+                >
+                  {{ batchWithdrawButtonLabel }}
+                </el-button>
+              </span>
+            </el-tooltip>
             <el-button
-              v-if="perm('order_management', 'order_delete')"
-              type="danger"
+              v-if="perm('order_management', 'order_status_finance')"
+              type="warning"
               plain
-              :disabled="batchDeleteDisabled"
-              @click="batchDeleteOrders"
-             icon=Delete>
-              批量删除
+              :disabled="batchFinanceReviewableList.length === 0"
+              @click="openFinanceBatch"
+            >
+              批量审核
             </el-button>
-          </span>
-        </el-tooltip>
-        <el-button
-          v-if="perm('contract_management', 'contract_generate')"
-          type="success"
-          :disabled="effectiveSelected.length === 0"
-          @click="openContractGen"
-        >生成合同</el-button>
+            <el-button
+              v-if="perm('order_management', 'order_status_qc')"
+              type="warning"
+              plain
+              :disabled="batchQcReviewableList.length === 0"
+              @click="openQcReviewBatch"
+            >
+              批量品管审核
+            </el-button>
+            <el-button
+              v-if="batchShipActionVisible"
+              type="primary"
+              plain
+              :disabled="batchShippableList.length === 0"
+              @click="openShipBatch"
+            >
+              批量发货
+            </el-button>
+            <el-tooltip
+              placement="top"
+              :disabled="batchDeleteTipDisabled"
+              :content="batchDeleteTooltip"
+            >
+              <span class="batch-del-tooltip-host">
+                <el-button
+                  v-if="perm('order_management', 'order_delete')"
+                  type="danger"
+                  plain
+                  :disabled="batchDeleteDisabled"
+                  @click="batchDeleteOrders"
+                 :icon="Delete">
+                  {{ batchDeleteButtonLabel }}
+                </el-button>
+              </span>
+            </el-tooltip>
+            <el-button
+              v-if="perm('contract_management', 'contract_generate')"
+              type="success"
+              :disabled="effectiveSelected.length === 0"
+              @click="openContractGen"
+            >生成合同</el-button>
+          </div>
+        </div>
       </div>
     </el-card>
 
     <div class="table-wrap">
-      <div class="table-list-toolbar">
-        <div
-          v-if="perm('order_management', 'order_query')"
-          v-loading="flowSlaLoading"
-          class="table-list-toolbar__flow-sla"
-        >
-          <div class="table-list-toolbar__left">
-            <el-button
-              :type="!filters.flow_bucket ? 'primary' : 'default'"
-              plain
-              size="small"
-              @click="clearFlowBucketFilter"
-            >
-              全部
-            </el-button>
-            <el-button
-              v-for="b in flowBoardBuckets"
-              :key="b.key"
-              :type="filters.flow_bucket === b.key ? 'primary' : 'default'"
-              plain
-              size="small"
-              class="flow-board__chip"
-              @click="toggleFlowBucket(b.key)"
-            >
-              {{ b.label }}
-              <strong class="flow-board__num">{{ flowSummary[b.key] ?? 0 }}</strong>
-            </el-button>
-            <el-checkbox
-              v-model="flowBoardRespectDate"
-              size="small"
-              class="flow-board-respect-date"
-              @change="refreshFlowSlaBoard"
-            >
-              统计随上方日期范围
-            </el-checkbox>
-          </div>
-        </div>
-        <div class="table-list-toolbar__right">
+      <div v-if="perm('order_management', 'order_query')" class="table-list-toolbar desktop-only">
+        <SalesOrderFlowBoard
+          :flow-summary="flowSummary"
+          :sla-summary="flowSlaSummary"
+          :active-bucket="filters.flow_bucket"
+          :respect-date="flowBoardRespectDate"
+          :loading="flowSlaLoading"
+          @select="onFlowBoardSelect"
+          @update:respect-date="onFlowBoardRespectDateChange"
+        />
+      </div>
+      <div class="table-list-controls desktop-only">
+        <span class="table-list-controls__hint">共 {{ total }} 条 · 双击行可编辑</span>
+        <span v-if="lastListSyncedLabel" class="table-list-controls__sync-hint">{{ lastListSyncedLabel }}</span>
+        <div class="table-list-controls__actions">
+          <el-button size="small" :loading="loading" icon="Refresh" @click="refreshListManual">刷新</el-button>
           <el-popover placement="bottom-start" :width="220" trigger="click">
             <template #reference>
-              <el-button>
+              <el-button size="small">
                 列显示
                 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
               </el-button>
             </template>
             <div class="order-list-column-picker">
-              <div class="order-list-column-picker__title">部分列默认隐藏；勾选「发货人」可关闭独立列（状态角标仍会尽量带出姓名）</div>
+              <div class="order-list-column-picker__title">部分列默认隐藏；勾选「发货人」可显示独立列（状态角标仍会尽量带出姓名）</div>
               <el-checkbox v-model="orderListColVisible.orderNo">订单号</el-checkbox>
               <el-checkbox v-model="orderListColVisible.sales">销售</el-checkbox>
               <el-checkbox v-model="orderListColVisible.shipper">发货人</el-checkbox>
               <el-checkbox v-model="orderListColVisible.uploadedAt">上传日期</el-checkbox>
             </div>
           </el-popover>
-          <el-checkbox v-model="ordersVirtualTable" size="small" class="ml8" @change="onOrdersVirtualTableChange">
+          <el-checkbox v-model="ordersVirtualTable" size="small" @change="onOrdersVirtualTableChange">
             虚拟滚动（大数据）
+          </el-checkbox>
+          <el-checkbox
+            v-if="perm('order_management', 'order_field_config')"
+            v-model="orderTableDesignMode"
+            size="small"
+            :disabled="ordersVirtualTable"
+            :title="ordersVirtualTable ? '请先关闭虚拟滚动' : ''"
+            @change="onOrderTableDesignModeChange"
+          >
+            设计表
           </el-checkbox>
         </div>
       </div>
-      <div class="table-inner" :class="{ 'table-inner--v2': ordersVirtualTable }">
+      <div
+        class="table-inner desktop-only"
+        :class="{ 'table-inner--v2': ordersVirtualTable }"
+        v-loading="loading"
+        element-loading-text="加载中..."
+      >
         <template v-if="ordersVirtualTable">
           <el-alert
             type="info"
@@ -192,38 +324,96 @@
             class="orders-v2-hint"
             title="虚拟列表模式下仍可通过首列勾选做批量操作；勾选状态按订单 id 保留。合同与二维码缩略图仍不展示以减轻渲染压力。"
           />
-          <el-auto-resizer>
+          <div v-if="!items.length && !loading" class="orders-empty-state">
+            <el-empty :description="listEmptyDescription" :image-size="72">
+              <div class="orders-empty-state__actions">
+                <template v-if="listEmptyIsFiltered">
+                  <el-button type="primary" plain @click="resetFilters">清空筛选</el-button>
+                </template>
+                <template v-else>
+                  <el-button
+                    v-if="perm('order_management', 'order_input')"
+                    type="primary"
+                    @click="openCreate"
+                  >
+                    手动录入
+                  </el-button>
+                  <el-button
+                    v-if="perm('order_management', 'order_input')"
+                    plain
+                    @click="downloadTpl"
+                  >
+                    下载导入模板
+                  </el-button>
+                </template>
+              </div>
+            </el-empty>
+          </div>
+          <el-auto-resizer v-else>
             <template #default="{ height, width }">
               <el-table-v2
                 v-if="height > 0 && width > 0"
+                :key="'orders-v2-' + customerListNameMode"
                 class="orders-table-v2"
-                :columns="ordersV2Columns"
+                :columns="scaleOrdersV2Columns(ordersV2Columns, width)"
                 :data="items"
-                :width="Math.max(ordersV2TableWidth, width)"
+                :width="width"
                 :height="height"
-                :row-height="48"
+                :row-height="52"
+                :row-class="orderV2RowClass"
+                :row-event-handlers="ordersV2RowEventHandlers"
                 row-key="id"
-                fixed
               />
             </template>
           </el-auto-resizer>
         </template>
         <el-table
           v-else
+          :key="'orders-table-' + customerListNameMode"
           ref="ordersTable"
           class="orders-table"
+          :class="{ 'orders-table--design': showOrderHeaderDesign }"
           :data="items"
           border
           stripe
           height="100%"
-          style="width: 100%; max-width: 100vw; table-layout: fixed;"
+          style="width: 100%; table-layout: fixed;"
           row-key="id"
+          :row-class-name="orderRowClassName"
           @selection-change="onOrdersSelectionChange"
+          @row-dblclick="onOrderRowDblClick"
         >
+        <template #empty>
+          <div class="orders-empty-state">
+            <el-empty :description="listEmptyDescription" :image-size="72">
+              <div class="orders-empty-state__actions">
+                <template v-if="listEmptyIsFiltered">
+                  <el-button type="primary" plain @click="resetFilters">清空筛选</el-button>
+                </template>
+                <template v-else>
+                  <el-button
+                    v-if="perm('order_management', 'order_input')"
+                    type="primary"
+                    @click="openCreate"
+                  >
+                    手动录入
+                  </el-button>
+                  <el-button
+                    v-if="perm('order_management', 'order_input')"
+                    plain
+                    @click="downloadTpl"
+                  >
+                    下载导入模板
+                  </el-button>
+                </template>
+              </div>
+            </el-empty>
+          </div>
+        </template>
         <el-table-column
           v-if="showOrderRowSelection"
           type="selection"
-          width="48"
+          width="40"
           :reserve-selection="true"
           :selectable="orderRowSelectable"
         />
@@ -231,13 +421,21 @@
           v-if="orderListColVisible.orderNo"
           prop="order_no"
           label="订单号"
-          width="140"
+          align="center"
+          header-align="center"
           show-overflow-tooltip
         />
-        <el-table-column label="状态" width="180" align="center">
+        <el-table-column label="状态" min-width="96" align="center" header-align="center" class-name="orders-col-status">
           <template #default="{ row }">
             <div class="orders-status-cell">
-              <SalesStatusPill kind="order" :order-row="row" />
+              <el-tooltip content="查看审批记录" placement="top">
+                <SalesStatusPill
+                  kind="order"
+                  :order-row="row"
+                  clickable
+                  @click="openLogs(row)"
+                />
+              </el-tooltip>
             </div>
           </template>
         </el-table-column>
@@ -245,34 +443,75 @@
           v-if="orderListColVisible.shipper"
           prop="shipped_by_name"
           label="发货人"
-          width="92"
+          align="center"
+          header-align="center"
           show-overflow-tooltip
         />
+        <el-table-column
+          v-if="orderListColVisible.sales"
+          prop="created_by_username"
+          label="销售"
+          align="center"
+          header-align="center"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          v-if="orderListColVisible.uploadedAt"
+          label="上传日期"
+          align="center"
+          header-align="center"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">
+            {{ $dt(row.created_at) }}
+          </template>
+        </el-table-column>
         <el-table-column
           v-for="col in orderListFieldDefinitions"
           :key="col.field_key"
           :prop="'display_data.' + col.field_key"
-          min-width="72"
+          align="center"
+          header-align="center"
+          show-overflow-tooltip
         >
           <template #header>
-            <span>{{ col.required ? '*' : '' }}{{ col.label_zh }}</span>
-            <span
-              v-if="perm('order_management', 'order_field_config')"
-              class="header-field-actions"
-            >
-              <el-icon
-                class="header-field-icon"
-                @click.stop="editFieldRow(col)"
-              >
-                <Edit />
-              </el-icon>
-              <el-icon
-                v-if="col.is_active"
-                class="header-field-icon danger"
-                @click.stop="removeFieldRow(col)"
-              >
-                <Delete />
-              </el-icon>
+            <div v-if="isCustomerNameColumn(col)" class="orders-customer-header">
+              <span class="orders-col-header__text">{{ col.required ? '*' : '' }}{{ orderListColumnTitle(col) }}</span>
+              <div class="orders-customer-header__mode" @click.stop @mousedown.stop>
+                <el-button
+                  size="small"
+                  :type="customerListNameMode === 'short' ? 'primary' : 'default'"
+                  @click="setCustomerListNameMode('short')"
+                >
+                  简称
+                </el-button>
+                <el-button
+                  size="small"
+                  :type="customerListNameMode === 'full' ? 'primary' : 'default'"
+                  @click="setCustomerListNameMode('full')"
+                >
+                  全称
+                </el-button>
+              </div>
+            </div>
+            <span v-else-if="!showOrderHeaderDesign" class="orders-col-header__text">{{ col.required ? '*' : '' }}{{ orderListColumnTitle(col) }}</span>
+            <span v-else class="orders-col-header">
+              <span class="orders-col-header__text">{{ col.required ? '*' : '' }}{{ orderListColumnTitle(col) }}</span>
+              <span class="header-field-actions">
+                <el-icon
+                  class="header-field-icon"
+                  @click.stop="editFieldRow(col)"
+                >
+                  <Edit />
+                </el-icon>
+                <el-icon
+                  v-if="col.is_active"
+                  class="header-field-icon danger"
+                  @click.stop="removeFieldRow(col)"
+                >
+                  <Delete />
+                </el-icon>
+              </span>
             </span>
           </template>
           <template #default="{ row }">
@@ -280,8 +519,10 @@
           </template>
         </el-table-column>
         <el-table-column
-          v-if="perm('order_management', 'order_field_config')"
-          width="52"
+          v-if="showOrderHeaderDesign"
+          width="40"
+          align="center"
+          header-align="center"
         >
           <template #header>
             <el-button
@@ -294,19 +535,7 @@
             </el-button>
           </template>
         </el-table-column>
-        <el-table-column
-          v-if="orderListColVisible.sales"
-          prop="created_by_username"
-          label="销售"
-          width="60"
-          show-overflow-tooltip
-        />
-        <el-table-column v-if="orderListColVisible.uploadedAt" label="上传日期" width="120" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ $dt(row.created_at) }}
-          </template>
-        </el-table-column>
-        <el-table-column v-if="showOrderListContractCol" label="合同" width="100" align="center">
+        <el-table-column v-if="showOrderListContractCol" label="合同" min-width="72" align="center" header-align="center" class-name="orders-col-contract">
           <template #default="{ row }">
             <div class="contract-cell">
               <template v-if="row.contract_id">
@@ -336,17 +565,23 @@
                         <el-icon><View /></el-icon>
                       </el-button>
                     </el-tooltip>
-                    <el-tooltip content="下载为 Word（上传类合同为原文件）" placement="top">
+                    <el-dropdown trigger="click" @command="(cmd) => downloadOrderContractFile(row, cmd)">
                       <el-button
                         type="success"
                         circle
                         size="small"
                         class="contract-thumb-action"
-                        @click.stop="downloadOrderContractFile(row)"
+                        @click.stop
                       >
                         <el-icon><Download /></el-icon>
                       </el-button>
-                    </el-tooltip>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item command="word">下载 Word</el-dropdown-item>
+                          <el-dropdown-item command="pdf">下载 PDF</el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
                   </div>
                 </div>
               </template>
@@ -367,7 +602,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="showOrderListQcCol" label="质检二维码" width="100" align="center">
+        <el-table-column v-if="showOrderListQcCol" label="质检" min-width="72" align="center" header-align="center" class-name="orders-col-qc">
           <template #default="{ row }">
             <div class="qc-cell">
               <div v-if="row.qc_thumb_data_url" class="qc-thumb-wrap">
@@ -378,45 +613,58 @@
                 >
                 <div class="qc-thumb-actions">
                   <el-tooltip content="下载二维码" placement="top">
-                    <el-button
-                      type="primary"
-                      circle
-                      size="small"
-                      class="qc-thumb-action"
-                      @click.stop="downloadQcThumb(row)"
-                    >
-                      <el-icon><Download /></el-icon>
-                    </el-button>
+                    <span class="qc-thumb-action-host">
+                      <el-button
+                        type="primary"
+                        circle
+                        size="small"
+                        class="qc-thumb-action"
+                        @click.stop="downloadQcThumb(row)"
+                      >
+                        <el-icon><Download /></el-icon>
+                      </el-button>
+                    </span>
                   </el-tooltip>
                   <el-tooltip content="预览" placement="top">
-                    <el-button
-                      type="success"
-                      circle
-                      size="small"
-                      class="qc-thumb-action"
-                      @click.stop="previewQcThumb(row)"
-                    >
-                      <el-icon><View /></el-icon>
-                    </el-button>
+                    <span class="qc-thumb-action-host">
+                      <el-button
+                        type="success"
+                        circle
+                        size="small"
+                        class="qc-thumb-action"
+                        @click.stop="previewQcThumb(row)"
+                      >
+                        <el-icon><View /></el-icon>
+                      </el-button>
+                    </span>
                   </el-tooltip>
                   <el-tooltip
                     :content="canRemoveQc(row) ? '删除二维码绑定' : '当前不可删除二维码绑定'"
                     placement="top"
                   >
-                    <el-button
-                      type="danger"
-                      circle
-                      size="small"
-                      class="qc-thumb-action"
-                      :disabled="!canRemoveQc(row)"
-                      @click.stop="handleClearQc(row)"
-                    >
-                      <el-icon><Delete /></el-icon>
-                    </el-button>
+                    <span class="qc-thumb-action-host">
+                      <el-button
+                        type="danger"
+                        circle
+                        size="small"
+                        class="qc-thumb-action"
+                        :disabled="!canRemoveQc(row)"
+                        @click.stop="handleClearQc(row)"
+                      >
+                        <el-icon><Delete /></el-icon>
+                      </el-button>
+                    </span>
                   </el-tooltip>
                 </div>
               </div>
-              <span v-else class="qc-placeholder muted">{{ row.qc_report_label }}</span>
+              <span
+                v-else
+                :class="[
+                  'qc-placeholder',
+                  qcPlaceholderShowsGenerate(row) && perm('reports', 'create') ? 'qc-placeholder--link' : 'muted'
+                ]"
+                @click="onQcPlaceholderClick(row)"
+              >{{ qcPlaceholderText(row) }}</span>
               <el-button
                 v-if="canEditOrderQc(row)"
                 class="qc-add"
@@ -431,64 +679,197 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="300" align="right" class-name="orders-col-actions">
+        <el-table-column
+          label="操作"
+          min-width="100"
+          align="center"
+          header-align="center"
+          class-name="orders-col-actions"
+        >
           <template #default="{ row }">
-            <el-button
-              v-if="perm('order_management', 'order_edit')"
-              :type="canEdit(row) ? 'primary' : 'info'"
-              :class="{ 'btn-fake-disabled': !canEdit(row) }"
-              size="small"
-              plain
-              @click="handleEditClick(row)"
-             icon=Edit>编辑</el-button>
-            <el-button
-              v-if="perm('order_management', 'order_delete') && canDelete(row)"
-              type="danger"
-              size="small"
-              plain
-              @click="doDeleteRow(row)"
-             icon=Delete>删除</el-button>
-            <el-button
-              v-if="perm('order_management', 'order_status_finance') && canFinanceReview(row)"
-              type="success"
-              size="small"
-              @click="approveSingle(row)"
-             icon=Select>通过</el-button>
-            <el-button
-              v-if="perm('order_management', 'order_status_finance') && canFinanceReview(row)"
-              type="danger"
-              size="small"
-              @click="rejectSingle(row)"
-            >驳回</el-button>
-            <el-button
-              v-if="perm('order_management', 'order_status_qc') && canQcReview(row)"
-              type="success"
-              size="small"
-              @click="approveSingleQc(row)"
-             icon=Select>审核通过</el-button>
-            <el-button
-              v-if="perm('order_management', 'order_status_qc') && canQcReview(row)"
-              type="danger"
-              size="small"
-              @click="rejectSingleQc(row)"
-            >驳回</el-button>
-            <el-button
-              v-if="canShip(row)"
-              type="primary"
-              size="small"
-              plain
-              @click="openShip(row)"
-            >发货</el-button>
-            <el-button
-              v-if="perm('order_management', 'order_submit') && canSubmit(row)"
-              type="primary"
-              size="small"
-              @click="submitSingle(row)"
-             icon=Check>提交审核</el-button>
+            <div class="orders-row-actions">
+              <el-tooltip
+                v-for="act in getOrderRowPrimaryActions(row)"
+                :key="act.key"
+                :content="act.tooltip"
+                placement="top"
+              >
+                <span class="orders-action-btn-host">
+                  <el-button
+                    :type="act.type"
+                    :plain="act.plain"
+                    size="small"
+                    circle
+                    @click="act.onClick()"
+                  >
+                    <el-icon><component :is="act.icon" /></el-icon>
+                  </el-button>
+                </span>
+              </el-tooltip>
+              <el-dropdown
+                v-if="getOrderRowSecondaryActions(row).length"
+                trigger="click"
+                @command="(key) => onOrderRowMenuCommand(row, key)"
+              >
+                <span class="orders-action-btn-host">
+                  <el-button size="small" circle plain title="更多操作">
+                    <el-icon><MoreFilled /></el-icon>
+                  </el-button>
+                </span>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-for="act in getOrderRowSecondaryActions(row)"
+                      :key="act.key"
+                      :command="act.key"
+                      :divided="act.divided"
+                    >
+                      {{ act.label }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </template>
         </el-table-column>
         </el-table>
       </div>
+
+      <div class="mobile-list" v-loading="loading" element-loading-text="加载中...">
+        <div class="mobile-list-toolbar">
+          <el-button size="small" :loading="loading" icon="Refresh" @click="refreshListManual">刷新</el-button>
+          <span v-if="lastListSyncedLabel" class="mobile-list-toolbar__sync">{{ lastListSyncedLabel }}</span>
+        </div>
+        <SalesOrderFlowBoard
+          v-if="perm('order_management', 'order_query')"
+          class="mobile-flow-board"
+          :flow-summary="flowSummary"
+          :sla-summary="flowSlaSummary"
+          :active-bucket="filters.flow_bucket"
+          :respect-date="flowBoardRespectDate"
+          :loading="flowSlaLoading"
+          compact
+          @select="onFlowBoardSelect"
+          @update:respect-date="onFlowBoardRespectDateChange"
+        />
+        <div
+          v-if="showOrderRowSelection && items.length"
+          class="mobile-select-bar"
+        >
+          <el-checkbox
+            :model-value="mobilePageAllSelected"
+            :indeterminate="mobilePageIndeterminate"
+            @change="onMobilePageSelectAll"
+          >
+            全选本页
+          </el-checkbox>
+          <span v-if="effectiveSelected.length" class="mobile-select-bar__count">
+            已选 {{ effectiveSelected.length }} 条
+          </span>
+        </div>
+        <div
+          v-for="row in items"
+          :key="'m-' + row.id"
+          class="mobile-card"
+          :class="{
+            'mobile-card--focus': focusOrderId != null && Number(focusOrderId) === Number(row.id),
+            'mobile-card--selected': showOrderRowSelection && v2SelectedIds.includes(row.id),
+            'mobile-card--highlight': isOrderHighlighted(row),
+            'mobile-card--editable': canEdit(row)
+          }"
+          @dblclick="onOrderRowDblClick(row)"
+        >
+          <div class="mobile-head">
+            <el-checkbox
+              v-if="showOrderRowSelection"
+              class="mobile-card__pick"
+              :model-value="v2SelectedIds.includes(row.id)"
+              :disabled="!orderRowSelectable(row)"
+              @click.stop
+              @change="(v) => onV2RowPick(row, !!v)"
+            />
+            <strong class="mobile-order-no">{{ row.order_no || '—' }}</strong>
+            <el-tooltip content="查看审批记录" placement="top">
+              <SalesStatusPill
+                kind="order"
+                :order-row="row"
+                clickable
+                @click="openLogs(row)"
+              />
+            </el-tooltip>
+          </div>
+          <div
+            v-for="col in mobilePreviewFields"
+            :key="col.field_key"
+            class="mobile-line"
+          >
+            <span>{{ orderListColumnTitle(col) }}</span>
+            <span>{{ displayCell(row, col.field_key) }}</span>
+          </div>
+          <div v-if="orderListColVisible.shipper && row.shipped_by_name" class="mobile-line">
+            <span>发货人</span>
+            <span>{{ row.shipped_by_name }}</span>
+          </div>
+          <div v-if="orderListColVisible.sales && row.created_by_username" class="mobile-line">
+            <span>销售</span>
+            <span>{{ row.created_by_username }}</span>
+          </div>
+          <div class="mobile-actions">
+            <el-button
+              v-for="act in getOrderRowPrimaryActions(row)"
+              :key="act.key"
+              :type="act.type"
+              :plain="act.plain !== false"
+              size="small"
+              @click="act.onClick()"
+            >{{ act.label }}</el-button>
+            <el-dropdown
+              v-if="getOrderRowSecondaryActions(row).length"
+              trigger="click"
+              @command="(key) => onOrderRowMenuCommand(row, key)"
+            >
+              <el-button size="small">更多</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="act in getOrderRowSecondaryActions(row)"
+                    :key="act.key"
+                    :command="act.key"
+                  >
+                    {{ act.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </div>
+        <div v-if="!items.length && !loading" class="orders-empty-state">
+          <el-empty :description="listEmptyDescription" :image-size="72">
+            <div class="orders-empty-state__actions">
+              <template v-if="listEmptyIsFiltered">
+                <el-button type="primary" plain @click="resetFilters">清空筛选</el-button>
+              </template>
+              <template v-else>
+                <el-button
+                  v-if="perm('order_management', 'order_input')"
+                  type="primary"
+                  @click="openCreate"
+                >
+                  手动录入
+                </el-button>
+                <el-button
+                  v-if="perm('order_management', 'order_input')"
+                  plain
+                  @click="downloadTpl"
+                >
+                  下载导入模板
+                </el-button>
+              </template>
+            </div>
+          </el-empty>
+        </div>
+      </div>
+
       <div class="pager">
         <el-select v-model="pageSize" class="w100" @change="load">
           <el-option :value="10" label="10 条/页" />
@@ -506,460 +887,204 @@
           @current-change="(p) => { page = p; load(); }"
         />
       </div>
-    </div>
 
-    <el-dialog v-model="formOpen" :title="form.id ? '修改订单' : '录入订单'" width="560px" @close="resetForm">
-      <p class="form-hint">
-        订单号由系统自动生成，保存后出现。发货日期为您在表格/表单中填写的业务日期；上传日期在首次保存时由系统自动记录，列表中可查看。
-        金额（价税合计）= 含税单价（元/吨）× 吨数；吨数 = 数量 × 规格（规格含 kg/千克/公斤 时按千克换算为吨）。修改数量、规格或单价后金额会自动重算。
-      </p>
-      <el-form :model="formData" label-width="120px">
-        <el-form-item
-          v-for="col in fieldDefinitions"
-          :key="col.field_key"
-          :label="col.label_zh"
-          :required="!!col.required"
-          :error="formErrors[col.field_key]"
-        >
-          <el-input
-            v-if="col.field_type === 'text'"
-            v-model="formData[col.field_key]"
-            clearable
-            @input="onOrderFormFieldInput(col)"
-          />
-          <el-input
-            v-else-if="col.field_type === 'textarea'"
-            v-model="formData[col.field_key]"
-            type="textarea"
-            rows="2"
-            @input="onOrderFormFieldInput(col)"
-          />
-          <el-input
-            v-else-if="col.field_type === 'date'"
-            v-model="formData[col.field_key]"
-            placeholder="YYYY-MM-DD"
-            @input="onOrderFormFieldInput(col)"
-          />
-          <el-input-number
-            v-else-if="col.field_type === 'number' || col.field_type === 'positive_number'"
-            v-model="formData[col.field_key]"
-            :min="col.field_type === 'positive_number' ? 0.0001 : undefined"
-            :precision="4"
-            class="w-full"
-            @change="onOrderFormNumberChange(col)"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="formOpen = false" icon=Close>取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveForm" icon=Check>保存</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="contractsOpen" title="客户相关合同" width="640px">
-      <el-table v-if="contractRows.length" :data="contractRows" border size="small">
-        <el-table-column prop="contract_no" label="合同编号" width="160" />
-        <el-table-column prop="status" label="状态" min-width="200" align="center">
-          <template #default="{ row }">
-            <div class="orders-status-cell">
-              <SalesStatusPill kind="contract" :status="row.status" :reject-reason="row.last_reject_comment || ''" />
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="reviewer_username" label="审核人" width="100" />
-        <el-table-column label="生成时间" min-width="160">
-          <template #default="{ row }">{{ $dt(row.created_at) }}</template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-else description="暂无合同" />
-    </el-dialog>
-
-    <el-dialog v-model="logsOpen" title="订单追溯" width="720px">
-      <div class="log-block">状态变更</div>
-      <el-timeline v-if="statusLogs.length">
-        <el-timeline-item v-for="l in statusLogs" :key="l.id" :timestamp="$dt(l.created_at)">
-          {{ orderFlowStatusZh(l.from_status) }} → {{ orderFlowStatusZh(l.to_status) }} · 操作人：{{ l.actor_username || '—' }}<template v-if="l.remark"> · 备注：{{ l.remark }}</template>
-        </el-timeline-item>
-      </el-timeline>
-      <div class="log-block mt">修改记录</div>
-      <el-table v-if="editLogs.length" :data="editLogs" border size="small">
-        <el-table-column label="时间" width="168">
-          <template #default="{ row }">{{ $dt(row.created_at) }}</template>
-        </el-table-column>
-        <el-table-column prop="actor_username" label="操作人" width="100" />
-      </el-table>
-    </el-dialog>
-
-    <el-dialog v-model="financeOpen" :title="financeDialogTitle" width="440px">
-      <el-form label-width="80px">
-        <el-form-item label="结果">
-          <el-radio-group v-model="financeForm.result">
-            <el-radio label="approved">通过</el-radio>
-            <el-radio label="rejected">驳回</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="意见">
-          <el-input v-model="financeForm.comment" type="textarea" rows="3" placeholder="驳回必填" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="financeOpen = false" icon=Close>取消</el-button>
-        <el-button type="primary" :loading="financeLoading" @click="submitFinance" icon=Check>确定</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="qcReviewOpen" :title="qcReviewDialogTitle" width="440px">
-      <el-form label-width="80px">
-        <el-form-item label="结果">
-          <el-radio-group v-model="qcReviewForm.result">
-            <el-radio label="approved">审核通过</el-radio>
-            <el-radio label="rejected">驳回</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="意见">
-          <el-input v-model="qcReviewForm.comment" type="textarea" rows="3" placeholder="驳回必填" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="qcReviewOpen = false" icon=Close>取消</el-button>
-        <el-button type="primary" :loading="qcReviewLoading" @click="submitQcReview" icon=Check>确定</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="shipOpen" :title="shipDialogTitle" width="440px" @close="resetShipDialog">
-      <p v-if="shipBatchList.length > 1" class="ship-batch-hint">
-        已选 {{ shipBatchList.length }} 笔「财务与质检均已通过」的订单，将一并标记为已发货；以下说明会写入每笔订单并发站内信通知销售与财务。
-      </p>
-      <el-input v-model="shipNote" type="textarea" rows="3" placeholder="发货指令 / 备注（可选）" />
-      <template #footer>
-        <el-button @click="shipOpen = false" icon=Close>取消</el-button>
-        <el-button type="primary" :loading="shipLoading" @click="submitShip" icon=Check>确认发货</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="genOpen" title="生成合同" width="520px" @closed="onGenDialogClosed">
-      <el-form label-width="100px">
-        <el-form-item label="方式">
-          <el-radio-group v-model="genUseBlankTemplate" class="gen-contract-mode">
-            <el-radio :label="false" :disabled="!templates.length">选用已保存模板</el-radio>
-            <el-radio :label="true">从空白模板创建</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="!genUseBlankTemplate" label="模板">
-          <el-select v-model="genTemplateId" placeholder="选择模板" class="w-full" filterable>
-            <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
-          </el-select>
-        </el-form-item>
-        <p v-if="genUseBlankTemplate" class="hint gen-contract-blank-hint">
-          使用系统推荐版式，正文均为占位符，生成时按当前客户与订单填入买方全称、地址、联系方式及订单明细；避免选用其他客户模板中写死的名称。
-        </p>
-        <div class="hint">
-          已选 {{ genOrderIdCount }} 条订单；自列表勾选生成时须为同一客户。
-        </div>
-      </el-form>
-      <template #footer>
-        <el-button @click="genOpen = false" icon=Close>取消</el-button>
-        <el-button type="primary" :loading="genLoading" @click="runGenerate">生成</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="bindContractOpen"
-      title="绑定已有合同"
-      width="520px"
-      :close-on-click-modal="false"
-      @closed="onBindContractDialogClosed"
-    >
-      <p v-if="bindContractCustomerName" class="form-hint">
-        当前订单客户：<strong>{{ bindContractCustomerName }}</strong>；仅可绑定同一客户下的合同。
-      </p>
-      <div v-loading="bindContractLoading">
-        <el-form label-width="88px">
-          <el-form-item label="合同">
-            <el-select
-              v-model="bindContractSelectedId"
-              class="w-full"
-              filterable
-              placeholder="从合同列表中选择"
-              :disabled="!bindContractRows.length"
+      <transition name="orders-batch-bar-fade">
+        <div v-if="effectiveSelected.length" class="orders-batch-bar">
+          <div class="orders-batch-bar__left">
+            <span class="orders-batch-bar__count">已选 {{ effectiveSelected.length }} 条</span>
+            <el-popover placement="top-start" :width="300" trigger="click">
+              <template #reference>
+                <el-button link type="primary" size="small">查看清单</el-button>
+              </template>
+              <div class="orders-batch-bar__list">
+                <div
+                  v-for="r in effectiveSelected"
+                  :key="'sel-' + r.id"
+                  class="orders-batch-bar__item"
+                >
+                  {{ r.order_no || `订单 #${r.id}` }}
+                </div>
+              </div>
+            </el-popover>
+            <el-button link size="small" @click="clearAllOrderSelection">清空选择</el-button>
+          </div>
+          <div class="orders-batch-bar__actions">
+            <el-tooltip
+              placement="top"
+              :disabled="batchSubmitTipDisabled"
+              :content="batchSubmitTooltip"
             >
-              <el-option
-                v-for="c in bindContractRows"
-                :key="c.id"
-                :label="bindContractOptionLabel(c)"
-                :value="c.id"
-              />
-            </el-select>
-          </el-form-item>
-        </el-form>
-        <el-empty v-if="!bindContractLoading && !bindContractRows.length" description="该客户暂无合同，请先在「销售合同」中创建" />
-      </div>
-      <template #footer>
-        <el-button @click="bindContractOpen = false" icon=Close>取消</el-button>
-        <el-button
-          type="primary"
-          :loading="bindContractSaving"
-          :disabled="!bindContractSelectedId"
-          @click="submitBindContract"
-        >
-          绑定
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="contractPreviewOpen"
-      :title="contractPreviewTitle"
-      width="920px"
-      top="4vh"
-      class="contract-preview-dialog"
-      :close-on-click-modal="false"
-      @closed="onOrderContractPreviewClosed"
-    >
-      <div v-loading="contractPreviewLoading" class="contract-preview-dialog-inner">
-        <div
-          v-if="contractPreviewMode === 'html' && contractPreviewHtml"
-          class="contract-preview-html"
-          v-html="contractPreviewHtml"
-        />
-        <iframe
-          v-else-if="contractPreviewMode === 'pdf' && contractPreviewPdfUrl"
-          :src="contractPreviewPdfUrl"
-          class="contract-preview-pdf"
-          title="合同 PDF 预览"
-        />
-        <div
-          v-else-if="contractPreviewMode === 'docx' && contractPreviewDocxHtml"
-          class="contract-preview-docx"
-          v-html="contractPreviewDocxHtml"
-        />
-        <img
-          v-else-if="contractPreviewMode === 'image' && contractPreviewImageUrl"
-          :src="contractPreviewImageUrl"
-          alt="合同图片预览"
-          class="contract-preview-image"
-        />
-        <div v-else-if="contractPreviewMode === 'other'" class="contract-preview-other">
-          <p>当前为老版 .doc 或其它格式，无法在页面内预览。</p>
-          <el-button type="primary" @click="downloadOrderContractPreviewFile" icon=Download>下载查看</el-button>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="contractPreviewOpen = false" icon=Close>关闭</el-button>
-        <el-button
-          v-if="perm('contract_management', 'contract_edit') || perm('contract_management', 'contract_generate')"
-          type="primary"
-          plain
-          @click="goOrderContractByPreviewId"
-         icon=Edit>
-          编辑合同
-        </el-button>
-        <el-tooltip
-          placement="top"
-          content="若纸上出现日期、网址或页码，请在打印对话框「更多设置」中关闭「页眉和页脚」。"
-          :show-after="300"
-        >
-          <span class="print-tooltip-trigger">
+              <span class="batch-del-tooltip-host">
+                <el-button
+                  v-if="perm('order_management', 'order_submit')"
+                  type="primary"
+                  size="small"
+                  plain
+                  :disabled="batchSubmitDisabled"
+                  @click="batchSubmitReview"
+                >
+                  {{ batchSubmitButtonLabel }}
+                </el-button>
+              </span>
+            </el-tooltip>
+            <el-tooltip
+              placement="top"
+              :disabled="batchWithdrawTipDisabled"
+              :content="batchWithdrawTooltip"
+            >
+              <span class="batch-del-tooltip-host">
+                <el-button
+                  v-if="perm('order_management', 'order_withdraw')"
+                  type="warning"
+                  size="small"
+                  plain
+                  :disabled="batchWithdrawDisabled"
+                  @click="batchWithdrawReview"
+                >
+                  {{ batchWithdrawButtonLabel }}
+                </el-button>
+              </span>
+            </el-tooltip>
             <el-button
+              v-if="perm('order_management', 'order_status_finance')"
+              type="warning"
+              size="small"
+              plain
+              :disabled="batchFinanceReviewableList.length === 0"
+              @click="openFinanceBatch"
+            >
+              批量审核
+            </el-button>
+            <el-button
+              v-if="perm('order_management', 'order_status_qc')"
+              type="warning"
+              size="small"
+              plain
+              :disabled="batchQcReviewableList.length === 0"
+              @click="openQcReviewBatch"
+            >
+              批量品管
+            </el-button>
+            <el-button
+              v-if="batchShipActionVisible"
               type="primary"
-              :disabled="
-                contractPreviewMode === 'other' || (contractPreviewMode === 'html' && !contractPreviewHtml)
-              "
-              @click="printOrderContractPreview"
-              icon=Printer
-              >打印</el-button>
-          </span>
-        </el-tooltip>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="fieldManageOpen" :title="fieldManageDialogTitle" width="720px" @open="loadFieldDefinitionsAll">
-      <el-button type="primary" size="small" class="mb8" @click="openNewField" icon=Plus>新增字段</el-button>
-      <el-table :data="fieldAllList" border size="small" max-height="360">
-        <el-table-column prop="field_key" label="字段键" width="120" />
-        <el-table-column prop="label_zh" label="表头/标签" width="120" />
-        <el-table-column prop="field_type" label="类型" width="100" />
-        <el-table-column label="必填" width="72">
-          <template #default="{ row }">{{ row.required ? '是' : '否' }}</template>
-        </el-table-column>
-        <el-table-column prop="sort_order" label="排序" width="72" />
-        <el-table-column prop="maps_to" label="业务映射" width="120" />
-        <el-table-column label="启用" width="72">
-          <template #default="{ row }">{{ row.is_active ? '是' : '否' }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right">
-          <template #default="{ row }">
-            <el-button link @click="editFieldRow(row)" icon=Edit>编辑</el-button>
-            <el-button v-if="row.is_active" link type="danger" @click="removeFieldRow(row)" icon=Delete>删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-dialog>
-
-    <el-dialog v-model="fieldEditOpen" :title="fieldEdit.id ? '编辑字段' : '新增字段'" width="480px">
-      <el-form label-width="110px">
-        <el-form-item label="字段键" required>
-          <el-input v-model="fieldEdit.field_key" :disabled="!!fieldEdit.id" placeholder="小写字母开头，如 custom_a" />
-        </el-form-item>
-        <el-form-item label="显示名称" required>
-          <el-input v-model="fieldEdit.label_zh" maxlength="128" />
-        </el-form-item>
-        <el-form-item label="类型">
-          <el-select v-model="fieldEdit.field_type" class="w-full">
-            <el-option label="单行文本" value="text" />
-            <el-option label="多行文本" value="textarea" />
-            <el-option label="数字" value="number" />
-            <el-option label="正数（＞0）" value="positive_number" />
-            <el-option label="日期" value="date" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="必填">
-          <el-switch v-model="fieldEdit.required" />
-        </el-form-item>
-        <el-form-item label="排序">
-          <el-input-number v-model="fieldEdit.sort_order" :min="0" :max="9999" class="w-full" />
-        </el-form-item>
-        <el-form-item label="业务映射">
-          <el-select v-model="fieldEdit.maps_to" clearable placeholder="可选，映射到系统列" class="w-full">
-            <el-option label="（无）" :value="''" />
-            <el-option v-for="m in mapsToOptions" :key="m.value" :label="m.label" :value="m.value" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="fieldEditOpen = false" icon=Close>取消</el-button>
-        <el-button type="primary" :loading="fieldEditSaving" @click="saveFieldEdit" icon=Check>保存</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="qcBindOpen"
-      title="绑定质检二维码"
-      width="560px"
-      destroy-on-close
-      @open="fetchQcBindList"
-    >
-      <el-input
-        v-model="qcBindSearch"
-        placeholder="按报告品名、批号搜索"
-        clearable
-        class="qc-bind-search"
-        @keyup.enter="fetchQcBindList"
-      >
-        <template #append>
-          <el-button @click="fetchQcBindList">搜索</el-button>
-        </template>
-      </el-input>
-      <el-scrollbar max-height="420px" class="qc-bind-scroll">
-        <div v-if="qcBindLoading" class="muted qc-bind-pad">加载中…</div>
-        <div v-else class="qc-bind-list">
-          <div v-for="it in qcBindItems" :key="it.id" class="qc-bind-row">
-            <img :src="it.qrThumbDataUrl" class="qc-bind-thumb" alt="">
-            <div class="qc-bind-meta">
-              <div class="qc-bind-id">二维码 #{{ it.id }}</div>
-              <div class="qc-bind-tags text-muted">{{ formatQcBindTags(it.reportTags) }}</div>
-            </div>
-            <el-button type="primary" size="small" :loading="qcBindSaving" @click="confirmQcBind(it)">
-              绑定
+              size="small"
+              plain
+              :disabled="batchShippableList.length === 0"
+              @click="openShipBatch"
+            >
+              批量发货
+            </el-button>
+            <el-tooltip
+              placement="top"
+              :disabled="batchDeleteTipDisabled"
+              :content="batchDeleteTooltip"
+            >
+              <span class="batch-del-tooltip-host">
+                <el-button
+                  v-if="perm('order_management', 'order_delete')"
+                  type="danger"
+                  size="small"
+                  plain
+                  :disabled="batchDeleteDisabled"
+                  @click="batchDeleteOrders"
+                >
+                  {{ batchDeleteButtonLabel }}
+                </el-button>
+              </span>
+            </el-tooltip>
+            <el-button
+              v-if="perm('contract_management', 'contract_generate')"
+              type="success"
+              size="small"
+              @click="openContractGen"
+            >
+              生成合同
             </el-button>
           </div>
-          <el-empty v-if="!qcBindItems.length && !qcBindLoading" description="暂无数据，请先在报告管理中生成二维码" />
         </div>
-      </el-scrollbar>
-    </el-dialog>
+      </transition>
+    </div>
 
-    <el-drawer
-      v-model="messagesOpen"
-      title="站内消息"
-      size="420px"
-      class="messages-drawer"
-      @open="onMessagesOpen"
-    >
-      <div class="messages-toolbar messages-toolbar--top">
-        <el-button size="small" @click="loadMessages" icon=Refresh>刷新</el-button>
-        <el-button
-          v-if="messages.length"
-          size="small"
-          type="danger"
-          plain
-          @click="clearMessageHistory"
-        >
-          清空历史
-        </el-button>
-        <span class="messages-hint">点击卡片标记已读</span>
-      </div>
-      <el-radio-group v-model="messageInboxFilter" size="small" class="msg-type-filter">
-        <el-radio-button value="all">全部</el-radio-button>
-        <el-radio-button value="notice">普通通知</el-radio-button>
-        <el-radio-button value="todo">待办通知</el-radio-button>
-        <el-radio-button value="system">系统消息</el-radio-button>
-      </el-radio-group>
-      <el-scrollbar class="messages-scroll" max-height="calc(100vh - 200px)">
-        <div
-          v-for="m in filteredMessages"
-          :key="m.id"
-          class="msg-card"
-          :class="{ 'msg-card--unread': !m.read_at }"
-          role="button"
-          tabindex="0"
-          @click="readMsg(m)"
-          @keydown.enter="readMsg(m)"
-        >
-          <div class="msg-card__row">
-            <div
-              class="msg-card__icon-wrap"
-              :class="{
-                'msg-card__icon-wrap--reject': isFinanceRejectInboxMessage(m),
-                'msg-card__icon-wrap--notice': messageKind(m) === 'notice' && !isFinanceRejectInboxMessage(m),
-                'msg-card__icon-wrap--todo': messageKind(m) === 'todo',
-                'msg-card__icon-wrap--system': messageKind(m) === 'system'
-              }"
-              aria-hidden="true"
-            >
-              <span v-if="isFinanceRejectInboxMessage(m)" class="msg-card__reject-x">×</span>
-              <el-icon v-else-if="messageKind(m) === 'notice'" :size="22"><Bell /></el-icon>
-              <el-icon v-else-if="messageKind(m) === 'todo'" :size="22"><Calendar /></el-icon>
-              <el-icon v-else :size="22"><Cpu /></el-icon>
-            </div>
-            <div class="msg-card__main">
-              <div class="msg-card__head">
-                <span v-if="!m.read_at" class="msg-card__dot" aria-hidden="true" />
-                <span class="msg-card__title">{{ m.title }}</span>
-                <el-tag size="small" effect="plain" class="msg-card__type-tag">{{ messageKindLabel(m) }}</el-tag>
-                <el-tag v-if="!m.read_at" type="danger" size="small" effect="plain" class="msg-card__badge">未读</el-tag>
-              </div>
-              <div class="msg-card__body">{{ m.body_text }}</div>
-              <div class="msg-card__time">{{ $dt(m.created_at) }}</div>
-            </div>
-          </div>
-        </div>
-        <el-empty
-          v-if="!filteredMessages.length"
-          :description="messages.length ? '该分类暂无消息' : '暂无消息'"
-          class="messages-empty"
-        />
-      </el-scrollbar>
-    </el-drawer>
+    <SalesOrderFormDialog
+      v-model="formDialogVisible"
+      :edit-row="formDialogEditRow"
+      :field-definitions="fieldDefinitions"
+      @success="onFormDialogSuccess"
+    />
 
-    <el-dialog
-      v-model="importDupDialogVisible"
-      :title="importDupDialogTitle"
-      width="900px"
-      destroy-on-close
-      @closed="onImportDupDialogClosed"
-    >
-      <p v-if="importDupSummary" class="import-dup-summary muted">{{ importDupSummary }}</p>
-      <el-table :data="importDupRows" border max-height="62vh" size="small">
-        <el-table-column label="导入行" width="100">
-          <template #default="{ row }">第 {{ row.row }} 行</template>
-        </el-table-column>
-        <el-table-column prop="imported_customer" label="客户" min-width="140" show-overflow-tooltip />
-        <el-table-column prop="imported_product" label="产品" min-width="140" show-overflow-tooltip />
-        <el-table-column prop="imported_model" label="型号" min-width="120" show-overflow-tooltip />
-        <el-table-column prop="imported_batch_no" label="批号" min-width="100" show-overflow-tooltip />
-        <el-table-column prop="existing_order_no" label="重复订单号" min-width="140" show-overflow-tooltip />
-      </el-table>
-    </el-dialog>
+    <SalesOrderLogsDialog
+      v-model:visible="logsDialogVisible"
+      :mode="logsDialogMode"
+      :contract-rows="logsDialogContractRows"
+      :status-logs="logsDialogStatusLogs"
+      :edit-logs="logsDialogEditLogs"
+      :field-definitions="fieldDefinitions"
+    />
+
+    <SalesOrderReviewDialog
+      v-model:visible="reviewDialogVisible"
+      :kind="reviewDialogKind"
+      :rows="reviewDialogRows"
+      @success="onReviewSuccess"
+    />
+
+    <SalesOrderShipDialog
+      v-model:visible="shipDialogVisible"
+      :row="shipDialogRow"
+      :batch-list="shipDialogBatchList"
+      @success="onShipSuccess"
+    />
+
+    <SalesOrderContractGenDialog
+      v-model:visible="genDialogVisible"
+      :order-ids="genDialogOrderIds"
+      @success="onGenSuccess"
+    />
+
+    <SalesOrderBindContractDialog
+      v-model:visible="bindContractDialogVisible"
+      :order-id="bindContractDialogOrderId"
+      :customer-name="bindContractDialogCustomerName"
+      :customer-id="bindContractDialogCustomerId"
+      @success="onBindContractSuccess"
+    />
+
+    <SalesOrderContractPreviewDialog
+      v-model="contractPreviewDialogVisible"
+      :contract-id="contractPreviewDialogContractId"
+      :field-definitions="fieldDefinitions"
+    />
+
+    <SalesOrderFieldManageDialog
+      v-model:visible="fieldManageDialogVisible"
+      :schema-version="fieldSchemaVersion"
+      @changed="onFieldManageChanged"
+    />
+
+    <SalesOrderQcBindDialog
+      v-model:visible="qcBindDialogVisible"
+      :order-id="qcBindDialogOrderId"
+      @success="onQcBindSuccess"
+    />
+
+    <SalesOrderMessagesDrawer
+      ref="messagesDrawerRef"
+      v-model:visible="messagesDrawerVisible"
+      :show-messages="showMessages"
+      @unread-changed="onUnreadChanged"
+    />
+
+    <SalesOrderImportDupDialog
+      v-model:visible="importDupDialogVisible"
+      :summary="importDupDialogSummary"
+      :rows="importDupDialogRows"
+    />
+
+    <SalesOrderImportErrorsDialog
+      v-model:visible="importErrorsDialogVisible"
+      :rows="importErrorsDialogRows"
+    />
   </div>
 </template>
 
@@ -967,77 +1092,182 @@
 import { perm, isSuperAdmin } from '../utils/permissions';
 import {
   listSalesOrders,
-  createSalesOrder,
-  patchSalesOrder,
   submitSalesOrderReview,
   batchSubmitSalesOrderReview,
   withdrawSalesOrderReview,
+  batchWithdrawSalesOrderReview,
   batchFinanceReviewSalesOrder,
   batchQcReviewSalesOrder,
-  shipSalesOrder,
-  batchShipSalesOrders,
   completeSalesOrder,
   cancelSalesOrder,
   deleteSalesOrder,
   batchDeleteSalesOrders,
+  listCustomerContracts,
   listSalesOrderStatusLogs,
   listSalesOrderEditLogs,
-  listCustomerContracts,
   downloadSalesImportTemplate,
   importSalesOrdersXlsx,
   createSalesOrderExportJob,
   getSalesOrderExportJob,
   downloadSalesOrderExportJobFile,
-  generateSalesContract,
-  bindSalesOrderContract,
-  listContractTemplates,
-  listSalesContracts,
-  listSalesMessages,
-  markSalesMessageRead,
-  clearSalesMessages,
   listSalesOrderFields,
-  createSalesOrderField,
-  updateSalesOrderField,
-  deleteSalesOrderField,
   getSalesOrderFlowSummary,
-  getSalesOrderFieldImpact,
-  listSalesQrcodeBindCandidates,
-  patchSalesOrderQcQrcode,
-  getSalesContract,
-  fetchSalesContractDocumentBlob,
-  downloadSalesContractDocument,
-  downloadSalesContractDocx
+  getSalesOrderSlaSummary,
+  getSalesOrderFlowConfig,
+  patchSalesOrderQcQrcode
 } from '../api';
-import mammoth from 'mammoth';
+import { downloadContractFile, contractDownloadErrorMessage } from '../utils/contractDownload.js';
 import SalesStatusPill from '../components/SalesStatusPill.vue';
 import WordDocumentIcon from '../components/WordDocumentIcon.vue';
-import {
-  finalizeContractBodyForPreview,
-  printHtmlDocumentInHiddenIframe,
-  printContractPreviewFromHtml,
-  escapeHtmlText
-} from '../utils/contractPreviewHtml';
-import { resolveInternalMessageRoute } from '../utils/internalMessageNavigate';
+import SalesOrderFormDialog from './sales-orders/SalesOrderFormDialog.vue';
+import SalesOrderLogsDialog from './sales-orders/SalesOrderLogsDialog.vue';
+import SalesOrderReviewDialog from './sales-orders/SalesOrderReviewDialog.vue';
+import SalesOrderShipDialog from './sales-orders/SalesOrderShipDialog.vue';
+import SalesOrderContractGenDialog from './sales-orders/SalesOrderContractGenDialog.vue';
+import SalesOrderBindContractDialog from './sales-orders/SalesOrderBindContractDialog.vue';
+import SalesOrderContractPreviewDialog from './sales-orders/SalesOrderContractPreviewDialog.vue';
+import SalesOrderFieldManageDialog from './sales-orders/SalesOrderFieldManageDialog.vue';
+import SalesOrderQcBindDialog from './sales-orders/SalesOrderQcBindDialog.vue';
+import SalesOrderMessagesDrawer from './sales-orders/SalesOrderMessagesDrawer.vue';
+import SalesOrderImportDupDialog from './sales-orders/SalesOrderImportDupDialog.vue';
+import SalesOrderImportErrorsDialog from './sales-orders/SalesOrderImportErrorsDialog.vue';
+import SalesOrderFlowBoard from './sales-orders/SalesOrderFlowBoard.vue';
 import { h } from 'vue';
-import { ElButton, ElCheckbox } from 'element-plus';
+import { ElButton, ElCheckbox, ElDropdown, ElDropdownItem, ElDropdownMenu, ElIcon, ElTooltip } from 'element-plus';
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  CircleCheck,
+  CircleClose,
+  CloseBold,
+  Delete,
+  Document,
+  Download,
+  Edit,
+  MoreFilled,
+  Plus,
+  Promotion,
+  RefreshLeft,
+  Search,
+  Select,
+  UploadFilled,
+  Van,
+  View
+} from '@element-plus/icons-vue';
 import { startDownload } from '../composables/useDownloadProgress.js';
 import { zhMessageForApiError } from '../../../shared/apiErrorZh.js';
-import { orderFlowStatusZh } from '../utils/salesStatusDisplay';
+import {
+  orderFlowStatusZh,
+  SALES_ORDER_STATUS_FILTER_OPTIONS,
+  isSalesOrderFlowBucketKey
+} from '../utils/salesStatusDisplay';
 import { useAuthStore } from '../stores/auth';
 import {
   createDefaultSalesOrderFilters,
   buildSalesOrderQueryParams,
   loadSalesOrderList
 } from '../composables/useSalesOrderList';
-import { grossAmountFromRowDisplayData, grossAmountFromQtySpecUnitPrice, roundOrderDecimal4 } from '../utils/salesOrderTonAmount';
+import { grossAmountFromRowDisplayData } from '../utils/salesOrderTonAmount';
+import { orderListCustomerDisplayName } from '../utils/salesOrderDisplayMerge';
+import {
+  buildOrderReportPrefill,
+  REPORT_PREFILL_FROM_ORDER_KEY
+} from '../utils/orderReportPrefill';
+import {
+  detectOrderRowActionProfile,
+  splitOrderRowActions
+} from '../utils/orderRowActionSplit';
+
+const CUSTOMER_LIST_NAME_MODE_KEY = 'sales_orders_list_customer_name_mode';
+const ORDER_LIST_PREFS_KEY = 'sales_orders_list_prefs';
+const ORDER_LIST_FILTERS_SESSION_KEY = 'sales_orders_list_filters_session';
+const ORDERS_AUTO_REFRESH_MS = 30000;
+
+const DEFAULT_ORDER_LIST_COL_VISIBLE = {
+  orderNo: false,
+  sales: false,
+  shipper: false,
+  uploadedAt: false
+};
+
+function readOrderListPrefs() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(ORDER_LIST_PREFS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildInitialOrderListPrefs() {
+  const prefs = readOrderListPrefs();
+  const col = prefs?.colVisible;
+  return {
+    orderListColVisible: {
+      ...DEFAULT_ORDER_LIST_COL_VISIBLE,
+      orderNo: col?.orderNo === true,
+      sales: col?.sales === true,
+      shipper: col?.shipper === true,
+      uploadedAt: col?.uploadedAt === true
+    },
+    ordersVirtualTable: prefs?.virtualTable === true,
+    orderTableDesignMode: prefs?.designMode === true,
+    flowBoardRespectDate: prefs?.flowBoardRespectDate === true
+  };
+}
+
+const INITIAL_ORDER_LIST_PREFS = buildInitialOrderListPrefs();
 
 const SALES_ORDER_EXPORT_LIMIT = 5000;
 
 export default {
   name: 'SalesOrders',
-  components: { SalesStatusPill, WordDocumentIcon },
+  components: {
+    SalesStatusPill,
+    WordDocumentIcon,
+    SalesOrderFormDialog,
+    SalesOrderLogsDialog,
+    SalesOrderReviewDialog,
+    SalesOrderShipDialog,
+    SalesOrderContractGenDialog,
+    SalesOrderBindContractDialog,
+    SalesOrderContractPreviewDialog,
+    SalesOrderFieldManageDialog,
+    SalesOrderQcBindDialog,
+    SalesOrderMessagesDrawer,
+    SalesOrderImportDupDialog,
+    SalesOrderImportErrorsDialog,
+    SalesOrderFlowBoard,
+    ArrowDown,
+    ArrowUp,
+    MoreFilled,
+    Download,
+    View,
+    Plus,
+    Delete,
+    Edit
+  },
+  setup() {
+    return {
+      Search,
+      UploadFilled,
+      Download,
+      Check,
+      Delete,
+      View,
+      Plus,
+      Edit
+    };
+  },
   data() {
     return {
+      isMobile: false,
+      isTouchLike: false,
+      mobileBatchOpen: false,
       items: [],
       total: 0,
       page: 1,
@@ -1048,95 +1278,24 @@ export default {
       sort: 'created_at_desc',
       /** 路由 query focus_order_id：站内信跳转定位订单 */
       focusOrderId: null,
+      /** 列表「厂家」列：short=简称 full=全称 */
+      customerListNameMode:
+        typeof localStorage !== 'undefined' &&
+        localStorage.getItem(CUSTOMER_LIST_NAME_MODE_KEY) === 'full'
+          ? 'full'
+          : 'short',
       fieldDefinitions: [],
-      formOpen: false,
-      saving: false,
-      /** 虚拟滚动表格（Element Plus TableV2），大量行时减轻 DOM 压力 */
-      ordersVirtualTable: false,
-      form: { id: null, row_version: 1 },
-      formData: {},
-      formErrors: {},
-      fieldManageOpen: false,
-      fieldAllList: [],
-      fieldEditOpen: false,
-      fieldEditSaving: false,
-      fieldEdit: {
-        id: null,
-        field_key: '',
-        label_zh: '',
-        field_type: 'text',
-        required: false,
-        sort_order: 100,
-        maps_to: ''
-      },
-      mapsToOptions: [
-        { value: 'customer_code', label: '客户编号' },
-        { value: 'customer_name', label: '客户名称' },
-        { value: 'product_code', label: '商品编号' },
-        { value: 'product_name', label: '商品名称' },
-        { value: 'product_model', label: '标签型号' },
-        { value: 'warehouse_model', label: '仓库型号' },
-        { value: 'quantity', label: '数量' },
-        { value: 'unit_price', label: '单价' },
-        { value: 'amount', label: '金额' },
-        { value: 'remark', label: '备注' }
-      ],
-      contractsOpen: false,
-      contractRows: [],
-      logsOpen: false,
-      statusLogs: [],
-      editLogs: [],
-      financeOpen: false,
-      financeLoading: false,
-      financeRows: [],
-      financeForm: { result: 'approved', comment: '' },
-      qcReviewOpen: false,
-      qcReviewLoading: false,
-      qcReviewRows: [],
-      qcReviewForm: { result: 'approved', comment: '' },
-      shipOpen: false,
-      shipRow: null,
-      shipBatchList: [],
-      shipNote: '',
-      shipLoading: false,
-      genOpen: false,
-      /** 打开「生成合同」对话框时锁定的订单 id；关闭对话框时清空 */
-      genOrderIds: [],
-      genTemplateId: null,
-      /** true：推荐版式+占位符，不套用已保存模板 */
-      genUseBlankTemplate: false,
-      genLoading: false,
-      templates: [],
-      bindContractOpen: false,
-      bindContractOrderId: null,
-      bindContractCustomerName: '',
-      bindContractRows: [],
-      bindContractLoading: false,
-      bindContractSelectedId: null,
-      bindContractSaving: false,
-      contractPreviewOpen: false,
-      contractPreviewLoading: false,
-      contractPreviewHtml: '',
-      /** html | pdf | docx | image | other */
-      contractPreviewMode: 'html',
-      contractPreviewPdfUrl: '',
-      contractPreviewDocxHtml: '',
-      contractPreviewImageUrl: '',
-      contractPreviewDocName: '',
-      previewContractId: null,
-      contractPreviewTitle: '合同预览',
       exporting: false,
-      importDupDialogVisible: false,
-      importDupRows: [],
-      importDupSummary: '',
+      loading: false,
+      /** 虚拟滚动表格（Element Plus TableV2），大量行时减轻 DOM 压力 */
+      ordersVirtualTable: INITIAL_ORDER_LIST_PREFS.ordersVirtualTable,
+      /** 开启后在表头显示字段编辑/删除/新增列（需 order_field_config） */
+      orderTableDesignMode: INITIAL_ORDER_LIST_PREFS.orderTableDesignMode,
+      financeLoading: false,
+      qcReviewLoading: false,
       /** 虚拟列表模式下按 id 勾选（与 items 行对象解耦） */
       v2SelectedIds: [],
       v2SelectedSnapshots: {},
-      messagesOpen: false,
-      messages: [],
-      /** all | notice | todo | system */
-      messageInboxFilter: 'all',
-      unreadCount: 0,
       /** When true, ignore el-table selection-change (clearSelection/toggleRowSelection would otherwise wipe `selected`). */
       ordersTableSelectionSync: false,
       /** @type {ReturnType<typeof setInterval> | null} */
@@ -1145,42 +1304,59 @@ export default {
       inboxAutoRefreshTimer: null,
       /** @type {(() => void) | null} */
       pageVisibilityHandler: null,
-      /** 列表上方流程阶段筛选：与 GET /orders 的 flow_bucket 键一致 */
-      flowBoardBuckets: [
-        { key: 'pending_submit', label: '待提交' },
-        { key: 'pending_finance', label: '待财务' },
-        { key: 'pending_qc', label: '待质检' },
-        { key: 'pending_ship', label: '待发货' },
-        { key: 'shipped_open', label: '已发货' },
-        { key: 'rejected', label: '已驳回' }
-      ],
       flowSummary: {},
-      flowBoardRespectDate: false,
+      flowSlaSummary: {},
+      flowBoardRespectDate: INITIAL_ORDER_LIST_PREFS.flowBoardRespectDate,
+      orderFlowConfig: null,
       flowSlaLoading: false,
       /** 来自 sales_settings.order_field_schema_version */
       fieldSchemaVersion: null,
-      qcBindOpen: false,
-      qcBindOrder: null,
-      qcBindItems: [],
-      qcBindLoading: false,
-      qcBindSearch: '',
-      qcBindSaving: false,
-      /** 列表默认隐藏：订单号、销售、上传日期；发货人默认显示（企业微信 OAuth / 后台发货会写入） */
-      orderListColVisible: {
-        orderNo: false,
-        sales: false,
-        shipper: true,
-        uploadedAt: false
-      },
-      statusOptions: [
-        { value: 'pending_review', label: '待审核' },
-        { value: 'pending_qc', label: '待质检审核' },
-        { value: 'approved', label: '待发货' },
-        { value: 'rejected', label: '驳回' },
-        { value: 'shipped', label: '已发货' },
-        { value: 'completed', label: '已完成' },
-        { value: 'cancelled', label: '已取消' }
-      ]
+      /** 列表默认隐藏：订单号、销售、上传日期、发货人（状态角标仍会尽量带出姓名） */
+      orderListColVisible: { ...INITIAL_ORDER_LIST_PREFS.orderListColVisible },
+      statusOptions: SALES_ORDER_STATUS_FILTER_OPTIONS,
+      /* ---- 子组件代理属性 ---- */
+      formDialogVisible: false,
+      formDialogEditRow: null,
+      logsDialogVisible: false,
+      logsDialogMode: 'logs',
+      logsDialogContractRows: [],
+      logsDialogStatusLogs: [],
+      logsDialogEditLogs: [],
+      reviewDialogVisible: false,
+      reviewDialogKind: 'finance',
+      reviewDialogRows: [],
+      shipDialogVisible: false,
+      shipDialogRow: null,
+      shipDialogBatchList: [],
+      genDialogVisible: false,
+      genDialogOrderIds: [],
+      bindContractDialogVisible: false,
+      bindContractDialogOrderId: null,
+      bindContractDialogCustomerName: '',
+      bindContractDialogCustomerId: null,
+      contractPreviewDialogVisible: false,
+      contractPreviewDialogContractId: null,
+      fieldManageDialogVisible: false,
+      qcBindDialogVisible: false,
+      qcBindDialogOrderId: null,
+      messagesDrawerVisible: false,
+      unreadCount: 0,
+      importDupDialogVisible: false,
+      importDupDialogSummary: '',
+      importDupDialogRows: [],
+      importErrorsDialogVisible: false,
+      importErrorsDialogRows: [],
+      /** @type {ReturnType<typeof setTimeout> | null} */
+      searchDebounceTimer: null,
+      lastListSyncedLabel: '',
+      highlightOrderIds: [],
+      /** @type {ReturnType<typeof setTimeout> | null} */
+      highlightOrderTimer: null,
+      /** @type {ReturnType<typeof setTimeout> | null} */
+      filtersSessionSaveTimer: null,
+      filtersRestoredFromSession: false,
+      /** @type {MediaQueryList | null} */
+      touchMediaQuery: null
     };
   },
   computed: {
@@ -1196,22 +1372,158 @@ export default {
     showOrderListQcCol() {
       return perm('order_management', 'order_list_qc_qrcode');
     },
-    /** 列表动态列（录入表单仍用 fieldDefinitions） */
-    orderListFieldDefinitions() {
-      if (this.showOrderListUnitPrice) return this.fieldDefinitions;
-      return (this.fieldDefinitions || []).filter((d) => d.maps_to !== 'unit_price');
-    },
-    showFieldSchemaVersionBadge() {
+    /** 表头字段设计模式：仅普通表格且用户主动开启 */
+    showOrderHeaderDesign() {
       return (
-        this.fieldSchemaVersion != null &&
-        (perm('order_management', 'order_query') ||
-          perm('order_management', 'order_input') ||
-          perm('order_management', 'order_field_config'))
+        this.orderTableDesignMode &&
+        perm('order_management', 'order_field_config') &&
+        !this.ordersVirtualTable
       );
     },
-    fieldManageDialogTitle() {
-      const v = this.fieldSchemaVersion;
-      return v != null ? `录入表单字段管理（方案 v${v}）` : '录入表单字段管理';
+    /** 列表动态列（录入表单仍用 fieldDefinitions） */
+    orderListFieldDefinitions() {
+      const defs = this.fieldDefinitions || [];
+      if (!this.showOrderListUnitPrice) {
+        return defs.filter((d) => d.maps_to !== 'unit_price');
+      }
+      const hasUnitPriceDef = defs.some((d) => d.maps_to === 'unit_price');
+      if (hasUnitPriceDef) return defs;
+      const hasPriceLikeDef = defs.some((d) => /单价|价格|售价|price/i.test(String(d?.label_zh || '')));
+      if (hasPriceLikeDef) return defs;
+      // 历史配置可能缺少 maps_to=unit_price；列表补一个只读兜底列，数据来自 row.unit_price
+      return [
+        ...defs,
+        {
+          field_key: '__legacy_unit_price',
+          label_zh: '单价',
+          field_type: 'number',
+          required: false,
+          sort_order: 9999,
+          maps_to: 'unit_price',
+          is_active: true
+        }
+      ];
+    },
+    /** 移动端卡片展示的前几列字段 */
+    mobilePreviewFields() {
+      return (this.orderListFieldDefinitions || []).slice(0, 6);
+    },
+    /** 状态下拉：流程阶段走 flow_bucket，已完成/已取消走 status */
+    statusFilterSelection: {
+      get() {
+        return this.filters.flow_bucket || this.filters.status || '';
+      },
+      set(val) {
+        if (val && isSalesOrderFlowBucketKey(val)) {
+          this.filters.flow_bucket = val;
+          this.filters.status = '';
+        } else {
+          this.filters.flow_bucket = '';
+          this.filters.status = val || '';
+        }
+      }
+    },
+    searchFieldLabels() {
+      return {
+        customer_name: '客户名称',
+        customer_code: '客户编号',
+        product_model: '标签型号',
+        warehouse_model: '仓库型号',
+        order_no: '订单号'
+      };
+    },
+    hasActiveFilters() {
+      return this.activeFilterTags.length > 0;
+    },
+    showToolbarManageMenu() {
+      return (
+        perm('process_management', 'edit_flow') ||
+        perm('order_management', 'order_field_config')
+      );
+    },
+    listEmptyIsFiltered() {
+      return this.hasActiveFilters;
+    },
+    listEmptyDescription() {
+      return this.listEmptyIsFiltered ? '没有符合筛选条件的订单' : '暂无订单，可先录入或导入';
+    },
+    mobilePageSelectableRows() {
+      return (this.items || []).filter((r) => this.orderRowSelectable(r));
+    },
+    mobilePageAllSelected() {
+      const rows = this.mobilePageSelectableRows;
+      if (!rows.length) return false;
+      return rows.every((r) => this.v2SelectedIds.includes(r.id));
+    },
+    mobilePageIndeterminate() {
+      const rows = this.mobilePageSelectableRows;
+      if (!rows.length) return false;
+      const picked = rows.filter((r) => this.v2SelectedIds.includes(r.id)).length;
+      return picked > 0 && picked < rows.length;
+    },
+    activeFilterTags() {
+      const tags = [];
+      const sv = String(this.filters.searchValue || '').trim();
+      if (sv) {
+        const fieldLabel = this.searchFieldLabels[this.filters.searchField] || '搜索';
+        tags.push({
+          key: 'search',
+          label: `${fieldLabel}：${sv}`,
+          onClose: () => this.clearSearchFilter()
+        });
+      }
+      if (this.filters.flow_bucket) {
+        const opt = this.statusOptions.find((s) => s.value === this.filters.flow_bucket);
+        tags.push({
+          key: 'flow_bucket',
+          label: opt?.label || this.filters.flow_bucket,
+          onClose: () => this.clearFlowBucketFilter()
+        });
+      }
+      if (this.filters.status) {
+        const opt = this.statusOptions.find((s) => s.value === this.filters.status);
+        tags.push({
+          key: 'status',
+          label: opt?.label || this.filters.status,
+          onClose: () => this.clearTerminalStatusFilter()
+        });
+      }
+      if (this.filters.pending_finance_only) {
+        tags.push({
+          key: 'pending_finance_only',
+          label: '待财务审核（快捷视图）',
+          onClose: () => this.clearQuickViewFilter()
+        });
+      }
+      if (this.filters.pending_qc_only) {
+        tags.push({
+          key: 'pending_qc_only',
+          label: '待品管审核（快捷视图）',
+          onClose: () => this.clearQuickViewFilter()
+        });
+      }
+      if (this.filters.customer_code) {
+        tags.push({
+          key: 'customer_code',
+          label: `客户编号：${this.filters.customer_code}`,
+          onClose: () => this.clearCustomerCodeFilter()
+        });
+      }
+      if (Array.isArray(this.dateRange) && this.dateRange.length === 2) {
+        tags.push({
+          key: 'date_range',
+          label: `${this.dateRange[0]} 至 ${this.dateRange[1]}`,
+          onClose: () => this.clearDateRangeFilter()
+        });
+      }
+      if (this.focusOrderId != null && Number(this.focusOrderId) > 0) {
+        tags.push({
+          key: 'focus_order',
+          label: `定位订单 #${this.focusOrderId}`,
+          onClose: () => this.clearFocusOrderFilter()
+        });
+      }
+      return tags;
     },
     canExport() {
       return (
@@ -1228,6 +1540,19 @@ export default {
         perm('contract_management', 'contract_submit') ||
         perm('contract_management', 'contract_review')
       );
+    },
+    /** 行操作外露策略：单角色用角色偏好，多角色按当前订单待办优先 */
+    orderRowActionProfile() {
+      return detectOrderRowActionProfile({
+        hasFinance: perm('order_management', 'order_status_finance'),
+        hasQc: perm('order_management', 'order_status_qc'),
+        hasShip:
+          perm('order_management', 'order_ship') ||
+          perm('order_management', 'order_status_warehouse'),
+        hasSales:
+          perm('order_management', 'order_submit') ||
+          perm('order_management', 'order_input')
+      });
     },
     showOrderRowSelection() {
       return (
@@ -1248,28 +1573,60 @@ export default {
         perm('order_management', 'order_status_warehouse')
       );
     },
-    genOrderIdCount() {
-      return this.genOrderIds.length ? this.genOrderIds.length : this.effectiveSelected.length;
-    },
     effectiveSelected() {
-      if (this.ordersVirtualTable) {
-        return this.v2SelectedIds.map((id) => this.v2SelectedSnapshots[id]).filter(Boolean);
+      if (this.ordersVirtualTable || this.isMobile) {
+        const rows = this.v2SelectedIds.map((id) => this.v2SelectedSnapshots[id]).filter(Boolean);
+        return this.filterSelectableOrderRows(rows);
       }
-      return this.selected || [];
-    },
-    importDupDialogTitle() {
-      const n = this.importDupRows?.length || 0;
-      return n ? `检测到 ${n} 条与已有订单重复` : '重复订单明细';
+      return this.filterSelectableOrderRows(this.selected || []);
     },
     batchSubmittableList() {
       return this.effectiveSelected.filter((r) => this.canSubmit(r));
     },
     batchSubmitDisabled() {
-      if (!this.effectiveSelected.length) return true;
-      return this.batchSubmittableList.length === 0 || this.batchSubmittableList.length !== this.effectiveSelected.length;
+      return this.batchSubmittableList.length === 0;
     },
     batchSubmitTipDisabled() {
-      return !perm('order_management', 'order_submit') || !this.effectiveSelected.length || !this.batchSubmitDisabled;
+      return !perm('order_management', 'order_submit') || !this.effectiveSelected.length;
+    },
+    batchSubmitButtonLabel() {
+      const total = this.effectiveSelected.length;
+      const ok = this.batchSubmittableList.length;
+      if (!ok) return '批量提交审核';
+      if (ok === total) return '批量提交审核';
+      return `提交 ${ok} 条`;
+    },
+    batchSubmitTooltip() {
+      const total = this.effectiveSelected.length;
+      const ok = this.batchSubmittableList.length;
+      if (!total) return '';
+      if (ok === 0) return '所选订单均不可提交（须本人创建且未提交过）';
+      if (ok === total) return '将所选订单一并提交财务审核';
+      return `已选 ${total} 条，其中 ${ok} 条可提交；点击将仅提交符合条件的订单`;
+    },
+    batchWithdrawableList() {
+      return this.effectiveSelected.filter((r) => this.canWithdrawSubmit(r));
+    },
+    batchWithdrawDisabled() {
+      return this.batchWithdrawableList.length === 0;
+    },
+    batchWithdrawTipDisabled() {
+      return !perm('order_management', 'order_withdraw') || !this.effectiveSelected.length;
+    },
+    batchWithdrawButtonLabel() {
+      const total = this.effectiveSelected.length;
+      const ok = this.batchWithdrawableList.length;
+      if (!ok) return '批量撤回审核';
+      if (ok === total) return '批量撤回审核';
+      return `撤回 ${ok} 条`;
+    },
+    batchWithdrawTooltip() {
+      const total = this.effectiveSelected.length;
+      const ok = this.batchWithdrawableList.length;
+      if (!total) return '';
+      if (ok === 0) return '所选订单均不可撤回（须本人创建且仍在首节点待审）';
+      if (ok === total) return '将所选订单一并撤回审核申请，财务将收到汇总通知';
+      return `已选 ${total} 条，其中 ${ok} 条可撤回；点击将仅撤回符合条件的订单`;
     },
     batchShippableList() {
       return this.effectiveSelected.filter((r) => this.canShip(r));
@@ -1280,24 +1637,62 @@ export default {
     batchQcReviewableList() {
       return this.effectiveSelected.filter((r) => this.canQcReview(r));
     },
+    orderFlowSteps() {
+      return Array.isArray(this.orderFlowConfig?.steps) ? this.orderFlowConfig.steps : [];
+    },
+    financeApproveNextStep() {
+      const steps = this.orderFlowSteps;
+      const idx = steps.findIndex((s) => s.node_type === 'finance_review');
+      return idx >= 0 ? steps[idx + 1] || null : null;
+    },
+    financeApproveConfirmHint() {
+      const next = this.financeApproveNextStep;
+      return next ? `通过后进入${next.label}。` : '通过后进入待备货发货。';
+    },
+    financeApproveSuccessHint() {
+      const next = this.financeApproveNextStep;
+      return next ? `财务已通过，订单已进入${next.label}` : '财务已通过，订单已进入待备货发货';
+    },
     batchDeletableList() {
       return this.effectiveSelected.filter((r) => this.canDelete(r));
     },
     batchDeleteDisabled() {
-      if (!this.effectiveSelected.length) return true;
-      return this.batchDeletableList.length === 0 || this.batchDeletableList.length !== this.effectiveSelected.length;
+      return this.batchDeletableList.length === 0;
     },
     batchDeleteTipDisabled() {
-      return !perm('order_management', 'order_delete') || !this.effectiveSelected.length || !this.batchDeleteDisabled;
+      return !perm('order_management', 'order_delete') || !this.effectiveSelected.length;
+    },
+    batchDeleteButtonLabel() {
+      const total = this.effectiveSelected.length;
+      const ok = this.batchDeletableList.length;
+      if (!ok) return '批量删除';
+      if (ok === total) return '批量删除';
+      return `删除 ${ok} 条`;
+    },
+    batchDeleteTooltip() {
+      const total = this.effectiveSelected.length;
+      const ok = this.batchDeletableList.length;
+      if (!total) return '';
+      if (ok === 0) return '所选订单均不可删除（无权限或状态不允许）';
+      if (ok === total) return '永久删除所选订单，不可恢复';
+      return `已选 ${total} 条，其中 ${ok} 条可删除；点击将仅删除符合条件的订单`;
+    },
+    ordersV2RowEventHandlers() {
+      return {
+        onDblclick: ({ rowData }) => {
+          this.onOrderRowDblClick(rowData);
+        }
+      };
     },
     ordersV2Columns() {
+      const nameMode = this.customerListNameMode;
       const cols = [];
       if (this.showOrderRowSelection) {
         cols.push({
           key: '__pick',
           dataKey: 'id',
           title: '',
-          width: 52,
+          width: 40,
           align: 'center',
           cellRenderer: ({ rowData }) =>
             h(ElCheckbox, {
@@ -1313,7 +1708,8 @@ export default {
           key: 'order_no',
           dataKey: 'order_no',
           title: '订单号',
-          width: 172,
+          width: 96,
+          align: 'center',
           cellRenderer: ({ rowData }) =>
             h('span', { class: 'v2-cell-txt', title: rowData.order_no || '' }, rowData.order_no || '—')
         });
@@ -1322,16 +1718,24 @@ export default {
         key: 'status',
         dataKey: 'status',
         title: '状态',
-        width: 200,
+        width: 120,
         align: 'center',
-        cellRenderer: ({ rowData }) => h(SalesStatusPill, { kind: 'order', orderRow: rowData })
+        cellRenderer: ({ rowData }) =>
+          h(SalesStatusPill, {
+            kind: 'order',
+            orderRow: rowData,
+            clickable: true,
+            title: '查看审批记录',
+            onClick: () => this.openLogs(rowData)
+          })
       });
       if (this.orderListColVisible.shipper) {
         cols.push({
           key: 'shipper',
           dataKey: 'shipped_by_name',
           title: '发货人',
-          width: 92,
+          width: 72,
+          align: 'center',
           cellRenderer: ({ rowData }) =>
             h(
               'span',
@@ -1340,25 +1744,13 @@ export default {
             )
         });
       }
-      for (const col of this.orderListFieldDefinitions) {
-        const key = col.field_key;
-        cols.push({
-          key,
-          dataKey: key,
-          title: `${col.required ? '*' : ''}${col.label_zh}`,
-          width: 112,
-          cellRenderer: ({ rowData }) => {
-            const text = this.displayCell(rowData, key);
-            return h('span', { class: 'v2-cell-txt', title: text === '—' ? '' : String(text) }, text);
-          }
-        });
-      }
       if (this.orderListColVisible.sales) {
         cols.push({
           key: 'sales',
           dataKey: 'created_by_username',
           title: '销售',
-          width: 88,
+          width: 64,
+          align: 'center',
           cellRenderer: ({ rowData }) =>
             h('span', { class: 'v2-cell-txt', title: rowData.created_by_username || '' }, rowData.created_by_username || '—')
         });
@@ -1368,119 +1760,48 @@ export default {
           key: 'uploaded',
           dataKey: 'created_at',
           title: '上传日期',
-          width: 156,
+          width: 100,
+          align: 'center',
           cellRenderer: ({ rowData }) =>
             h('span', { class: 'v2-cell-txt' }, this.$dt(rowData.created_at))
+        });
+      }
+      for (const col of this.orderListFieldDefinitions) {
+        const key = col.field_key;
+        if (this.isCustomerNameColumn(col)) {
+          cols.push({
+            key: `${key}-${nameMode}`,
+            dataKey: key,
+            width: 108,
+            align: 'center',
+            headerCellRenderer: () => this.renderCustomerNameColumnHeader(col),
+            cellRenderer: ({ rowData }) => {
+              const text = this.displayCustomerNameCell(rowData, col);
+              return h('span', { class: 'v2-cell-txt', title: text === '—' ? '' : String(text) }, text);
+            }
+          });
+          continue;
+        }
+        cols.push({
+          key,
+          dataKey: key,
+          title: `${col.required ? '*' : ''}${this.orderListColumnTitle(col)}`,
+          width: 72,
+          align: 'center',
+          cellRenderer: ({ rowData }) => {
+            const text = this.displayCell(rowData, key);
+            return h('span', { class: 'v2-cell-txt', title: text === '—' ? '' : String(text) }, text);
+          }
         });
       }
       cols.push({
         key: 'actions',
         dataKey: 'id',
         title: '操作',
-        width: 340,
-        align: 'right',
+        width: 88,
+        align: 'center',
         cellRenderer: ({ rowData }) => {
-          const chunks = [];
-          if (perm('order_management', 'order_edit')) {
-            chunks.push(
-              h(
-                ElButton,
-                {
-                  size: 'small',
-                  type: 'primary',
-                  plain: true,
-                  disabled: !this.canEdit(rowData),
-                  onClick: () => this.handleEditClick(rowData)
-                },
-                () => '编辑'
-              )
-            );
-          }
-          if (perm('order_management', 'order_delete')) {
-            chunks.push(
-              h(
-                ElButton,
-                {
-                  size: 'small',
-                  type: 'danger',
-                  plain: true,
-                  disabled: !this.canDelete(rowData),
-                  onClick: () => this.doDeleteRow(rowData)
-                },
-                () => '删除'
-              )
-            );
-          }
-          if (perm('order_management', 'order_status_finance')) {
-            chunks.push(
-              h(
-                ElButton,
-                {
-                  size: 'small',
-                  type: 'success',
-                  plain: true,
-                  disabled: !this.canFinanceReview(rowData),
-                  onClick: () => this.approveSingle(rowData)
-                },
-                () => '通过'
-              )
-            );
-            chunks.push(
-              h(
-                ElButton,
-                {
-                  size: 'small',
-                  type: 'danger',
-                  plain: true,
-                  disabled: !this.canFinanceReview(rowData),
-                  onClick: () => this.rejectSingle(rowData)
-                },
-                () => '驳回'
-              )
-            );
-          }
-          if (perm('order_management', 'order_status_qc')) {
-            chunks.push(
-              h(
-                ElButton,
-                {
-                  size: 'small',
-                  type: 'success',
-                  plain: true,
-                  disabled: !this.canQcReview(rowData),
-                  onClick: () => this.approveSingleQc(rowData)
-                },
-                () => '审核通过'
-              )
-            );
-            chunks.push(
-              h(
-                ElButton,
-                {
-                  size: 'small',
-                  type: 'danger',
-                  plain: true,
-                  disabled: !this.canQcReview(rowData),
-                  onClick: () => this.rejectSingleQc(rowData)
-                },
-                () => '驳回'
-              )
-            );
-          }
-          if (this.canShip(rowData)) {
-            chunks.push(
-              h(
-                ElButton,
-                {
-                  size: 'small',
-                  type: 'primary',
-                  plain: true,
-                  onClick: () => this.openShip(rowData)
-                },
-                () => '发货'
-              )
-            );
-          }
+          const chunks = this.buildOrderRowActionNodes(rowData);
           return h(
             'div',
             { class: 'orders-v2-actions' },
@@ -1489,21 +1810,6 @@ export default {
         }
       });
       return cols;
-    },
-    ordersV2TableWidth() {
-      return this.ordersV2Columns.reduce((s, c) => s + (Number(c.width) || 0), 0);
-    },
-    financeDialogTitle() {
-      const n = this.financeRows?.length || 0;
-      return n > 1 ? `财务审核（${n}笔）` : '财务审核';
-    },
-    qcReviewDialogTitle() {
-      const n = this.qcReviewRows?.length || 0;
-      return n > 1 ? `质检审核（${n}笔）` : '质检审核';
-    },
-    shipDialogTitle() {
-      if (this.shipBatchList.length > 1) return `批量发货（${this.shipBatchList.length}笔）`;
-      return '发货';
     },
     /** 与后端列表一致：待财务队列 / 纯财务账号按「提交审核」时间筛，其余按上传时间 */
     orderDateRangeUsesSubmittedAt() {
@@ -1523,12 +1829,6 @@ export default {
       if (this.orderDateRangeUsesFinancePassedAt) return '财务通过结束';
       return this.orderDateRangeUsesSubmittedAt ? '提交审核结束' : '结束时间';
     },
-    filteredMessages() {
-      const list = this.messages || [];
-      const f = this.messageInboxFilter;
-      if (f === 'all') return list;
-      return list.filter((m) => this.messageKind(m) === f);
-    }
   },
   watch: {
     '$route.query.view'() {
@@ -1539,29 +1839,87 @@ export default {
       this.applyFocusOrderFromRoute();
       this.load();
     },
+    '$route.query.flow_bucket'() {
+      this.applyQuickViewFromRoute();
+      this.load();
+    },
+    '$route.query.customer_code'() {
+      this.applyQuickViewFromRoute();
+      this.load();
+    },
     pageSize() {
       this.maybeAutoEnableVirtualTable();
+      this.scheduleFiltersSessionSave();
     },
     'fieldDefinitions.length'() {
       this.maybeAutoEnableVirtualTable();
+    },
+    customerListNameMode(mode) {
+      try {
+        localStorage.setItem(CUSTOMER_LIST_NAME_MODE_KEY, mode === 'full' ? 'full' : 'short');
+      } catch {
+        /* ignore */
+      }
+    },
+    orderListColVisible: {
+      deep: true,
+      handler() {
+        this.persistOrderListPrefs();
+      }
+    },
+    ordersVirtualTable() {
+      this.persistOrderListPrefs();
+    },
+    orderTableDesignMode() {
+      this.persistOrderListPrefs();
+    },
+    flowBoardRespectDate() {
+      this.persistOrderListPrefs();
+    },
+    filters: {
+      deep: true,
+      handler() {
+        this.scheduleFiltersSessionSave();
+      }
+    },
+    dateRange() {
+      this.scheduleFiltersSessionSave();
+    },
+    page() {
+      this.scheduleFiltersSessionSave();
+    }
+  },
+  activated() {
+    if (!this.isBlockedByPasswordPolicy()) {
+      this.loadOrderFlowConfig();
+      this.load({ silent: true });
+      this.refreshFlowSlaBoard({ silent: true });
     }
   },
   mounted() {
+    this.syncMobile();
+    this.syncTouchLike();
+    this.touchMediaQuery = window.matchMedia('(hover: none), (pointer: coarse)');
+    this.touchMediaQuery.addEventListener('change', this.syncTouchLike);
+    window.addEventListener('resize', this.syncMobile);
+    this.restoreFiltersFromSession();
     this.applyQuickViewFromRoute();
+    this.applyRoleDefaultViewIfNeeded();
     this.applyFocusOrderFromRoute();
     if (!this.isBlockedByPasswordPolicy()) {
       this.ensureOrderFieldDefinitions()
         .then(() => {
           this.maybeAutoEnableVirtualTable();
+          this.loadOrderFlowConfig();
           this.load();
         })
         .catch(() => {});
     }
-    if (!this.isBlockedByPasswordPolicy()) this.refreshMessages();
+    if (!this.isBlockedByPasswordPolicy()) this.$refs.messagesDrawerRef?.refresh();
     this.inboxAutoRefreshTimer = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if (this.isBlockedByPasswordPolicy()) return;
-      if (this.showMessages) this.refreshMessages();
+      if (this.showMessages) this.$refs.messagesDrawerRef?.refresh();
     }, 2000);
     this.ordersAutoRefreshTimer = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
@@ -1570,11 +1928,11 @@ export default {
         this.load({ silent: true });
         this.refreshFlowSlaBoard({ silent: true });
       }
-    }, 2000);
+    }, ORDERS_AUTO_REFRESH_MS);
     this.pageVisibilityHandler = () => {
       if (document.visibilityState !== 'visible') return;
       if (this.isBlockedByPasswordPolicy()) return;
-      if (this.showMessages) this.refreshMessages();
+      if (this.showMessages) this.$refs.messagesDrawerRef?.refresh();
       if (perm('order_management', 'order_query')) {
         this.load({ silent: true });
         this.refreshFlowSlaBoard({ silent: true });
@@ -1583,14 +1941,44 @@ export default {
     document.addEventListener('visibilitychange', this.pageVisibilityHandler);
   },
   beforeUnmount() {
+    window.removeEventListener('resize', this.syncMobile);
+    this.touchMediaQuery?.removeEventListener('change', this.syncTouchLike);
+    this.touchMediaQuery = null;
+    this.saveFiltersToSession();
+    if (this.highlightOrderTimer) clearTimeout(this.highlightOrderTimer);
+    if (this.filtersSessionSaveTimer) clearTimeout(this.filtersSessionSaveTimer);
     if (this.inboxAutoRefreshTimer) clearInterval(this.inboxAutoRefreshTimer);
     if (this.ordersAutoRefreshTimer) clearInterval(this.ordersAutoRefreshTimer);
     if (this.pageVisibilityHandler) {
       document.removeEventListener('visibilitychange', this.pageVisibilityHandler);
       this.pageVisibilityHandler = null;
     }
+    if (this.searchDebounceTimer) {
+      clearTimeout(this.searchDebounceTimer);
+      this.searchDebounceTimer = null;
+    }
   },
   methods: {
+    financeApproveSuccessMessage(toStatus) {
+      if (toStatus === 'pending_qc') {
+        const next = this.financeApproveNextStep;
+        return next?.label ? `财务已通过，订单已进入${next.label}` : '财务已通过，订单已进入待品管审核';
+      }
+      if (toStatus === 'approved') return '财务已通过，订单已进入待备货发货';
+      if (toStatus === 'rejected') return '订单已驳回';
+      return this.financeApproveSuccessHint;
+    },
+    syncMobile() {
+      this.isMobile = window.innerWidth <= 992;
+      if (!this.isMobile) this.mobileBatchOpen = false;
+    },
+    syncTouchLike() {
+      try {
+        this.isTouchLike = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+      } catch {
+        this.isTouchLike = false;
+      }
+    },
     orderFlowStatusZh,
     perm,
     isBlockedByPasswordPolicy() {
@@ -1603,302 +1991,9 @@ export default {
       if (status === 'rejected') return '已驳回';
       return '未知';
     },
-    contractStatusButtonType(status) {
-      if (status === 'draft') return 'info';
-      if (status === 'pending_review') return 'warning';
-      if (status === 'approved') return 'success';
-      if (status === 'rejected') return 'danger';
-      return 'info';
-    },
-    goOrderContract(row) {
-      const id = row && row.contract_id;
-      if (!id) return;
-      this.$router.push(`/sales/contracts/editor/${id}`);
-    },
-    goOrderContractByPreviewId() {
-      const id = this.previewContractId;
-      if (!id) return;
-      this.contractPreviewOpen = false;
-      this.$router.push(`/sales/contracts/editor/${id}`);
-    },
-    salesContractPreviewVars(c) {
-      if (!c) return null;
-      return {
-        CUSTOMER_NAME: c.customer_name != null ? String(c.customer_name) : '',
-        CUSTOMER_ADDRESS: c.customer_address != null ? String(c.customer_address) : '',
-        CUSTOMER_CONTACT: c.customer_contact != null ? String(c.customer_contact) : '',
-        CUSTOMER_PHONE: c.customer_phone != null ? String(c.customer_phone) : '',
-        CONTRACT_NO: c.contract_no != null ? String(c.contract_no) : '',
-        COMPANY_NAME_ZH: c.company_name_zh != null ? String(c.company_name_zh) : ''
-      };
-    },
-    async openOrderContractPreview(row) {
-      const id = row && row.contract_id;
-      if (!id) return;
-      await this.openContractPreview({
-        id,
-        contract_no: null
-      });
-    },
-    async openContractPreview(row) {
-      if (!row?.id) return;
-      this.contractPreviewTitle = `合同预览 · ${row.contract_no || row.id}`;
-      this.contractPreviewOpen = true;
-      this.contractPreviewLoading = true;
-      this.contractPreviewHtml = '';
-      this.contractPreviewDocxHtml = '';
-      this.contractPreviewMode = 'html';
-      if (this.contractPreviewPdfUrl) {
-        URL.revokeObjectURL(this.contractPreviewPdfUrl);
-        this.contractPreviewPdfUrl = '';
-      }
-      if (this.contractPreviewImageUrl) {
-        URL.revokeObjectURL(this.contractPreviewImageUrl);
-        this.contractPreviewImageUrl = '';
-      }
-      this.contractPreviewDocName = '';
-      this.previewContractId = row.id;
-      try {
-        const d = await getSalesContract(row.id);
-        const c = d?.contract;
-        if (row.contract_no == null && c?.contract_no) {
-          this.contractPreviewTitle = `合同预览 · ${c.contract_no}`;
-        }
-        if (c?.contract_source === 'upload') {
-          const mime = String(c.document_mime_type || '').toLowerCase();
-          const fn = String(c.document_original_filename || '').toLowerCase();
-          this.contractPreviewDocName = c.document_original_filename || '合同文件';
-          if (mime.includes('pdf') || fn.endsWith('.pdf')) {
-            const blob = await fetchSalesContractDocumentBlob(row.id);
-            this.contractPreviewPdfUrl = URL.createObjectURL(blob);
-            this.contractPreviewMode = 'pdf';
-            return;
-          }
-          const isDocx =
-            mime.includes('wordprocessingml') ||
-            fn.endsWith('.docx') ||
-            (mime.includes('officedocument') && mime.includes('word'));
-          if (isDocx) {
-            try {
-              const blob = await fetchSalesContractDocumentBlob(row.id);
-              const ab = await blob.arrayBuffer();
-              const { value: html } = await mammoth.convertToHtml({ arrayBuffer: ab });
-              this.contractPreviewDocxHtml = html || '<p>（暂无解析内容）</p>';
-              this.contractPreviewMode = 'docx';
-            } catch {
-              this.contractPreviewMode = 'other';
-            }
-            return;
-          }
-          if (mime.startsWith('image/')) {
-            const blob = await fetchSalesContractDocumentBlob(row.id);
-            this.contractPreviewImageUrl = URL.createObjectURL(blob);
-            this.contractPreviewMode = 'image';
-            return;
-          }
-          this.contractPreviewMode = 'other';
-          return;
-        }
-        const vars = this.salesContractPreviewVars(c);
-        this.contractPreviewHtml = finalizeContractBodyForPreview(c?.body_html, d?.orders || [], vars, {
-          orderFieldDefinitions: this.fieldDefinitions
-        });
-        this.contractPreviewMode = 'html';
-      } catch {
-        this.$message.error('加载失败');
-        this.contractPreviewOpen = false;
-      } finally {
-        this.contractPreviewLoading = false;
-      }
-    },
-    onOrderContractPreviewClosed() {
-      this.contractPreviewHtml = '';
-      this.contractPreviewDocxHtml = '';
-      this.contractPreviewMode = 'html';
-      if (this.contractPreviewPdfUrl) {
-        URL.revokeObjectURL(this.contractPreviewPdfUrl);
-        this.contractPreviewPdfUrl = '';
-      }
-      if (this.contractPreviewImageUrl) {
-        URL.revokeObjectURL(this.contractPreviewImageUrl);
-        this.contractPreviewImageUrl = '';
-      }
-      this.previewContractId = null;
-    },
-    async downloadOrderContractPreviewFile() {
-      if (!this.previewContractId) return;
-      const id = this.previewContractId;
-      const name = this.contractPreviewDocName || '合同文件.docx';
-      try {
-        const blob = await downloadSalesContractDocx(id);
-        startDownload({ request: blob, filename: name });
-      } catch {
-        this.$message.error('下载失败');
-      }
-    },
-    async downloadOrderContractFile(row) {
-      const id = row && row.contract_id;
-      if (!id) return;
-      try {
-        const d = await getSalesContract(id);
-        const c = d?.contract;
-        if (c?.contract_source === 'upload') {
-          const blob = await downloadSalesContractDocument(id);
-          startDownload({ request: blob, filename: c.document_original_filename || '合同文件' });
-          return;
-        }
-        const no = (c?.contract_no || `contract-${id}`).replace(/[/\\?%*:|"<>]/g, '-');
-        const blob = await downloadSalesContractDocx(id);
-        startDownload({ request: blob, filename: `${no}.docx` });
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '下载失败'));
-      }
-    },
-    printOrderContractPreview() {
-      const docTitle = (this.contractPreviewTitle && String(this.contractPreviewTitle).trim()) || '合同打印';
-      if (this.contractPreviewMode === 'pdf' && this.contractPreviewPdfUrl) {
-        const w = window.open(this.contractPreviewPdfUrl, '_blank');
-        if (!w) this.$message.warning('请允许弹窗后重试打印');
-        return;
-      }
-      if (this.contractPreviewMode === 'docx' && this.contractPreviewDocxHtml) {
-        const docHtml = this.contractPreviewDocxHtml;
-        const full = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtmlText(
-          docTitle
-        )}</title><style>
-          body{margin:0;padding:16px;font-family:SimSun,宋体,Segoe UI,sans-serif;font-size:14px;line-height:1.65;color:#111;}
-          table{border-collapse:collapse;} td,th{border:1px solid #ccc;padding:4px 8px;}
-          @media print{@page{margin:0;}body{padding:12mm;}}
-          </style></head><body>${docHtml}</body></html>`;
-        printHtmlDocumentInHiddenIframe(full);
-        return;
-      }
-      if (this.contractPreviewMode === 'image' && this.contractPreviewImageUrl) {
-        const src = this.contractPreviewImageUrl;
-        const srcEsc = String(src)
-          .replace(/&/g, '&amp;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
-        const full = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtmlText(
-          docTitle
-        )}</title><style>
-          body{margin:0;text-align:center;padding:12px;} img{max-width:100%;height:auto;}
-          @media print{@page{margin:0;} body{padding:10mm;} img{max-width:100%;}}
-          </style></head><body><img src="${srcEsc}" alt="" /></body></html>`;
-        printHtmlDocumentInHiddenIframe(full);
-        return;
-      }
-      const html = this.contractPreviewHtml;
-      if (!html) return;
-      printContractPreviewFromHtml(html, docTitle);
-    },
     canAddContractForRow(row) {
       if (!row || row.contract_id) return false;
       return perm('contract_management', 'contract_generate');
-    },
-    bindContractOptionLabel(c) {
-      if (!c) return '';
-      const no = c.contract_no != null ? String(c.contract_no) : `#${c.id}`;
-      const title = c.title != null && String(c.title).trim() ? String(c.title).trim() : '—';
-      const st = this.contractStatusLabel(c.status);
-      return `${no} · ${title}（${st}）`;
-    },
-    onBindContractDialogClosed() {
-      this.bindContractOrderId = null;
-      this.bindContractCustomerName = '';
-      this.bindContractRows = [];
-      this.bindContractSelectedId = null;
-      this.bindContractLoading = false;
-      this.bindContractSaving = false;
-    },
-    async openBindContractForRow(row) {
-      if (!this.canAddContractForRow(row)) return;
-      this.bindContractOrderId = row.id;
-      this.bindContractCustomerName = row.customer_name || '';
-      this.bindContractSelectedId = null;
-      this.bindContractRows = [];
-      this.bindContractOpen = true;
-      this.bindContractLoading = true;
-      try {
-        const d = await listSalesContracts({
-          customer_id: row.customer_id,
-          limit: 100,
-          offset: 0
-        });
-        this.bindContractRows = d.items || [];
-        if (this.bindContractRows.length === 1) {
-          this.bindContractSelectedId = this.bindContractRows[0].id;
-        }
-      } catch {
-        this.$message.error('加载合同列表失败');
-        this.bindContractOpen = false;
-      } finally {
-        this.bindContractLoading = false;
-      }
-    },
-    async submitBindContract() {
-      const oid = this.bindContractOrderId;
-      const cid = this.bindContractSelectedId;
-      if (!oid || !cid) return;
-      const errText = (code) => {
-        if (code === 'ORDER_ALREADY_LINKED') return '该订单已关联合同';
-        if (code === 'CUSTOMER_MISMATCH') return '合同与订单客户不一致';
-        if (code === 'CONTRACT_NOT_FOUND') return '合同不存在';
-        if (code === 'ORDER_NOT_FOUND') return '订单不存在';
-        if (code === 'FORBIDDEN') return '无权限';
-        return null;
-      };
-      this.bindContractSaving = true;
-      try {
-        await bindSalesOrderContract(oid, { contract_id: cid });
-        this.$message.success('已绑定合同');
-        this.bindContractOpen = false;
-        await this.load();
-      } catch (e) {
-        const code = e?.response?.data?.error;
-        this.$message.error(errText(code) || zhMessageForApiError(code) || this.$apiUserMsg(e, '绑定失败'));
-      } finally {
-        this.bindContractSaving = false;
-      }
-    },
-    async prepareContractGenDialog(orderIds) {
-      try {
-        const d = await listContractTemplates();
-        this.templates = d.items || [];
-        this.genOrderIds = orderIds.slice();
-        if (this.templates.length) {
-          this.genTemplateId = this.templates[0]?.id;
-          this.genUseBlankTemplate = false;
-        } else {
-          this.genTemplateId = null;
-          this.genUseBlankTemplate = true;
-          this.$message.info('暂无已保存模板，将使用「从空白模板创建」推荐版式');
-        }
-        this.genOpen = true;
-      } catch (e) {
-        this.$message.error('加载模板失败');
-      }
-    },
-    onGenDialogClosed() {
-      this.genOrderIds = [];
-      this.genUseBlankTemplate = false;
-    },
-    isFinanceRejectInboxMessage(m) {
-      if (!m) return false;
-      if (m.title === '订单审核驳回') return true;
-      if (m.ref_type === 'order_batch_rejected') return true;
-      return false;
-    },
-    messageKind(m) {
-      const c = m && m.category;
-      if (c === 'todo' || c === 'system') return c;
-      return 'notice';
-    },
-    messageKindLabel(m) {
-      const k = this.messageKind(m);
-      if (k === 'todo') return '待办';
-      if (k === 'system') return '系统';
-      return '普通';
     },
     canEdit(row) {
       if (!perm('order_management', 'order_edit')) return false;
@@ -1916,8 +2011,29 @@ export default {
       if (row.created_by == null || row.created_by === '') return false;
       return Number(row.created_by) === Number(uid);
     },
+    canShowSubmitAction(row) {
+      if (!perm('order_management', 'order_submit')) return false;
+      if ((row.status !== 'pending_review' && row.status !== 'rejected') || row.submitted_for_review_at) return false;
+      return true;
+    },
+    submitActionTooltip(row) {
+      return this.canSubmit(row) ? '提交审核' : '仅可提交本人创建且未提交的订单';
+    },
     canWithdraw(row) {
       return row.status === 'pending_review' && row.submitted_for_review_at;
+    },
+    /** 与 POST /orders/:id/withdraw 一致：须本人创建（超管除外） */
+    canWithdrawSubmit(row) {
+      if (!perm('order_management', 'order_withdraw')) return false;
+      if (!this.canWithdraw(row)) return false;
+      if (this.isSuper) return true;
+      const uid = this.myUserId();
+      if (uid == null) return false;
+      if (row.created_by == null || row.created_by === '') return false;
+      return Number(row.created_by) === Number(uid);
+    },
+    canComplete(row) {
+      return row.status === 'shipped';
     },
     canFinanceReview(row) {
       return row.status === 'pending_review' && row.submitted_for_review_at;
@@ -1968,14 +2084,147 @@ export default {
         page: this.page,
         pageSize: this.pageSize,
         sort: this.sort,
-        focusOrderId: this.focusOrderId
+        focusOrderId: this.focusOrderId,
+        customerListNameMode: this.customerListNameMode
       });
     },
     resetFilters() {
       this.filters = createDefaultSalesOrderFilters();
-      this.dateRange = null;
+      this.dateRange = [];
+      this.focusOrderId = null;
+      this.page = 1;
+      this.filtersRestoredFromSession = false;
+      this.stripRouteQueryKeys(['view', 'customer_code', 'focus_order_id', 'flow_bucket']);
+      try {
+        sessionStorage.removeItem(ORDER_LIST_FILTERS_SESSION_KEY);
+      } catch {
+        /* ignore */
+      }
+      this.load();
+      this.refreshFlowSlaBoard();
+    },
+    stripRouteQueryKeys(keys) {
+      const q = { ...(this.$route?.query || {}) };
+      let changed = false;
+      for (const k of keys) {
+        if (q[k] != null && String(q[k]).trim() !== '') {
+          delete q[k];
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      this.$router.replace({ path: this.$route.path, query: q }).catch(() => {});
+    },
+    clearSearchFilter() {
+      this.filters.searchValue = '';
       this.page = 1;
       this.load();
+    },
+    clearFlowBucketFilter() {
+      this.filters.flow_bucket = '';
+      this.stripRouteQueryKeys(['flow_bucket']);
+      this.page = 1;
+      this.load();
+    },
+    clearTerminalStatusFilter() {
+      this.filters.status = '';
+      this.page = 1;
+      this.load();
+    },
+    clearQuickViewFilter() {
+      this.filters.pending_finance_only = false;
+      this.filters.pending_qc_only = false;
+      this.filters.status = '';
+      this.stripRouteQueryKeys(['view']);
+      this.page = 1;
+      this.load();
+    },
+    clearCustomerCodeFilter() {
+      this.filters.customer_code = '';
+      this.stripRouteQueryKeys(['customer_code']);
+      this.page = 1;
+      this.load();
+    },
+    clearDateRangeFilter() {
+      this.dateRange = [];
+      this.page = 1;
+      this.load();
+      this.refreshFlowSlaBoard();
+    },
+    clearFocusOrderFilter() {
+      this.focusOrderId = null;
+      this.stripRouteQueryKeys(['focus_order_id']);
+      this.load();
+    },
+    onSearchInput() {
+      if (this.searchDebounceTimer) clearTimeout(this.searchDebounceTimer);
+      this.searchDebounceTimer = setTimeout(() => {
+        this.searchDebounceTimer = null;
+        this.page = 1;
+        this.load();
+      }, 400);
+    },
+    loadNow() {
+      if (this.searchDebounceTimer) {
+        clearTimeout(this.searchDebounceTimer);
+        this.searchDebounceTimer = null;
+      }
+      this.page = 1;
+      this.load();
+    },
+    persistOrderListPrefs() {
+      try {
+        localStorage.setItem(
+          ORDER_LIST_PREFS_KEY,
+          JSON.stringify({
+            colVisible: this.orderListColVisible,
+            virtualTable: this.ordersVirtualTable,
+            designMode: this.orderTableDesignMode,
+            flowBoardRespectDate: this.flowBoardRespectDate
+          })
+        );
+      } catch {
+        /* ignore */
+      }
+      this.scheduleFiltersSessionSave();
+    },
+    onToolbarManageCommand(command) {
+      if (command === 'flow-config') {
+        this.$router.push('/sales/orders/flow-config');
+        return;
+      }
+      if (command === 'field-manage') {
+        this.openFieldManage();
+      }
+    },
+    async refreshListManual() {
+      await Promise.all([this.load(), this.refreshFlowSlaBoard()]);
+    },
+    touchListSyncedLabel() {
+      const now = new Date();
+      this.lastListSyncedLabel = `更新于 ${now.toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      })}`;
+    },
+    onMobilePageSelectAll(on) {
+      const rows = this.mobilePageSelectableRows;
+      const ids = new Set(this.v2SelectedIds);
+      const snap = { ...this.v2SelectedSnapshots };
+      if (on) {
+        for (const row of rows) {
+          ids.add(row.id);
+          snap[row.id] = { ...row };
+        }
+      } else {
+        for (const row of rows) {
+          ids.delete(row.id);
+          delete snap[row.id];
+        }
+      }
+      this.v2SelectedIds = Array.from(ids);
+      this.v2SelectedSnapshots = snap;
     },
     flowSlaQueryParams() {
       const respect = this.flowBoardRespectDate === true;
@@ -2003,13 +2252,28 @@ export default {
       if (!silent) this.flowSlaLoading = true;
       try {
         const p = this.flowSlaQueryParams();
-        const f = await getSalesOrderFlowSummary(p, { silent });
+        const [f, sla] = await Promise.all([
+          getSalesOrderFlowSummary(p, { silent }),
+          getSalesOrderSlaSummary(p, { silent })
+        ]);
         this.flowSummary = f || {};
+        this.flowSlaSummary = sla || {};
       } catch (e) {
         if (!silent) this.$message.error(this.$apiUserMsg(e, '加载流程摘要失败'));
       } finally {
         this.flowSlaLoading = false;
       }
+    },
+    onFlowBoardSelect(key) {
+      if (!key) {
+        this.clearFlowBucketFilter();
+        return;
+      }
+      this.toggleFlowBucket(key);
+    },
+    onFlowBoardRespectDateChange(value) {
+      this.flowBoardRespectDate = value === true;
+      this.refreshFlowSlaBoard();
     },
     toggleFlowBucket(key) {
       const next = this.filters.flow_bucket === key ? '' : key;
@@ -2041,9 +2305,10 @@ export default {
       this.load();
     },
     applyQuickViewFromRoute() {
-      this.filters.flow_bucket = '';
-      const view = this.$route?.query?.view;
-      if (view) {
+      const q = this.$route?.query || {};
+      if (q.view) {
+        this.filters.flow_bucket = '';
+        const view = q.view;
         if (view === 'sales') {
           this.filters.status = '';
           this.filters.pending_finance_only = false;
@@ -2061,13 +2326,160 @@ export default {
           this.filters.pending_finance_only = false;
           this.filters.pending_qc_only = true;
         }
-      } else {
-        // 默认视图：状态下拉框不默认选中
-        // 移除财务账号默认仅待财务审核的逻辑
+      } else if (isSalesOrderFlowBucketKey(q.flow_bucket)) {
+        this.filters.flow_bucket = String(q.flow_bucket);
+        this.filters.status = '';
+        this.filters.pending_finance_only = false;
+        this.filters.pending_qc_only = false;
       }
-      const cc = this.$route?.query?.customer_code;
-      if (cc) {
-        this.filters.customer_code = cc;
+      if (q.customer_code) {
+        this.filters.customer_code = String(q.customer_code);
+      }
+    },
+    applyRoleDefaultViewIfNeeded() {
+      const q = this.$route?.query || {};
+      if (q.view || q.customer_code || q.focus_order_id || q.flow_bucket) return;
+      if (this.filtersRestoredFromSession) return;
+      if (this.hasActiveFilters) return;
+
+      const hasFinance = perm('order_management', 'order_status_finance');
+      const hasQc = perm('order_management', 'order_status_qc');
+      const hasInput = perm('order_management', 'order_input');
+      const hasShip =
+        perm('order_management', 'order_ship') ||
+        perm('order_management', 'order_status_warehouse');
+
+      if (hasFinance && !hasInput && !hasQc && !hasShip) {
+        this.filters.pending_finance_only = true;
+        this.filters.pending_qc_only = false;
+        this.filters.status = '';
+        this.filters.flow_bucket = '';
+        return;
+      }
+      if (hasQc && !hasInput && !hasFinance && !hasShip) {
+        this.filters.pending_qc_only = true;
+        this.filters.pending_finance_only = false;
+        this.filters.status = '';
+        this.filters.flow_bucket = '';
+        return;
+      }
+      if (hasShip && !hasInput && !hasFinance && !hasQc) {
+        this.filters.status = 'approved';
+        this.filters.pending_finance_only = false;
+        this.filters.pending_qc_only = false;
+        this.filters.flow_bucket = '';
+      }
+    },
+    scheduleFiltersSessionSave() {
+      if (this.filtersSessionSaveTimer) clearTimeout(this.filtersSessionSaveTimer);
+      this.filtersSessionSaveTimer = setTimeout(() => {
+        this.filtersSessionSaveTimer = null;
+        this.saveFiltersToSession();
+      }, 300);
+    },
+    saveFiltersToSession() {
+      try {
+        sessionStorage.setItem(
+          ORDER_LIST_FILTERS_SESSION_KEY,
+          JSON.stringify({
+            filters: this.filters,
+            dateRange: Array.isArray(this.dateRange) ? this.dateRange : [],
+            page: this.page,
+            pageSize: this.pageSize,
+            listPrefs: {
+              orderListColVisible: this.orderListColVisible,
+              ordersVirtualTable: this.ordersVirtualTable,
+              orderTableDesignMode: this.orderTableDesignMode,
+              flowBoardRespectDate: this.flowBoardRespectDate
+            }
+          })
+        );
+      } catch {
+        /* ignore */
+      }
+    },
+    restoreFiltersFromSession() {
+      const q = this.$route?.query || {};
+      if (q.view || q.customer_code || q.focus_order_id || q.flow_bucket) return false;
+      try {
+        const raw = sessionStorage.getItem(ORDER_LIST_FILTERS_SESSION_KEY);
+        if (!raw) return false;
+        const saved = JSON.parse(raw);
+        if (!saved || typeof saved !== 'object') return false;
+        this.filters = { ...createDefaultSalesOrderFilters(), ...(saved.filters || {}) };
+        this.dateRange = Array.isArray(saved.dateRange) ? saved.dateRange : [];
+        if (Number.isFinite(Number(saved.page)) && Number(saved.page) > 0) {
+          this.page = Number(saved.page);
+        }
+        if (Number.isFinite(Number(saved.pageSize)) && Number(saved.pageSize) > 0) {
+          this.pageSize = Number(saved.pageSize);
+        }
+        const lp = saved.listPrefs;
+        if (lp && typeof lp === 'object') {
+          if (lp.orderListColVisible && typeof lp.orderListColVisible === 'object') {
+            this.orderListColVisible = {
+              ...DEFAULT_ORDER_LIST_COL_VISIBLE,
+              ...lp.orderListColVisible
+            };
+          }
+          if (typeof lp.ordersVirtualTable === 'boolean') {
+            this.ordersVirtualTable = lp.ordersVirtualTable;
+          }
+          if (typeof lp.orderTableDesignMode === 'boolean') {
+            this.orderTableDesignMode = lp.orderTableDesignMode;
+          }
+          if (typeof lp.flowBoardRespectDate === 'boolean') {
+            this.flowBoardRespectDate = lp.flowBoardRespectDate;
+          }
+        }
+        this.filtersRestoredFromSession = true;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    isOrderHighlighted(row) {
+      const id = row?.id;
+      if (id == null) return false;
+      return this.highlightOrderIds.includes(Number(id));
+    },
+    orderRowClassName({ row }) {
+      const parts = [];
+      if (this.isOrderHighlighted(row)) parts.push('orders-row--highlight');
+      if (this.canEdit(row)) parts.push('orders-row--editable');
+      return parts.join(' ');
+    },
+    orderV2RowClass({ rowData }) {
+      const parts = [];
+      if (this.isOrderHighlighted(rowData)) parts.push('orders-row--highlight');
+      if (this.canEdit(rowData)) parts.push('orders-row--editable');
+      return parts.join(' ');
+    },
+    focusImportedOrders(ids) {
+      const normalized = (Array.isArray(ids) ? ids : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      if (!normalized.length) return;
+
+      this.highlightOrderIds = normalized;
+      if (this.highlightOrderTimer) clearTimeout(this.highlightOrderTimer);
+      this.highlightOrderTimer = setTimeout(() => {
+        this.highlightOrderIds = [];
+        this.highlightOrderTimer = null;
+      }, 10000);
+
+      const firstId = normalized[0];
+      this.focusOrderId = firstId;
+      this.stripRouteQueryKeys(['focus_order_id']);
+      this.$nextTick(() => {
+        this.maybeScrollToFocusOrder();
+      });
+
+      if (normalized.length === 1) {
+        const hit = (this.items || []).find((r) => Number(r.id) === firstId);
+        this.$message.success(`导入成功，已定位订单 ${hit?.order_no || `#${firstId}`}`);
+      } else {
+        this.$message.success(`导入成功 ${normalized.length} 条，已在列表中高亮显示`);
       }
     },
     applyFocusOrderFromRoute() {
@@ -2094,7 +2506,32 @@ export default {
     },
     onOrdersSelectionChange(rows) {
       if (this.ordersTableSelectionSync) return;
-      this.selected = rows || [];
+      this.selected = this.filterSelectableOrderRows(rows || []);
+    },
+    /** 剔除不可勾选或已无有效 id 的行，避免 reserve-selection 残留导致「未勾选却显示已选 N 条」 */
+    filterSelectableOrderRows(rows) {
+      const byId = new Map((this.items || []).map((r) => [r.id, r]));
+      const out = [];
+      const seen = new Set();
+      for (const row of rows || []) {
+        if (!row || row.id == null || seen.has(row.id)) continue;
+        const fresh = byId.get(row.id) || row;
+        if (!this.orderRowSelectable(fresh)) continue;
+        seen.add(row.id);
+        out.push(fresh);
+      }
+      return out;
+    },
+    syncOrderSelectionState(nextSelected) {
+      const rows = this.filterSelectableOrderRows(nextSelected || []);
+      this.selected = rows;
+      if (this.ordersVirtualTable || this.isMobile) {
+        const snap = {};
+        for (const row of rows) snap[row.id] = { ...row };
+        this.v2SelectedIds = rows.map((r) => r.id);
+        this.v2SelectedSnapshots = snap;
+      }
+      return rows;
     },
     async load(options = {}) {
       if (this.isBlockedByPasswordPolicy()) {
@@ -2103,6 +2540,7 @@ export default {
         return;
       }
       const silent = options.silent === true;
+      if (!silent) this.loading = true;
       try {
         const d = await loadSalesOrderList({
           listApi: listSalesOrders,
@@ -2111,29 +2549,37 @@ export default {
         });
         this.items = d.items || [];
         this.total = d.total || 0;
-        if (this.ordersVirtualTable) {
-          const snap = { ...this.v2SelectedSnapshots };
-          for (const it of this.items || []) {
-            if (this.v2SelectedIds.includes(it.id)) snap[it.id] = { ...it };
-          }
-          this.v2SelectedSnapshots = snap;
-        }
         // 定时静默刷新会用新对象替换列表行；若不同步选中行，selection 仍指向旧引用，条件（如是否已提交）会过期，导致批量操作的笔数与结果错乱
         const selIds = new Set(
-          (this.selected || []).map((r) => r && r.id).filter((id) => id != null)
+          [
+            ...(this.selected || []).map((r) => r && r.id),
+            ...(this.v2SelectedIds || [])
+          ].filter((id) => id != null)
         );
         const byId = new Map((this.items || []).map((r) => [r.id, r]));
-        const nextSelected = Array.from(selIds)
-          .map((id) => byId.get(id) || (this.selected || []).find((r) => r && r.id === id))
+        const candidates = Array.from(selIds)
+          .map(
+            (id) =>
+              byId.get(id) ||
+              (this.selected || []).find((r) => r && r.id === id) ||
+              this.v2SelectedSnapshots[id]
+          )
           .filter(Boolean);
         this.ordersTableSelectionSync = true;
-        this.selected = nextSelected;
+        const nextSelected = this.syncOrderSelectionState(candidates);
         await this.$nextTick();
         const tb = this.$refs.ordersTable;
-        if (tb && selIds.size) {
+        if (tb) {
           tb.clearSelection();
-          for (const row of this.selected) tb.toggleRowSelection(row, true);
+          for (const row of nextSelected) tb.toggleRowSelection(row, true);
         }
+        await this.$nextTick();
+        try {
+          this.$refs.ordersTable?.doLayout?.();
+        } catch {
+          /* ignore */
+        }
+        this.touchListSyncedLabel();
       } catch (e) {
         const code = e?.response?.data?.error;
         if (!silent) {
@@ -2146,6 +2592,7 @@ export default {
           }
         }
       } finally {
+        if (!silent) this.loading = false;
         await this.$nextTick();
         this.ordersTableSelectionSync = false;
         await this.maybeScrollToFocusOrder();
@@ -2163,6 +2610,18 @@ export default {
     canRemoveQc(row) {
       return this.canEditOrderQc(row) && (row.qc_bound_manual || row.qc_report_label === '绑定已失效');
     },
+    qcPlaceholderShowsGenerate(row) {
+      return !row?.qc_thumb_data_url && row?.qc_report_label === '无可用报告';
+    },
+    qcPlaceholderText(row) {
+      if (this.qcPlaceholderShowsGenerate(row)) return '去生成报告';
+      return row?.qc_report_label || '';
+    },
+    onQcPlaceholderClick(row) {
+      if (!this.qcPlaceholderShowsGenerate(row)) return;
+      if (!perm('reports', 'create')) return;
+      this.openGenerateReport(row);
+    },
     handleClearQc(row) {
       if (!this.canRemoveQc(row)) {
         this.$message.warning('当前订单二维码不可删除绑定');
@@ -2176,7 +2635,7 @@ export default {
     async clearOrderQc(row) {
       try {
         await this.$confirm(
-          '解除绑定后，若标签型号与报告品名一致将恢复自动关联。是否继续？',
+          '解除绑定后，若客户、标签型号、批号与报告一致将恢复自动关联。是否继续？',
           '解除绑定',
           { type: 'warning' }
         );
@@ -2192,80 +2651,351 @@ export default {
       }
     },
     openQcBind(row) {
-      this.qcBindOrder = row;
-      this.qcBindSearch = '';
-      this.qcBindItems = [];
-      this.qcBindOpen = true;
+      this.qcBindDialogOrderId = row.id;
+      this.qcBindDialogVisible = true;
     },
-    async fetchQcBindList() {
-      this.qcBindLoading = true;
-      try {
-        const d = await listSalesQrcodeBindCandidates({
-          q: this.qcBindSearch || undefined,
-          limit: 80
-        });
-        this.qcBindItems = d.items || [];
-      } catch {
-        this.qcBindItems = [];
-        this.$message.error('加载二维码列表失败');
-      } finally {
-        this.qcBindLoading = false;
-      }
+    isOrderListUnitPriceColumn(def, key) {
+      const isPriceLikeColumn = /单价|价格|售价|price/i.test(String(def?.label_zh || key || ''));
+      return !!(
+        this.showOrderListUnitPrice &&
+        (def?.maps_to === 'unit_price' || key === '__legacy_unit_price' || isPriceLikeColumn)
+      );
     },
-    formatQcBindTags(tags) {
-      if (!tags?.length) return '—';
-      return tags
-        .slice(0, 5)
-        .map((t) => [t.productName, t.batchNo].filter(Boolean).join(' / ') || '—')
-        .join('；');
+    orderListColumnTitle(col) {
+      if (this.isOrderListUnitPriceColumn(col, col?.field_key)) return '单价(元/吨)';
+      return String(col?.label_zh || '');
     },
-    async confirmQcBind(it) {
-      if (!this.qcBindOrder) return;
-      this.qcBindSaving = true;
-      try {
-        await patchSalesOrderQcQrcode(this.qcBindOrder.id, { qrcodeId: it.qrcodeId ?? it.id });
-        this.$message.success('已绑定');
-        this.qcBindOpen = false;
-        this.qcBindOrder = null;
-        this.load();
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '绑定失败'));
-      } finally {
-        this.qcBindSaving = false;
-      }
+    formatUnitPriceDisplay(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return null;
+      return n.toFixed(2);
+    },
+    isCustomerNameColumn(col) {
+      return col?.maps_to === 'customer_name';
+    },
+    setCustomerListNameMode(mode) {
+      const next = mode === 'full' ? 'full' : 'short';
+      if (this.customerListNameMode === next) return;
+      this.customerListNameMode = next;
+    },
+    renderCustomerNameColumnHeader(col) {
+      const mode = this.customerListNameMode;
+      const mkBtn = (value, label) =>
+        h(
+          ElButton,
+          {
+            size: 'small',
+            type: mode === value ? 'primary' : 'default',
+            onClick: (e) => {
+              e.stopPropagation();
+              this.setCustomerListNameMode(value);
+            },
+            onMousedown: (e) => e.stopPropagation()
+          },
+          { default: () => label }
+        );
+      return h('div', { class: 'orders-customer-header orders-customer-header--v2' }, [
+        h(
+          'span',
+          { class: 'orders-customer-header__title' },
+          `${col.required ? '*' : ''}${this.orderListColumnTitle(col)}`
+        ),
+        h('div', { class: 'orders-customer-header__mode' }, [mkBtn('short', '简称'), mkBtn('full', '全称')])
+      ]);
+    },
+    displayCustomerNameCell(row, def) {
+      const fromCustomer = orderListCustomerDisplayName(row, this.customerListNameMode);
+      if (fromCustomer) return fromCustomer;
+      const v = row.display_data?.[def.field_key];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+      return '—';
     },
     displayCell(row, key) {
-      const def = this.fieldDefinitions.find((d) => d.field_key === key);
+      const def = this.orderListFieldDefinitions.find((d) => d.field_key === key);
+      if (this.isCustomerNameColumn(def)) {
+        return this.displayCustomerNameCell(row, def);
+      }
       if (def?.maps_to === 'amount' && this.fieldDefinitions?.length) {
         const calc = grossAmountFromRowDisplayData(row, this.fieldDefinitions);
         if (calc != null) return String(calc);
       }
       const v = row.display_data?.[key];
-      if (v === undefined || v === null || v === '') return '—';
-      return v;
-    },
-    initEmptyFormData() {
-      const o = {};
-      for (const col of this.fieldDefinitions) {
-        if (col.field_type === 'number' || col.field_type === 'positive_number') o[col.field_key] = undefined;
-        else o[col.field_key] = '';
+      const isUnitPriceColumn = this.isOrderListUnitPriceColumn(def, key);
+      if (v !== undefined && v !== null && v !== '') {
+        if (isUnitPriceColumn) {
+          const fixed = this.formatUnitPriceDisplay(v);
+          if (fixed != null) return fixed;
+        }
+        return v;
       }
-      return o;
+      if (isUnitPriceColumn) {
+        const p = Number(row?.unit_price);
+        if (Number.isFinite(p)) return this.formatUnitPriceDisplay(p);
+      }
+      return '—';
+    },
+    createOrderActionIconBtn({ tooltip, icon, type = 'default', plain = true, className = '', onClick }) {
+      const btn = h(
+        ElButton,
+        {
+          size: 'small',
+          circle: true,
+          type,
+          plain,
+          class: className,
+          onClick
+        },
+        {
+          default: () => h(ElIcon, null, { default: () => h(icon) })
+        }
+      );
+      return h(
+        ElTooltip,
+        { content: tooltip, placement: 'top' },
+        { default: () => h('span', { class: 'orders-action-btn-host' }, [btn]) }
+      );
+    },
+    collectOrderRowActions(row) {
+      if (!row) return [];
+      const actions = [];
+      const push = (action) => actions.push(action);
+
+      if (perm('order_management', 'order_status_finance') && this.canFinanceReview(row)) {
+        push({
+          key: 'finance_approve',
+          label: '财务通过',
+          tooltip: '财务通过',
+          icon: Select,
+          type: 'success',
+          plain: false,
+          priority: 10,
+          onClick: () => this.approveSingle(row)
+        });
+        push({
+          key: 'finance_reject',
+          label: '财务驳回',
+          tooltip: '财务驳回',
+          icon: CloseBold,
+          type: 'danger',
+          plain: false,
+          priority: 11,
+          onClick: () => this.rejectSingle(row)
+        });
+      }
+      if (perm('order_management', 'order_status_qc') && this.canQcReview(row)) {
+        push({
+          key: 'qc_approve',
+          label: '品管通过',
+          tooltip: '审核通过',
+          icon: CircleCheck,
+          type: 'success',
+          plain: false,
+          priority: 12,
+          onClick: () => this.approveSingleQc(row)
+        });
+        push({
+          key: 'qc_reject',
+          label: '品管驳回',
+          tooltip: '品管驳回',
+          icon: CircleClose,
+          type: 'danger',
+          plain: false,
+          priority: 13,
+          onClick: () => this.rejectSingleQc(row)
+        });
+      }
+      if (perm('order_management', 'order_submit') && this.canSubmit(row)) {
+        push({
+          key: 'submit',
+          label: '提交审核',
+          tooltip: '提交审核',
+          icon: Promotion,
+          type: 'primary',
+          plain: false,
+          priority: 15,
+          onClick: () => this.submitSingle(row)
+        });
+      }
+      if (this.canWithdrawSubmit(row)) {
+        push({
+          key: 'withdraw',
+          label: '撤回审核',
+          tooltip: '撤回审核申请',
+          icon: RefreshLeft,
+          type: 'warning',
+          plain: true,
+          priority: 16,
+          onClick: () => this.withdrawReview(row)
+        });
+      }
+      if (this.canShip(row)) {
+        push({
+          key: 'ship',
+          label: '发货',
+          tooltip: '发货',
+          icon: Van,
+          type: 'primary',
+          plain: true,
+          priority: 20,
+          onClick: () => this.openShip(row)
+        });
+      }
+      if (perm('order_management', 'order_status_finance') && this.canComplete(row)) {
+        push({
+          key: 'complete',
+          label: '完结',
+          tooltip: '财务确认订单完结',
+          icon: CircleCheck,
+          type: 'success',
+          plain: true,
+          priority: 22,
+          onClick: () => this.doComplete(row)
+        });
+      }
+      if (perm('order_management', 'order_edit') && this.canEdit(row)) {
+        push({
+          key: 'edit',
+          label: '编辑',
+          tooltip: '编辑',
+          icon: Edit,
+          type: 'primary',
+          plain: true,
+          priority: 25,
+          onClick: () => this.openEdit(row)
+        });
+      }
+      if (perm('reports', 'create')) {
+        push({
+          key: 'report',
+          label: '生成报告',
+          tooltip: '生成报告',
+          icon: Document,
+          type: 'success',
+          plain: true,
+          priority: 40,
+          onClick: () => this.openGenerateReport(row)
+        });
+      }
+      if (perm('order_management', 'order_cancel') && this.canCancel(row)) {
+        push({
+          key: 'cancel',
+          label: '取消订单',
+          tooltip: '取消订单',
+          icon: CircleClose,
+          type: 'warning',
+          plain: true,
+          priority: 45,
+          onClick: () => this.doCancel(row)
+        });
+      }
+      if (perm('order_management', 'order_delete') && this.canDelete(row)) {
+        push({
+          key: 'delete',
+          label: '删除',
+          tooltip: '删除',
+          icon: Delete,
+          type: 'danger',
+          plain: true,
+          priority: 50,
+          divided: true,
+          onClick: () => this.doDeleteRow(row)
+        });
+      }
+      return actions.sort((a, b) => a.priority - b.priority);
+    },
+    splitOrderRowActionsForRow(row) {
+      const all = this.collectOrderRowActions(row);
+      return splitOrderRowActions(all, this.orderRowActionProfile);
+    },
+    getOrderRowPrimaryActions(row) {
+      return this.splitOrderRowActionsForRow(row).primary;
+    },
+    getOrderRowSecondaryActions(row) {
+      return this.splitOrderRowActionsForRow(row).secondary;
+    },
+    onOrderRowMenuCommand(row, key) {
+      const act = this.collectOrderRowActions(row).find((a) => a.key === key);
+      act?.onClick?.();
+    },
+    countOrderRowActions(row) {
+      return this.collectOrderRowActions(row).length;
+    },
+    buildOrderRowActionNodes(row) {
+      const primary = this.getOrderRowPrimaryActions(row);
+      const secondary = this.getOrderRowSecondaryActions(row);
+      const nodes = primary.map((act) =>
+        this.createOrderActionIconBtn({
+          tooltip: act.tooltip,
+          icon: act.icon,
+          type: act.type,
+          plain: act.plain,
+          onClick: act.onClick
+        })
+      );
+      if (secondary.length) {
+        nodes.push(
+          h(
+            ElDropdown,
+            {
+              trigger: 'click',
+              onCommand: (key) => this.onOrderRowMenuCommand(row, key)
+            },
+            {
+              default: () =>
+                h('span', { class: 'orders-action-btn-host' }, [
+                  h(
+                    ElButton,
+                    { size: 'small', circle: true, plain: true, title: '更多操作' },
+                    { default: () => h(ElIcon, null, { default: () => h(MoreFilled) }) }
+                  )
+                ]),
+              dropdown: () =>
+                h(
+                  ElDropdownMenu,
+                  null,
+                  {
+                    default: () =>
+                      secondary.map((act) =>
+                        h(
+                          ElDropdownItem,
+                          { command: act.key, divided: act.divided },
+                          { default: () => act.label }
+                        )
+                      )
+                  }
+                )
+            }
+          )
+        );
+      }
+      return nodes;
     },
     openCreate() {
-      this.form = { id: null, row_version: 1 };
-      this.formErrors = {};
-      this.formData = this.initEmptyFormData();
-      this.formOpen = true;
-      this.$nextTick(() => this.syncFormAmountFromTonsPricing());
+      this.formDialogEditRow = null;
+      this.formDialogVisible = true;
+    },
+    openGenerateReport(row) {
+      if (!perm('reports', 'create')) return;
+      const prefill = buildOrderReportPrefill(row, this.fieldDefinitions);
+      if (!prefill.product_name?.zh) {
+        this.$message.warning('该订单缺少标签型号，无法生成报告');
+        return;
+      }
+      try {
+        sessionStorage.setItem(REPORT_PREFILL_FROM_ORDER_KEY, JSON.stringify(prefill));
+      } catch {
+        this.$message.error('无法保存预填数据，请重试');
+        return;
+      }
+      this.$router.push({ path: '/reports/new', query: { fromOrder: String(row.id) } });
     },
     openEdit(row) {
-      const rv = Number(row.row_version);
-      this.form = { id: row.id, row_version: Number.isFinite(rv) && rv >= 1 ? rv : 1 };
-      this.formErrors = {};
-      this.formData = { ...this.initEmptyFormData(), ...(row.display_data || {}) };
-      this.formOpen = true;
-      this.$nextTick(() => this.syncFormAmountFromTonsPricing());
+      this.formDialogEditRow = row;
+      this.formDialogVisible = true;
+    },
+    onOrderRowDblClick(row) {
+      if (!row) return;
+      this.handleEditClick(row);
     },
     handleEditClick(row) {
       if (this.canEdit(row)) {
@@ -2273,7 +3003,7 @@ export default {
         return;
       }
       if (row.status === 'approved') {
-        this.$message.warning('该订单待发货，不能编辑');
+        this.$message.warning('该订单待备货发货，不能编辑');
         return;
       }
       if (row.status === 'shipped') {
@@ -2281,6 +3011,13 @@ export default {
         return;
       }
       this.$message.warning('当前订单状态不支持编辑');
+    },
+    handleSubmitClick(row) {
+      if (this.canSubmit(row)) {
+        this.submitSingle(row);
+        return;
+      }
+      this.$message.warning('仅可提交本人创建且未提交的订单');
     },
     async downloadQcThumb(row) {
       const src = row?.qc_thumb_data_url;
@@ -2301,103 +3038,36 @@ export default {
     previewQcThumb(row) {
       this.openQcPublic(row);
     },
-    clearFieldError(key) {
-      if (this.formErrors[key]) {
-        const next = { ...this.formErrors };
-        delete next[key];
-        this.formErrors = next;
-      }
-    },
-    onOrderFormFieldInput(col) {
-      this.clearFieldError(col.field_key);
-      this.maybeSyncOrderAmountFromDeps(col.maps_to);
-    },
-    onOrderFormNumberChange(col) {
-      this.clearFieldError(col.field_key);
-      this.maybeSyncOrderAmountFromDeps(col.maps_to);
-    },
-    /** 数量、规格、单价变化时重算金额（价税合计） */
-    maybeSyncOrderAmountFromDeps(mapsTo) {
-      if (!this.formOpen) return;
-      if (mapsTo === 'quantity' || mapsTo === 'product_name' || mapsTo === 'unit_price') {
-        this.$nextTick(() => this.syncFormAmountFromTonsPricing());
-      }
-    },
-    syncFormAmountFromTonsPricing() {
-      if (!this.formOpen || !this.fieldDefinitions?.length) return;
-      const fk = (m) => this.fieldDefinitions.find((d) => d.maps_to === m)?.field_key;
-      const kq = fk('quantity');
-      const ks = fk('product_name');
-      const ku = fk('unit_price');
-      const ka = fk('amount');
-      if (!ka || !kq || !ks || !ku) return;
-      const g = grossAmountFromQtySpecUnitPrice(this.formData[kq], this.formData[ks], this.formData[ku]);
-      if (g == null) return;
-      const next = roundOrderDecimal4(g);
-      const cur = this.formData[ka];
-      if (cur !== next && Number(cur) !== next) {
-        this.formData[ka] = next;
-      }
-    },
-    resetForm() {
-      this.formErrors = {};
-    },
-    async saveForm() {
-      this.syncFormAmountFromTonsPricing();
-      this.formErrors = {};
-      const payload = { data: {} };
-      for (const col of this.fieldDefinitions) {
-        let v = this.formData[col.field_key];
-        if (v === undefined) v = null;
-        payload.data[col.field_key] = v;
-      }
-      if (this.form.id) {
-        payload.row_version = this.form.row_version;
-      }
-      this.saving = true;
-      try {
-        if (this.form.id) {
-          await patchSalesOrder(this.form.id, payload);
-          this.$message.success('已保存');
-        } else {
-          const r = await createSalesOrder(payload);
-          this.$message.success(`已创建，订单号 ${r.order_no || ''}`);
-          this.page = 1;
-        }
-        this.formOpen = false;
-        this.load();
-      } catch (e) {
-        const d = e?.response?.data;
-        if (d?.error === 'VALIDATION_FAILED' && Array.isArray(d.details)) {
-          const fe = {};
-          for (const x of d.details) fe[x.field_key] = x.message;
-          this.formErrors = fe;
-          this.$message.error('请根据下方提示修正表单');
-        } else if (d?.error === 'CONCURRENT_UPDATE') {
-          this.$message.error(d?.message || zhMessageForApiError('CONCURRENT_UPDATE'));
-        } else {
-          this.$message.error(this.$apiUserMsg(e, '保存失败'));
-        }
-      } finally {
-        this.saving = false;
-      }
-    },
     clearOrderSelection() {
       this.selected = [];
       this.v2SelectedIds = [];
       this.v2SelectedSnapshots = {};
     },
-    onImportDupDialogClosed() {
-      this.importDupRows = [];
-      this.importDupSummary = '';
+    clearAllOrderSelection() {
+      this.clearOrderSelection();
+      const tb = this.$refs.ordersTable;
+      if (!tb) return;
+      this.ordersTableSelectionSync = true;
+      try {
+        tb.clearSelection();
+      } catch {
+        /* ignore */
+      }
+      this.$nextTick(() => {
+        this.ordersTableSelectionSync = false;
+      });
     },
     openImportDupDialog(rows) {
-      this.importDupRows = Array.isArray(rows) ? rows : [];
-      this.importDupSummary =
-        this.importDupRows.length > 0
+      this.importDupDialogRows = Array.isArray(rows) ? rows : [];
+      this.importDupDialogSummary =
+        this.importDupDialogRows.length > 0
           ? '以下数据来自系统检测结果，仅作文本展示；若内容含特殊字符亦为纯文本，不会作为网页代码执行。'
           : '';
       this.importDupDialogVisible = true;
+    },
+    openImportErrorsDialog(rows) {
+      this.importErrorsDialogRows = Array.isArray(rows) ? rows : [];
+      this.importErrorsDialogVisible = this.importErrorsDialogRows.length > 0;
     },
     async ensureOrderFieldDefinitions() {
       const can =
@@ -2413,6 +3083,16 @@ export default {
           const n = Number(d.schema_version);
           this.fieldSchemaVersion = Number.isFinite(n) ? n : d.schema_version;
         }
+      } catch {
+        /* ignore */
+      }
+    },
+    async loadOrderFlowConfig() {
+      if (!perm('order_management', 'order_query') && !perm('order_management', 'order_status_finance')) return;
+      try {
+        const d = await getSalesOrderFlowConfig();
+        const payload = d?.data ?? d;
+        this.orderFlowConfig = payload?.definition || null;
       } catch {
         /* ignore */
       }
@@ -2440,16 +3120,22 @@ export default {
     },
     onOrdersVirtualTableChange() {
       if (this.ordersVirtualTable) {
+        this.orderTableDesignMode = false;
         const nextIds = new Set(this.v2SelectedIds);
         const snap = { ...this.v2SelectedSnapshots };
-        for (const r of this.selected || []) {
+        for (const r of this.filterSelectableOrderRows(this.selected || [])) {
           if (r && r.id != null) {
             nextIds.add(r.id);
             snap[r.id] = { ...r };
           }
         }
-        this.v2SelectedIds = Array.from(nextIds);
-        this.v2SelectedSnapshots = snap;
+        const rows = this.filterSelectableOrderRows(
+          Array.from(nextIds).map((id) => snap[id]).filter(Boolean)
+        );
+        const nextSnap = {};
+        for (const row of rows) nextSnap[row.id] = { ...row };
+        this.v2SelectedIds = rows.map((r) => r.id);
+        this.v2SelectedSnapshots = nextSnap;
         this.ordersTableSelectionSync = true;
         this.selected = [];
         this.$nextTick(() => {
@@ -2464,9 +3150,33 @@ export default {
         this.syncV2PickToElTable();
       }
     },
+    onOrderTableDesignModeChange() {
+      this.$nextTick(() => {
+        try {
+          this.$refs.ordersTable?.doLayout?.();
+        } catch {
+          /* ignore */
+        }
+      });
+    },
+    /** 虚拟列表列宽按容器等比缩放，避免横向滚动 */
+    scaleOrdersV2Columns(cols, containerWidth) {
+      if (!cols?.length || !containerWidth || containerWidth <= 0) return cols;
+      const baseWidths = cols.map((c) => Math.max(40, Number(c.width) || 72));
+      const sum = baseWidths.reduce((a, b) => a + b, 0);
+      const scale = containerWidth / sum;
+      return cols.map((c, i) => ({
+        ...c,
+        width: Math.max(40, Math.floor(baseWidths[i] * scale))
+      }));
+    },
     syncV2PickToElTable() {
       const tb = this.$refs.ordersTable;
-      const ids = this.v2SelectedIds || [];
+      const rows = this.filterSelectableOrderRows(
+        (this.v2SelectedIds || [])
+          .map((id) => this.v2SelectedSnapshots[id] || (this.items || []).find((r) => r.id === id))
+          .filter(Boolean)
+      );
       this.ordersTableSelectionSync = true;
       this.selected = [];
       this.$nextTick(() => {
@@ -2475,138 +3185,33 @@ export default {
         } catch {
           /* ignore */
         }
-        for (const row of this.items || []) {
-          if (ids.includes(row.id)) tb?.toggleRowSelection?.(row, true);
+        for (const row of rows) {
+          if ((this.items || []).some((r) => r.id === row.id)) tb?.toggleRowSelection?.(row, true);
         }
-        this.selected = (this.items || []).filter((r) => ids.includes(r.id));
+        this.selected = this.filterSelectableOrderRows(
+          (this.items || []).filter((r) => rows.some((x) => x.id === r.id))
+        );
         this.ordersTableSelectionSync = false;
       });
     },
-    async openFieldManage() {
-      this.fieldManageOpen = true;
-    },
-    async loadFieldDefinitionsAll() {
-      try {
-        const d = await listSalesOrderFields({ all: '1' });
-        this.fieldAllList = d.items || [];
-        if (d.schema_version != null && d.schema_version !== '') {
-          const n = Number(d.schema_version);
-          this.fieldSchemaVersion = Number.isFinite(n) ? n : d.schema_version;
-        }
-      } catch {
-        this.fieldAllList = [];
-      }
-    },
-    openNewField() {
-      this.fieldEdit = {
-        id: null,
-        field_key: '',
-        label_zh: '',
-        field_type: 'text',
-        required: false,
-        sort_order: 100,
-        maps_to: ''
-      };
-      this.fieldEditOpen = true;
-    },
-    editFieldRow(row) {
-      this.fieldEdit = {
-        id: row.id,
-        field_key: row.field_key,
-        label_zh: row.label_zh,
-        field_type: row.field_type,
-        required: !!row.required,
-        sort_order: row.sort_order,
-        maps_to: row.maps_to || ''
-      };
-      this.fieldEditOpen = true;
-    },
-    async removeFieldRow(row) {
-      let confirmText = '停用该字段？历史订单数据仍保留。';
-      if (perm('order_management', 'order_field_config')) {
-        try {
-          const imp = await getSalesOrderFieldImpact(row.id);
-          const n = Number(imp?.order_count_with_data_json_key || 0);
-          if (n > 0) {
-            const fk = imp?.field_key || row.field_key || '';
-            confirmText = `有 ${n} 条订单的扩展数据仍包含字段键「${fk}」。停用后新单不再使用该配置，列表以当前启用字段为准。\n\n仍要停用吗？历史订单数据仍保留。`;
-          }
-        } catch {
-          /* 影响接口失败时不阻断停用 */
-        }
-      }
-      try {
-        await this.$confirm(confirmText, '提示', { type: 'warning' });
-      } catch {
-        return;
-      }
-      try {
-        await deleteSalesOrderField(row.id);
-        this.$message.success('已停用');
-        await this.ensureOrderFieldDefinitions();
-        await this.loadFieldDefinitionsAll();
-        this.maybeAutoEnableVirtualTable();
-        this.load();
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '操作失败'));
-      }
-    },
-    async saveFieldEdit() {
-      if (!this.fieldEdit.field_key?.trim() || !this.fieldEdit.label_zh?.trim()) {
-        this.$message.warning('请填写字段键与显示名称');
-        return;
-      }
-      this.fieldEditSaving = true;
-      try {
-        const mapsTo = this.fieldEdit.maps_to === '' ? null : this.fieldEdit.maps_to;
-        if (this.fieldEdit.id) {
-          await updateSalesOrderField(this.fieldEdit.id, {
-            label_zh: this.fieldEdit.label_zh,
-            field_type: this.fieldEdit.field_type,
-            required: this.fieldEdit.required,
-            sort_order: this.fieldEdit.sort_order,
-            maps_to: mapsTo
-          });
-        } else {
-          await createSalesOrderField({
-            field_key: this.fieldEdit.field_key.trim(),
-            label_zh: this.fieldEdit.label_zh.trim(),
-            field_type: this.fieldEdit.field_type,
-            required: this.fieldEdit.required,
-            sort_order: this.fieldEdit.sort_order,
-            maps_to: mapsTo
-          });
-        }
-        this.$message.success('已保存');
-        this.fieldEditOpen = false;
-        await this.ensureOrderFieldDefinitions();
-        await this.loadFieldDefinitionsAll();
-        this.maybeAutoEnableVirtualTable();
-        this.load();
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '保存失败'));
-      } finally {
-        this.fieldEditSaving = false;
-      }
+    openFieldManage() {
+      this.fieldManageDialogVisible = true;
     },
     async openContracts(row) {
-      try {
-        const d = await listCustomerContracts(row.customer_id);
-        this.contractRows = d.items || [];
-        this.contractsOpen = true;
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '加载合同失败'));
-      }
+      this.logsDialogContractRows = [];
+      this.logsDialogMode = 'contracts';
+      this.logsDialogVisible = true;
+      listCustomerContracts(row.customer_id).then((d) => {
+        this.logsDialogContractRows = d.items || [];
+      }).catch(() => {});
     },
     async openLogs(row) {
       try {
-        const [s, e] = await Promise.all([
-          listSalesOrderStatusLogs(row.id),
-          listSalesOrderEditLogs(row.id)
-        ]);
-        this.statusLogs = s.items || [];
-        this.editLogs = e.items || [];
-        this.logsOpen = true;
+        const [s, e] = await Promise.all([listSalesOrderStatusLogs(row.id), listSalesOrderEditLogs(row.id)]);
+        this.logsDialogStatusLogs = s.items || [];
+        this.logsDialogEditLogs = e.items || [];
+        this.logsDialogMode = 'logs';
+        this.logsDialogVisible = true;
       } catch (err) {
         this.$message.error(this.$apiUserMsg(err, '加载失败'));
       }
@@ -2616,16 +3221,26 @@ export default {
         await submitSalesOrderReview(row.id);
         this.$message.success('已提交财务审核');
         this.load();
-        this.refreshMessages();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
       }
     },
     async withdrawReview(row) {
       try {
+        await this.$confirm(
+          `撤回订单 ${row.order_no} 的审核申请？撤回后可重新编辑并再次提交。`,
+          '撤回审核',
+          { type: 'warning' }
+        );
+      } catch {
+        return;
+      }
+      try {
         await withdrawSalesOrderReview(row.id);
         this.$message.success('已撤回');
         this.load();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
       }
@@ -2633,6 +3248,7 @@ export default {
     orderRowSelectable(row) {
       if (perm('contract_management', 'contract_generate')) return true;
       if (perm('order_management', 'order_submit') && this.canSubmit(row)) return true;
+      if (this.canWithdrawSubmit(row)) return true;
       if (perm('order_management', 'order_status_finance') && this.canFinanceReview(row)) return true;
       if (perm('order_management', 'order_status_qc') && this.canQcReview(row)) return true;
       if (perm('order_management', 'order_delete') && this.canDelete(row)) return true;
@@ -2661,9 +3277,13 @@ export default {
     async batchDeleteOrders() {
       const rows = this.batchDeletableList;
       if (!rows.length) return;
+      const total = this.effectiveSelected.length;
+      const partial = rows.length < total;
       try {
         await this.$confirm(
-          `确定永久删除已选的 ${rows.length} 条订单？删除后不可恢复。`,
+          partial
+            ? `已选 ${total} 条，其中 ${rows.length} 条可删除。是否仅删除这 ${rows.length} 条？删除后不可恢复。`
+            : `确定永久删除已选的 ${rows.length} 条订单？删除后不可恢复。`,
           '批量删除确认',
           { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
         );
@@ -2684,16 +3304,16 @@ export default {
       }
     },
     openFinance(row) {
-      this.financeRows = [row];
-      this.financeForm = { result: 'approved', comment: '' };
-      this.financeOpen = true;
+      this.reviewDialogKind = 'finance';
+      this.reviewDialogRows = [row];
+      this.reviewDialogVisible = true;
     },
     openFinanceBatch() {
       const rows = this.batchFinanceReviewableList;
       if (!rows.length) return;
-      this.financeRows = [...rows];
-      this.financeForm = { result: 'approved', comment: '' };
-      this.financeOpen = true;
+      this.reviewDialogKind = 'finance';
+      this.reviewDialogRows = [...rows];
+      this.reviewDialogVisible = true;
     },
     async submitSingle(row) {
       try {
@@ -2710,7 +3330,7 @@ export default {
         } else {
           this.$message.success('已提交审核');
           this.load();
-          this.refreshMessages();
+          this.$refs.messagesDrawerRef?.refresh();
         }
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
@@ -2719,10 +3339,16 @@ export default {
     async batchSubmitReview() {
       const rows = this.batchSubmittableList;
       if (!rows.length) return;
+      const total = this.effectiveSelected.length;
+      const partial = rows.length < total;
       try {
-        await this.$confirm(`将 ${rows.length} 笔订单一并提交财务审核，财务将收到 1 条站内信汇总通知。是否继续？`, '批量提交审核', {
-          type: 'warning'
-        });
+        await this.$confirm(
+          partial
+            ? `已选 ${total} 条，其中 ${rows.length} 条可提交。是否仅提交这 ${rows.length} 条？财务将收到 1 条站内信汇总通知。`
+            : `将 ${rows.length} 笔订单一并提交财务审核，财务将收到 1 条站内信汇总通知。是否继续？`,
+          '批量提交审核',
+          { type: 'warning' }
+        );
       } catch {
         return;
       }
@@ -2747,69 +3373,58 @@ export default {
         }
         this.clearOrderSelection();
         this.load();
-        this.refreshMessages();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
       }
     },
-    async submitFinance() {
-      if (this.financeForm.result === 'rejected' && !this.financeForm.comment.trim()) {
-        this.$message.warning('驳回请填写意见');
+    async batchWithdrawReview() {
+      const rows = this.batchWithdrawableList;
+      if (!rows.length) return;
+      const total = this.effectiveSelected.length;
+      const partial = rows.length < total;
+      try {
+        await this.$confirm(
+          partial
+            ? `已选 ${total} 条，其中 ${rows.length} 条可撤回。是否仅撤回这 ${rows.length} 条？财务将收到 1 条站内信汇总通知。`
+            : `将 ${rows.length} 笔订单一并撤回审核申请，财务将收到 1 条站内信汇总通知。是否继续？`,
+          '批量撤回审核',
+          { type: 'warning' }
+        );
+      } catch {
         return;
       }
-      this.financeLoading = true;
       try {
-        const r = await batchFinanceReviewSalesOrder({
-          ids: this.financeRows.map((x) => x.id),
-          result: this.financeForm.result,
-          comment: this.financeForm.comment
-        });
+        const r = await batchWithdrawSalesOrderReview(rows.map((x) => x.id));
         if (r.failed?.length) {
-          this.$message.warning(`已处理 ${r.ok} 笔，未处理 ${r.failed.length} 笔`);
+          const errLabel = (code) =>
+            ({
+              FORBIDDEN: '非本人创建',
+              NOT_FOUND: '不存在',
+              NOT_SUBMITTED: '不在首节点待审',
+              ORDER_STATE_CHANGED: '状态已变更'
+            }[code] || zhMessageForApiError(code) || '未知原因');
+          const parts = r.failed.slice(0, 5).map((f) => `订单#${f.id}：${errLabel(f.error)}`);
+          const more = r.failed.length > 5 ? ` 等共 ${r.failed.length} 笔` : '';
+          this.$message.warning(
+            `成功 ${r.ok || 0} 笔，未处理 ${r.failed.length} 笔。${parts.join('；')}${more}`
+          );
         } else {
-          this.$message.success(`已处理 ${r.ok} 笔`);
+          this.$message.success(`已撤回 ${r.ok} 笔`);
         }
-        this.financeOpen = false;
+        this.clearOrderSelection();
         this.load();
-        this.refreshMessages();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
-      } finally {
-        this.financeLoading = false;
       }
     },
     openQcReviewBatch() {
       const rows = this.batchQcReviewableList;
       if (!rows.length) return;
-      this.qcReviewRows = [...rows];
-      this.qcReviewForm = { result: 'approved', comment: '' };
-      this.qcReviewOpen = true;
-    },
-    async submitQcReview() {
-      if (this.qcReviewForm.result === 'rejected' && !this.qcReviewForm.comment.trim()) {
-        this.$message.warning('驳回请填写意见');
-        return;
-      }
-      this.qcReviewLoading = true;
-      try {
-        const r = await batchQcReviewSalesOrder({
-          ids: this.qcReviewRows.map((x) => x.id),
-          result: this.qcReviewForm.result,
-          comment: this.qcReviewForm.comment
-        });
-        if (r.failed?.length) {
-          this.$message.warning(`已处理 ${r.ok} 笔，未处理 ${r.failed.length} 笔`);
-        } else {
-          this.$message.success(`已处理 ${r.ok} 笔`);
-        }
-        this.qcReviewOpen = false;
-        this.load();
-        this.refreshMessages();
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '操作失败'));
-      } finally {
-        this.qcReviewLoading = false;
-      }
+      this.reviewDialogKind = 'qc';
+      this.reviewDialogRows = [...rows];
+      this.reviewDialogVisible = true;
     },
     async approveSingleQc(row) {
       try {
@@ -2827,10 +3442,10 @@ export default {
         if (r.failed?.length) {
           this.$message.warning('部分订单未能处理，请刷新后重试');
         } else {
-          this.$message.success('订单已进入待发货');
+          this.$message.success('订单已进入待备货发货');
         }
         this.load();
-        this.refreshMessages();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
       } finally {
@@ -2868,7 +3483,7 @@ export default {
           this.$message.success('已驳回 1 笔订单');
         }
         this.load();
-        this.refreshMessages();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
       } finally {
@@ -2876,27 +3491,25 @@ export default {
       }
     },
     openShip(row) {
-      this.shipBatchList = [];
-      this.shipRow = row;
-      this.shipNote = '';
-      this.shipOpen = true;
+      this.shipDialogRow = row;
+      this.shipDialogBatchList = [];
+      this.shipDialogVisible = true;
     },
     openShipBatch() {
       const rows = this.batchShippableList;
       if (!rows.length) return;
-      this.shipRow = null;
-      this.shipBatchList = [...rows];
-      this.shipNote = '';
-      this.shipOpen = true;
-    },
-    resetShipDialog() {
-      this.shipRow = null;
-      this.shipBatchList = [];
-      this.shipNote = '';
+      this.shipDialogRow = null;
+      this.shipDialogBatchList = [...rows];
+      this.shipDialogVisible = true;
     },
     async approveSingle(row) {
+      await this.loadOrderFlowConfig();
       try {
-        await this.$confirm(`确认财务通过订单 ${row.order_no}？通过后进入待质检审核。`, '财务通过', { type: 'warning' });
+        await this.$confirm(
+          `确认财务通过订单 ${row.order_no}？${this.financeApproveConfirmHint}`,
+          '财务通过',
+          { type: 'warning' }
+        );
       } catch {
         return;
       }
@@ -2910,10 +3523,12 @@ export default {
         if (r.failed?.length) {
           this.$message.warning('部分订单未能处理，请刷新后重试');
         } else {
-          this.$message.success('财务已通过，订单已进入待质检审核');
+          const payload = r?.data ?? r;
+          const item = (payload.ok_items || payload.okItems)?.[0];
+          this.$message.success(this.financeApproveSuccessMessage(item?.to_status));
         }
         this.load();
-        this.refreshMessages();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
       } finally {
@@ -2951,65 +3566,35 @@ export default {
           this.$message.success('已驳回 1 笔订单');
         }
         this.load();
-        this.refreshMessages();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
       } finally {
         this.financeLoading = false;
       }
     },
-    async submitShip() {
-      this.shipLoading = true;
-      try {
-        if (this.shipBatchList.length) {
-          const r = await batchShipSalesOrders({
-            ids: this.shipBatchList.map((x) => x.id),
-            shipping_instruction: this.shipNote || undefined
-          });
-          if (r.failed?.length) {
-            const errLabel = (code) =>
-              ({
-                NOT_FOUND: '不存在',
-                INVALID_STATUS: '状态不符'
-              }[code] || zhMessageForApiError(code) || '未知原因');
-            const parts = r.failed.slice(0, 5).map((f) => `订单#${f.id}：${errLabel(f.error)}`);
-            const more = r.failed.length > 5 ? ` 等共 ${r.failed.length} 笔` : '';
-            this.$message.warning(
-              `成功 ${r.ok || 0} 笔，未处理 ${r.failed.length} 笔。${parts.join('；')}${more}`
-            );
-          } else {
-            this.$message.success(`已标记发货 ${r.ok} 笔`);
-          }
-        } else if (this.shipRow) {
-          await shipSalesOrder(this.shipRow.id, { shipping_instruction: this.shipNote });
-          this.$message.success('已标记发货');
-        } else {
-          this.$message.warning('未选择订单');
-          return;
-        }
-        this.shipOpen = false;
-        this.resetShipDialog();
-        this.clearOrderSelection();
-        this.load();
-        this.refreshMessages();
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '操作失败'));
-      } finally {
-        this.shipLoading = false;
-      }
-    },
     async doComplete(row) {
+      try {
+        await this.$confirm(
+          `确认将订单 ${row.order_no} 标记为已完结？`,
+          '完结订单',
+          { type: 'warning' }
+        );
+      } catch {
+        return;
+      }
       try {
         await completeSalesOrder(row.id);
         this.$message.success('已完结');
         this.load();
+        this.$refs.messagesDrawerRef?.refresh();
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '操作失败'));
       }
     },
     async doCancel(row) {
       try {
-        await this.$confirm('确认取消该订单？', '提示', { type: 'warning' });
+        await this.$confirm(`确认取消订单 ${row.order_no}？`, '取消订单', { type: 'warning' });
       } catch {
         return;
       }
@@ -3039,16 +3624,24 @@ export default {
         }
 
         if (r.errors?.length) {
-          this.$message.warning(`成功 ${r.ok} 条，失败 ${r.errors.length} 条`);
+          this.openImportErrorsDialog(r.errors);
+          this.$message.warning(`成功 ${r.ok} 条，失败 ${r.errors.length} 条，详见失败明细`);
           // eslint-disable-next-line no-console
           console.warn(r.errors);
+        } else if (r.ok > 0 && Array.isArray(r.created_ids) && r.created_ids.length) {
+          /* 成功提示由 focusImportedOrders 统一展示 */
         } else if (!r.duplicates?.length) {
           this.$message.success(`导入成功 ${r.ok} 条`);
         } else if (r.ok > 0) {
           this.$message.success(`导入成功 ${r.ok} 条（${r.duplicates.length} 条与已有订单重复已跳过）`);
         }
-        if (r.ok > 0) this.page = 1;
-        this.load();
+        if (r.ok > 0) {
+          this.page = 1;
+          await this.load();
+          if (Array.isArray(r.created_ids) && r.created_ids.length) {
+            this.focusImportedOrders(r.created_ids);
+          }
+        }
       };
       try {
         await run(false);
@@ -3174,120 +3767,60 @@ export default {
         this.$message.warning('请选择同一客户的订单');
         return;
       }
-      await this.prepareContractGenDialog(this.effectiveSelected.map((r) => r.id));
+      this.genDialogOrderIds = this.effectiveSelected.map((r) => r.id);
+      this.genDialogVisible = true;
     },
-    async runGenerate() {
-      if (!this.genUseBlankTemplate && !this.genTemplateId) {
-        this.$message.warning('请选择模板，或改用「从空白模板创建」');
-        return;
-      }
-      this.genLoading = true;
+    openOrderContractPreview(row) {
+      const id = row && row.contract_id;
+      if (!id) return;
+      this.contractPreviewDialogContractId = id;
+      this.contractPreviewDialogVisible = true;
+    },
+    async downloadOrderContractFile(row, format) {
+      const id = row && row.contract_id;
+      if (!id) return;
       try {
-        const orderIds =
-          this.genOrderIds.length > 0 ? this.genOrderIds : this.effectiveSelected.map((x) => x.id);
-        const payload = {
-          orderIds,
-          fromBlank: this.genUseBlankTemplate === true
-        };
-        if (!this.genUseBlankTemplate) payload.templateId = this.genTemplateId;
-        const r = await generateSalesContract(payload);
-        this.$message.success(`合同已生成 ${r.contract_no}`);
-        this.genOpen = false;
-        if (r.id != null) {
-          this.$router.push(`/sales/contracts/editor/${r.id}`);
-        } else {
-          this.$router.push('/sales/contracts');
-        }
+        await downloadContractFile(id, format);
       } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '生成失败'));
-      } finally {
-        this.genLoading = false;
+        this.$message.error(contractDownloadErrorMessage(e, this.$apiUserMsg(e, '下载失败')));
       }
     },
-    async refreshMessages() {
-      if (!this.showMessages) return;
-      if (this.isBlockedByPasswordPolicy()) {
-        this.messages = [];
-        this.unreadCount = 0;
-        return;
-      }
-      try {
-        const d = await listSalesMessages({});
-        this.messages = d.items || [];
-        const u = await listSalesMessages({ unread: 1 });
-        this.unreadCount = (u.items || []).length;
-      } catch {
-        this.unreadCount = 0;
-      }
+    openBindContractForRow(row) {
+      if (!this.canAddContractForRow(row)) return;
+      this.bindContractDialogOrderId = row.id;
+      this.bindContractDialogCustomerName = row.customer_name || '';
+      this.bindContractDialogCustomerId = row.customer_id || null;
+      this.bindContractDialogVisible = true;
     },
-    async loadMessages() {
-      await this.refreshMessages();
+    /* ---- 子组件 success 回调 ---- */
+    onFormDialogSuccess() {
+      this.load();
     },
-    async onMessagesOpen() {
-      // 打开站内信抽屉时，统一拉取并标记为已读，确保红点清零
-      await this.loadMessages();
-      await this.markAllMessagesRead();
+    onReviewSuccess() {
+      this.load();
+      this.$refs.messagesDrawerRef?.refresh();
     },
-    async markAllMessagesRead() {
-      const unread = this.messages.filter((m) => !m.read_at);
-      if (!unread.length) {
-        this.unreadCount = 0;
-        return;
-      }
-      try {
-        await Promise.all(
-          unread.map((m) =>
-            markSalesMessageRead(m.id).then(() => {
-              // 本地同步状态，避免再次请求
-              m.read_at = new Date().toISOString();
-            })
-          )
-        );
-        this.unreadCount = 0;
-      } catch {
-        // 若批量更新失败，则回退重新计算未读数
-        this.refreshMessages();
-      }
+    onShipSuccess() {
+      this.clearOrderSelection();
+      this.load();
+      this.$refs.messagesDrawerRef?.refresh();
     },
-    async readMsg(m) {
-      if (!m.read_at) {
-        try {
-          await markSalesMessageRead(m.id);
-          m.read_at = new Date().toISOString();
-          this.refreshMessages();
-        } catch {
-          /* ignore */
-          return;
-        }
-      }
-      const target = resolveInternalMessageRoute(m);
-      if (!target) return;
-      this.messagesOpen = false;
-      try {
-        await this.$router.push(target);
-      } catch (e) {
-        if (e && e.name === 'NavigationDuplicated') return;
-        throw e;
-      }
+    onGenSuccess() {
+      this.load();
     },
-    async clearMessageHistory() {
-      try {
-        await this.$confirm(
-          '将删除您账号下的全部站内信记录（含未读），且不可恢复。是否继续？',
-          '清空历史',
-          { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }
-        );
-      } catch {
-        return;
-      }
-      try {
-        await clearSalesMessages();
-        this.messages = [];
-        this.unreadCount = 0;
-        this.$message.success('站内信已清空');
-      } catch (e) {
-        this.$message.error(this.$apiUserMsg(e, '清空失败'));
-      }
+    onBindContractSuccess() {
+      this.load();
+    },
+    onQcBindSuccess() {
+      this.load();
+    },
+    onFieldManageChanged() {
+      this.ensureOrderFieldDefinitions();
+      this.maybeAutoEnableVirtualTable();
+      this.load();
+    },
+    onUnreadChanged(count) {
+      this.unreadCount = count;
     }
   }
 };
@@ -3297,49 +3830,177 @@ export default {
 .sales-orders {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 100px);
+  /* 64px 顶栏 + ~38px 页签 + 36px main 内边距 */
+  height: calc(100vh - 138px);
   min-height: 320px;
   box-sizing: border-box;
 }
 .toolbar-card {
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
-.flow-board__chip .flow-board__num {
-  margin-left: 4px;
-  font-weight: 700;
-}
-.flow-board-respect-date {
-  margin-left: 4px;
+.toolbar-card :deep(.el-card__body) {
+  padding: 14px 16px;
 }
 .toolbar {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
+  align-items: flex-start;
+  gap: 12px;
 }
 .left,
 .right {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 .left {
   flex: 1;
   min-width: 0;
-  flex-wrap: nowrap;
 }
 .right {
+  flex-shrink: 0;
   justify-content: flex-end;
-  flex-wrap: wrap;
+}
+.search-bar {
+  flex: 1 1 220px;
+  min-width: 200px;
+  max-width: 360px;
 }
 .batch-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid #eef2f7;
+}
+.order-filter-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding-top: 10px;
+  margin-top: 10px;
+  border-top: 1px solid #eef2f7;
+}
+.order-filter-tags__label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  line-height: 24px;
+}
+.order-filter-tag {
+  max-width: min(100%, 320px);
+}
+.order-filter-tag :deep(.el-tag__content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.order-filter-tags__clear {
+  flex-shrink: 0;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+.mobile-filter-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.mobile-filter-actions__primary {
+  flex: 1;
+}
+.mobile-filter-actions__reset {
+  flex-shrink: 0;
+}
+.orders-batch-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #f8fbff 0%, #fff 100%);
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  box-shadow: 0 -4px 18px rgba(15, 23, 42, 0.08);
+}
+.orders-batch-bar__left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.orders-batch-bar__count {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d4ed8;
+}
+.orders-batch-bar__actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid #eef2f7;
+  justify-content: flex-end;
+}
+.orders-batch-bar__list {
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.orders-batch-bar__item {
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.orders-batch-bar-fade-enter-active,
+.orders-batch-bar-fade-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.orders-batch-bar-fade-enter-from,
+.orders-batch-bar-fade-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.batch-actions-inner {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.batch-actions-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.batch-actions-group__label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  min-width: 28px;
+  line-height: 32px;
+}
+.batch-actions-group--batch {
+  flex: 1;
+  min-width: 0;
+}
+.batch-group-divider {
+  height: 28px;
+  margin: 0 2px;
+  align-self: center;
 }
 .selected-tip {
   font-size: 13px;
@@ -3387,41 +4048,41 @@ export default {
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.table-list-toolbar {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 12px;
-  flex-shrink: 0;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #eef2f7;
-}
-.table-list-toolbar__flow-sla {
-  flex: 1;
   min-width: 0;
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  overflow: hidden;
 }
-.table-list-toolbar__left {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
+.table-list-toolbar {
+  margin-bottom: 10px;
   flex-shrink: 0;
-  max-width: 100%;
 }
-.table-list-toolbar__right {
+.table-list-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #eef2f7;
+  flex-shrink: 0;
+}
+.table-list-controls__hint {
+  font-size: 13px;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+.table-list-controls__sync-hint {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-left: 8px;
+}
+.table-list-controls__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
 }
 .order-list-column-picker {
   display: flex;
@@ -3439,6 +4100,16 @@ export default {
   margin-right: 0;
   height: auto;
   padding: 4px 0;
+}
+.orders-empty-state {
+  padding: 24px 12px 12px;
+}
+.orders-empty-state__actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .table-inner {
   flex: 1;
@@ -3462,18 +4133,59 @@ export default {
 .orders-table-v2 {
   font-size: 13px;
 }
+.orders-customer-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  line-height: 1.2;
+}
+.orders-customer-header__title {
+  font-weight: 600;
+  color: inherit;
+}
+.orders-customer-header__mode {
+  display: inline-flex;
+  gap: 4px;
+}
+.orders-customer-header__mode .el-button {
+  padding: 2px 8px;
+  font-size: 11px;
+  margin: 0;
+}
+.orders-customer-header--v2 {
+  padding: 2px 0;
+}
+.orders-table-v2 :deep(.el-table-v2__header-cell) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.orders-table-v2 :deep(.el-table-v2__header-cell .orders-customer-header) {
+  white-space: normal;
+  overflow: visible;
+}
+.orders-table-v2 :deep(.el-table-v2__row-cell) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
 .v2-cell-txt {
   display: inline-block;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.orders-v2-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  justify-content: flex-end;
+  white-space: normal;
+  word-break: break-word;
+  text-align: center;
+  line-height: 1.3;
+  font-size: 12px;
 }
 .orders-v2-actions__btn {
   display: inline-flex;
@@ -3481,24 +4193,220 @@ export default {
 .ml8 {
   margin-left: 8px;
 }
+.orders-table {
+  width: 100% !important;
+}
+.orders-table :deep(.el-table__inner-wrapper) {
+  overflow-x: hidden !important;
+}
+.orders-table :deep(.el-table__body-wrapper),
+.orders-table :deep(.el-table__header-wrapper) {
+  overflow-x: hidden !important;
+}
+.orders-table-v2 :deep(.el-virtual-scrollbar.el-vl--horizontal) {
+  display: none !important;
+}
+.orders-table-v2 :deep(.el-table-v2__main) {
+  overflow-x: hidden !important;
+}
 .orders-status-cell {
   display: flex;
   justify-content: center;
   align-items: center;
   width: 100%;
+  max-width: 100%;
+}
+.orders-table :deep(.el-table__header .el-table__cell),
+.orders-table :deep(.el-table__body .el-table__cell) {
+  vertical-align: middle;
+}
+.orders-table :deep(.el-table__header .el-table__cell .cell) {
+  display: block;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  word-break: keep-all;
+  line-height: 1.35;
+  padding: 6px 4px;
+  min-height: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
 }
 .orders-table :deep(.el-table__body .el-table__cell .cell) {
+  display: block;
+  text-align: center;
   white-space: normal;
   word-break: break-word;
   line-height: 1.35;
+  padding: 6px 4px;
+  min-height: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  overflow: hidden;
+}
+.orders-table :deep(.orders-col-status .cell),
+.orders-table :deep(.orders-col-contract .cell),
+.orders-table :deep(.orders-col-qc .cell),
+.orders-table :deep(.orders-col-actions .cell) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.orders-table :deep(.orders-col-contract .cell),
+.orders-table :deep(.orders-col-qc .cell) {
+  overflow: visible;
+}
+.orders-table :deep(td.orders-col-qc) {
+  overflow: visible;
+  position: relative;
+}
+.orders-table :deep(td.orders-col-qc:hover) {
+  z-index: 6;
 }
 .orders-table :deep(.el-table-column--selection .cell),
 .orders-table :deep(.orders-col-actions .cell) {
   white-space: nowrap;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.orders-table :deep(.sales-status-wrap) {
+  max-width: 100%;
+}
+.orders-table :deep(.sales-status-pill) {
+  padding: 2px 6px !important;
+  height: auto !important;
+  max-width: 100%;
+}
+.orders-table :deep(.sales-status-pill__text) {
+  font-size: 11px;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.25;
+}
+.orders-table :deep(.sales-status-pill__icon) {
+  margin-right: 2px !important;
+  font-size: 12px !important;
+}
+.orders-table :deep(.sales-status-reason) {
+  max-width: 100%;
+  font-size: 10px;
+  padding: 2px 4px;
+  margin-top: 2px;
+}
+.orders-table :deep(.contract-thumb-wrap--icon) {
+  width: 56px;
+  height: 52px;
+}
+.orders-table :deep(.contract-audit-glass) {
+  font-size: 8px;
+  padding: 3px 2px 2px;
+}
+.orders-table :deep(.contract-doc-icon) {
+  transform: scale(0.85);
+}
+.orders-table :deep(.contract-thumb-actions) {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 0 3px;
+  box-sizing: border-box;
+}
+.orders-table :deep(.contract-thumb-actions .el-tooltip__trigger) {
+  display: inline-flex;
+  line-height: 0;
+  flex-shrink: 0;
+}
+.orders-table :deep(.contract-thumb-action.el-button.is-circle) {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.orders-table :deep(.contract-thumb-action.el-button.is-circle .el-icon) {
+  font-size: 11px;
+}
+.orders-table :deep(.contract-placeholder) {
+  font-size: 11px;
+}
+.orders-table :deep(.qc-thumb-wrap) {
+  width: 52px;
+  height: 52px;
+}
+.orders-table :deep(.qc-thumb-img) {
+  width: 52px;
+  height: 52px;
+}
+.orders-table :deep(.qc-placeholder) {
+  font-size: 10px;
+  max-width: 100%;
+  line-height: 1.2;
+}
+.orders-table :deep(.qc-placeholder--link) {
+  color: var(--el-color-primary);
+  cursor: pointer;
+}
+.orders-table :deep(.qc-placeholder--link:hover) {
+  text-decoration: underline;
+}
+.orders-table :deep(.orders-col-actions .el-button.is-circle) {
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+}
+.orders-table :deep(.orders-col-actions .el-button.is-circle .el-icon) {
+  font-size: 13px;
+}
+.orders-table :deep(.contract-cell),
+.orders-table :deep(.qc-cell) {
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.orders-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 100%;
+}
+.orders-action-btn-host {
+  display: inline-flex;
+  vertical-align: middle;
+}
+.orders-v2-actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  justify-content: center;
+  align-items: center;
+  max-width: 100%;
+}
+.orders-col-header__text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.orders-col-header {
+  display: inline-flex;
+  flex-direction: row;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 0px;
+  justify-content: center;
+  gap: 4px;
+  max-width: 100%;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.orders-col-header .orders-col-header__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: calc(100% - 40px);
 }
 .pager {
   display: flex;
@@ -3517,13 +4425,16 @@ export default {
 }
 .qc-thumb-wrap {
   position: relative;
-  width: 56px;
-  height: 56px;
+  width: 52px;
+  height: 52px;
   flex-shrink: 0;
 }
+.qc-thumb-wrap:hover {
+  z-index: 4;
+}
 .qc-thumb-img {
-  width: 56px;
-  height: 56px;
+  width: 52px;
+  height: 52px;
   object-fit: contain;
   border-radius: 6px;
   border: 1px solid #e2e8f0;
@@ -3534,28 +4445,58 @@ export default {
 .qc-thumb-actions {
   position: absolute;
   inset: 0;
+  z-index: 3;
   border-radius: 6px;
-  background: rgba(15, 23, 42, 0.52);
+  background: rgba(15, 23, 42, 0.58);
   display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  align-content: center;
+  gap: 3px;
+  padding: 4px 3px;
+  box-sizing: border-box;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.18s ease;
+  transition: opacity 0.15s ease;
+}
+.qc-thumb-actions :deep(.el-tooltip__trigger),
+.qc-thumb-action-host {
+  display: inline-flex;
+  line-height: 0;
+  flex-shrink: 0;
 }
 .qc-thumb-wrap:hover .qc-thumb-actions {
   opacity: 1;
   pointer-events: auto;
 }
+.qc-thumb-action.el-button.is-circle {
+  width: 20px !important;
+  height: 20px !important;
+  min-height: 20px !important;
+  padding: 0 !important;
+  flex-shrink: 0;
+  border: none !important;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.2);
+}
+.qc-thumb-action.el-button.is-circle .el-icon {
+  font-size: 11px !important;
+}
 .qc-thumb-action {
   border: none !important;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
 }
 .qc-placeholder {
   font-size: 12px;
   max-width: 72px;
   line-height: 1.3;
+}
+.qc-placeholder--link {
+  color: var(--el-color-primary);
+  cursor: pointer;
+}
+.qc-placeholder--link:hover {
+  text-decoration: underline;
 }
 .qc-add {
   flex-shrink: 0;
@@ -3604,73 +4545,257 @@ export default {
 .ml4 { margin-left: 4px; }
 .text-muted { color: #64748b; }
 
+.desktop-only {
+  display: block;
+}
+.mobile-list {
+  display: none;
+}
+.mobile-filters {
+  display: none;
+}
+.mobile-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+  margin-bottom: 10px;
+}
+.mobile-card--highlight {
+  border-color: #facc15;
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.28);
+  animation: orders-row-highlight-pulse 2s ease-in-out 3;
+}
+@keyframes orders-row-highlight-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.04);
+  }
+}
+.sales-orders--touch .qc-thumb-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.sales-orders--touch .qc-thumb-actions {
+  position: static;
+  inset: auto;
+  opacity: 1;
+  pointer-events: auto;
+  background: transparent;
+  margin-top: 6px;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 0;
+}
+.sales-orders--touch .qc-thumb-action.el-button.is-circle {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+.sales-orders--touch .qc-thumb-action.el-button.is-circle .el-icon {
+  font-size: 15px;
+}
+.sales-orders--touch .contract-thumb-wrap--icon {
+  height: auto;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.sales-orders--touch .contract-thumb-wrap--icon .contract-thumb-actions {
+  position: static;
+  inset: auto;
+  opacity: 1;
+  pointer-events: auto;
+  background: transparent;
+  margin-top: 4px;
+}
+.sales-orders--touch .contract-thumb-wrap--icon:hover .contract-thumb-body,
+.sales-orders--touch .contract-thumb-wrap--icon:hover .contract-audit-glass {
+  opacity: 1;
+}
+.orders-table :deep(tr.orders-row--highlight > td.el-table__cell) {
+  background: #fef9c3 !important;
+  animation: orders-row-highlight-pulse 2s ease-in-out 3;
+}
+.orders-table :deep(tr.orders-row--editable > td.el-table__cell) {
+  cursor: pointer;
+}
+.orders-table-v2 :deep(.el-table-v2__row.orders-row--highlight) {
+  background: #fef9c3;
+  animation: orders-row-highlight-pulse 2s ease-in-out 3;
+}
+.orders-table-v2 :deep(.el-table-v2__row.orders-row--editable) {
+  cursor: pointer;
+}
+.mobile-card--editable {
+  cursor: pointer;
+}
+.mobile-card--focus {
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12);
+}
+.mobile-card--selected {
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
+.mobile-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.mobile-list-toolbar__sync {
+  font-size: 12px;
+  color: #94a3b8;
+}
+.mobile-select-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.mobile-select-bar__count {
+  font-size: 12px;
+  color: #2563eb;
+  font-weight: 600;
+}
+.mobile-card__pick {
+  flex-shrink: 0;
+}
+.mobile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.mobile-order-no {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: #0f172a;
+  word-break: break-all;
+}
+.mobile-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0;
+  font-size: 13px;
+  color: #475569;
+}
+.mobile-line > span:first-child {
+  flex-shrink: 0;
+  color: #94a3b8;
+}
+.mobile-line > span:last-child {
+  text-align: right;
+  word-break: break-all;
+}
+.mobile-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mobile-flow-board {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
 @media (max-width: 992px) {
   .sales-orders {
-    height: calc(100vh - 88px);
+    height: auto;
+    min-height: 0;
   }
-.search-bar {
-  min-width: 160px;
-  max-width: 240px;
-  flex-shrink: 1;
-}
-.search-bar .el-input-group__prepend {
-  padding: 0;
-  background: transparent;
-}
-.search-bar .el-input-group__prepend .el-select {
-  width: 110px;
-}
-.search-bar .el-input-group__prepend .el-select .el-input__wrapper {
-  border-radius: 0;
-}
-.toolbar {
+  .mobile-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .mobile-filters .w-full {
+    width: 100%;
+  }
+  .mobile-date-range {
+    max-width: 100%;
+  }
+  .mobile-date-range :deep(.el-range-input) {
+    font-size: 13px;
+  }
+  .batch-actions--mobile {
     flex-direction: column;
     align-items: stretch;
+    gap: 8px;
   }
-  .left,
-  .right {
+  .batch-actions--mobile .batch-actions-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
     width: 100%;
-    min-width: 0;
-    justify-content: flex-start;
   }
-  .left .field-input,
-  .left .field-input-sm,
-  .left .field-select,
-  .left .field-date,
-  .left .search-bar {
-    width: 100% !important;
-    min-width: 0;
+  .batch-actions--mobile .batch-actions-group {
+    display: contents;
   }
-  .left .el-button,
-  .right .el-button,
-  .batch-actions .el-button {
-    flex: 1 1 calc(50% - 6px);
-    min-width: 120px;
+  .batch-actions--mobile .batch-actions-group__label {
+    display: none;
   }
-  .batch-actions {
-    flex-wrap: wrap;
+  .batch-actions--mobile .batch-actions-inner .el-upload {
+    width: 100%;
   }
-  .selected-tip {
-    width: fit-content;
+  .batch-actions--mobile .batch-actions-inner .el-upload .el-button {
+    width: 100%;
+  }
+  .batch-actions--mobile .batch-del-tooltip-host {
+    display: block;
+    width: 100%;
+  }
+  .batch-actions--mobile .batch-del-tooltip-host .el-button {
+    width: 100%;
+  }
+  .batch-actions--mobile .selected-tip {
+    grid-column: 1 / -1;
+  }
+  .mobile-batch-toggle {
+    width: 100%;
+    justify-content: center;
+    margin: 0;
+    padding: 8px 0;
+  }
+  .desktop-only {
+    display: none !important;
+  }
+  .mobile-list {
+    display: block;
   }
   .table-wrap {
+    flex: none;
+    overflow: visible;
     padding: 10px;
   }
-  .table-list-toolbar {
+  .pager {
     flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 8px;
-    padding-bottom: 8px;
+    justify-content: center;
+    gap: 8px;
   }
-  .table-list-toolbar__flow-sla {
+  .pager .w100 {
     width: 100%;
-    flex-direction: column;
-    align-items: stretch;
   }
-  .table-list-toolbar__right {
-    width: 100%;
-    margin-left: 0;
-    justify-content: flex-end;
+  .pager :deep(.el-pagination) {
+    flex-wrap: wrap;
+    justify-content: center;
   }
 }
 
@@ -3830,7 +4955,7 @@ export default {
 .header-field-actions {
   display: inline-flex;
   align-items: center;
-  margin-left: 4px;
+  flex-shrink: 0;
   gap: 2px;
 }
 .header-field-icon {
@@ -3962,9 +5087,21 @@ export default {
   pointer-events: none;
   transition: opacity 0.18s ease;
 }
+.contract-thumb-actions :deep(.el-tooltip__trigger) {
+  display: inline-flex;
+  line-height: 0;
+}
+.contract-thumb-wrap--icon:hover {
+  overflow: visible;
+  z-index: 2;
+}
 .contract-thumb-wrap--icon:hover .contract-thumb-actions {
   opacity: 1;
   pointer-events: auto;
+}
+.contract-thumb-wrap--icon:hover .contract-thumb-body,
+.contract-thumb-wrap--icon:hover .contract-audit-glass {
+  opacity: 0;
 }
 .contract-thumb-action {
   border: none !important;
@@ -4131,9 +5268,6 @@ export default {
 :deep(.el-table--border::before),
 :deep(.el-table__inner-wrapper::before) {
   border-color: #e2e8f0;
-}
-.orders-table :deep(.el-table__body .el-table__cell .cell) {
-  padding: 8px 12px;
 }
 :deep(.el-button--small) {
   border-radius: 8px;

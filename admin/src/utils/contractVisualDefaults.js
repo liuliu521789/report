@@ -76,3 +76,39 @@ export function createDefaultVisual() {
     partyBuyerItems: clonePartyItems(DEFAULT_PARTY_BUYER_ITEMS)
   };
 }
+
+/** 创建空白版式的 visual 模型：保留结构与占位符，清除所有示例数据 */
+export function createBlankVisual() {
+  const cols = CONTRACT_ORDER_LINE_HEADERS.length;
+  const emptyRow = Array.from({ length: cols }, () => '');
+  const clearValue = (items) => (items || []).map(it => ({ ...it, value: '' }));
+  return {
+    headerCompanyZh: '',
+    headerTitleZh: '销售合同',
+    headerItemsLeft: [
+      { label: '买方', value: '', placeholder: '留空则系统带入买方名称', fallback: '{{CUSTOMER_NAME}}' },
+      { label: '卖方', value: '', placeholder: '留空则使用公司抬头', fallback: '__HEADER_COMPANY__' }
+    ],
+    headerItemsRight: [
+      { label: '合同编号', value: '', placeholder: '留空则系统自动生成', fallback: '{{CONTRACT_NO}}' },
+      { label: '履约地点', value: '', placeholder: '例如：兰考', fallback: '' },
+      { label: '签订时间', value: '', placeholder: '留空则系统带入签订日期', fallback: '{{SIGN_DATE_ZH}}' }
+    ],
+    clauses: [
+      { title: '一、产品名称、单价、数量、金额、交货期：', body: '', useTable: true },
+      { title: '二、交货地点、交货期限、运费：', body: '', useTable: false },
+      { title: '三、包装标准：', body: '', useTable: false },
+      { title: '四、验收标准：方法及提出异议期限：', body: '', useTable: false },
+      { title: '五、结算方式及期限：', body: '', useTable: false },
+      { title: '六、违约责任：', body: '', useTable: false },
+      { title: '七、解决合同纠纷方式：', body: '', useTable: false },
+      { title: '八、其他约定事项：', body: '', useTable: false }
+    ],
+    tableRows: [emptyRow],
+    tableRowSpecs: [],
+    tableTotalText: '',
+    showPartyBlock: true,
+    partySellerItems: clearValue(DEFAULT_PARTY_SELLER_ITEMS),
+    partyBuyerItems: clearValue(DEFAULT_PARTY_BUYER_ITEMS)
+  };
+}

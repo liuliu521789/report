@@ -1,6 +1,6 @@
 /**
  * 订单「吨数 × 含税单价」金额试算（与 server/src/lib/salesOrderFields.js 一致）
- * 单价视为含税元/吨；金额（价税合计）= 单价 × 吨数；吨数 = 数量 × 规格（千克加 kg 等后缀时 ÷1000）。
+ * 单价在订单列表以元/kg 展示，计算时自动 ×1000 换算为元/吨；金额（价税合计）= 单价 × 吨数；吨数 = 数量 × 规格（千克加 kg 等后缀时 ÷1000）。
  */
 
 export function parseQuantityToLegacyNumber(raw) {
@@ -29,6 +29,23 @@ export function tonsFromQtyAndSpec(qtyRaw, specText) {
   const tons = q * factor;
   if (!Number.isFinite(tons) || tons <= 0) return null;
   return Math.round(tons * 100) / 100;
+}
+
+/** 本批数量（kg）= 数量 × 规格；规格含 kg 时直接乘，含吨或无单位时按吨系数 ×1000 */
+export function kgFromQtyAndSpec(qtyRaw, specText) {
+  const q = parseQuantityToLegacyNumber(qtyRaw);
+  const raw = String(specText ?? '');
+  const n = parseQuantityToLegacyNumber(raw);
+  if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(n) || n <= 0) return null;
+  let kgPerUnit;
+  if (/千克|公斤|kg/i.test(raw)) {
+    kgPerUnit = n;
+  } else {
+    kgPerUnit = n * 1000;
+  }
+  const kg = q * kgPerUnit;
+  if (!Number.isFinite(kg) || kg <= 0) return null;
+  return Math.round(kg * 100) / 100;
 }
 
 export function roundOrderDecimal4(n) {

@@ -4,7 +4,7 @@
     <el-card class="toolbar-card" shadow="never">
       <div class="toolbar">
         <div class="left">
-          <el-input v-model="q" placeholder="报告ID/报告编号/产品名称" clearable class="field-q" @keyup.enter="onSearch" />
+          <el-input v-model="q" placeholder="报告ID/编号/产品/客户" clearable class="field-q" @keyup.enter="onSearch" />
           <el-input v-model="batchNo" placeholder="批次" clearable class="field-batch" @keyup.enter="onSearch" />
           <el-select v-model="status" placeholder="状态" clearable class="field-status" @change="onSearch">
             <el-option label="有效" value="active" />
@@ -100,8 +100,11 @@
       <el-table-column type="selection" width="48" />
       <el-table-column prop="reportUid" label="报告ID" width="140" />
       <el-table-column prop="reportNo" label="报告编号" width="120" />
-      <el-table-column prop="productName" label="产品名称" min-width="180" />
-      <el-table-column prop="batchNo" label="批次" width="140" />
+      <el-table-column prop="productName" label="产品名称" min-width="160" />
+      <el-table-column prop="batchNo" label="批次" width="120" />
+      <el-table-column label="客户" min-width="140">
+        <template #default="{ row }">{{ formatReportCustomer(row) }}</template>
+      </el-table-column>
       <el-table-column prop="conclusion" label="判定" width="90">
         <template #default="{ row }">
           <el-tag v-if="row.conclusion === 'pass'" type="success">合格</el-tag>
@@ -234,7 +237,8 @@ export default {
       previewDialog: false,
       previewLoading: false,
       previewUrl: '',
-      previewReportId: null
+      previewReportId: null,
+      _skipActivatedLoadOnce: false
     };
   },
   computed: {
@@ -256,10 +260,24 @@ export default {
     }
   },
   mounted() {
+    this._skipActivatedLoadOnce = true;
+    this.load();
+  },
+  activated() {
+    if (this._skipActivatedLoadOnce) {
+      this._skipActivatedLoadOnce = false;
+      return;
+    }
     this.load();
   },
   methods: {
     perm,
+    formatReportCustomer(row) {
+      const name = String(row?.customerName || '').trim();
+      const contact = String(row?.customerContact || '').trim();
+      if (name && contact && name !== contact) return `${name}（${contact}）`;
+      return name || contact || '—';
+    },
     onReset() {
       this.q = '';
       this.batchNo = '';

@@ -44,7 +44,10 @@
     >
       <el-table-column v-if="isSuperAdminUser || perm('audit', 'exportAudit')" type="selection" width="48" />
       <el-table-column prop="id" label="ID" width="72" />
-      <el-table-column prop="username" label="操作人" width="120" />
+      <el-table-column label="姓名" width="120">
+        <template #default="{ row }">{{ userDisplay(row) }}</template>
+      </el-table-column>
+      <el-table-column prop="username" label="账号" width="120" show-overflow-tooltip />
       <el-table-column prop="module" label="模块" width="120" />
       <el-table-column prop="action" label="操作" min-width="160" />
       <el-table-column label="结果" width="80">
@@ -63,7 +66,8 @@
           <strong>#{{ row.id }}</strong>
           <el-tag :type="row.success ? 'success' : 'danger'" size="small">{{ row.success ? '成功' : '失败' }}</el-tag>
         </div>
-        <div class="mobile-line"><span>操作人</span><span>{{ row.username || '-' }}</span></div>
+        <div class="mobile-line"><span>姓名</span><span>{{ userDisplay(row) }}</span></div>
+        <div class="mobile-line"><span>账号</span><span>{{ row.username || '-' }}</span></div>
         <div class="mobile-line"><span>模块</span><span>{{ row.module || '-' }}</span></div>
         <div class="mobile-line"><span>操作</span><span>{{ row.action || '-' }}</span></div>
         <div class="mobile-line"><span>IP</span><span>{{ row.ip || '-' }}</span></div>
@@ -87,6 +91,7 @@ import { bulkDeleteAuditOperations, exportAuditOperations, listAuditOperations }
 import { formatDateTime } from '../utils/formatDateTime';
 import { isSuperAdmin, perm } from '../utils/permissions';
 import { startDownload } from '../composables/useDownloadProgress.js';
+import { actorDisplay } from '../utils/userActorDisplay';
 
 export default {
   name: 'AuditOperationLogs',
@@ -112,6 +117,9 @@ export default {
   },
   methods: {
     perm,
+    userDisplay(row) {
+      return actorDisplay(row);
+    },
     async load() {
       this.loading = true;
       try {
@@ -188,6 +196,7 @@ export default {
     onBulkExportTable() {
       const rows = (this.selected || []).map((x) => ({
         id: x.id,
+        realName: actorDisplay(x),
         username: x.username,
         module: x.module,
         action: x.action,
@@ -200,7 +209,8 @@ export default {
         `operation-logs-${Date.now()}.csv`,
         [
           { key: 'id', label: 'ID' },
-          { key: 'username', label: '操作人' },
+          { key: 'realName', label: '姓名' },
+          { key: 'username', label: '账号' },
           { key: 'module', label: '模块' },
           { key: 'action', label: '操作' },
           { key: 'success', label: '结果' },

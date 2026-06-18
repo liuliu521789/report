@@ -31,38 +31,38 @@
           >
         <el-menu-item v-if="perm('reports', 'list')" index="/reports">
           <el-icon><DocumentCopy /></el-icon>
-          <span>报告管理</span>
+          <template #title><span>报告管理</span></template>
         </el-menu-item>
         <el-menu-item v-if="isSuperAdminUser" index="/reports/image-library">
           <el-icon><Picture /></el-icon>
-          <span>系统图片库</span>
+          <template #title><span>系统图片库</span></template>
         </el-menu-item>
         <el-menu-item v-if="perm('templates', 'use')" index="/report-templates">
           <el-icon><Files /></el-icon>
-          <span>报告模板管理</span>
+          <template #title><span>报告模板管理</span></template>
         </el-menu-item>
         <el-menu-item
           v-if="perm('qc_yearbooks', 'view') || perm('qc_yearbooks', 'upload')"
           index="/qc-yearbooks"
         >
           <el-icon><DataAnalysis /></el-icon>
-          <span>品质管控数据</span>
+          <template #title><span>品质管控数据</span></template>
         </el-menu-item>
         <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
           <el-icon><Link /></el-icon>
-          <span>二维码管理</span>
+          <template #title><span>二维码管理</span></template>
         </el-menu-item>
         <el-menu-item v-if="perm('stamps', 'manage') || perm('stamps', 'view')" index="/stamps">
           <el-icon><Medal /></el-icon>
-          <span>公司章管理</span>
+          <template #title><span>公司章管理</span></template>
         </el-menu-item>
         <el-menu-item v-if="perm('company', 'manage') || perm('company', 'view')" index="/company">
           <el-icon><OfficeBuilding /></el-icon>
-          <span>公司信息</span>
+          <template #title><span>公司信息</span></template>
         </el-menu-item>
         <el-menu-item v-if="perm('wecom', 'manage')" index="/wecom-notifications">
           <el-icon><ChatDotRound /></el-icon>
-          <span>企业微信通知</span>
+          <template #title><span>企业微信通知</span></template>
         </el-menu-item>
         <el-sub-menu v-if="showSalesMenu" index="sales-submenu" class="no-parent-active">
           <template #title>
@@ -100,6 +100,13 @@
           >
             <el-icon><Tickets /></el-icon>
             <span>合同管理</span>
+          </el-menu-item>
+          <el-menu-item
+            v-if="canAccessInvoiceCenter()"
+            index="/sales/invoices"
+          >
+            <el-icon><Tickets /></el-icon>
+            <span>开票中心</span>
           </el-menu-item>
         </el-sub-menu>
         <el-sub-menu v-if="isSuperAdminUser" index="account-submenu" class="no-parent-active">
@@ -152,7 +159,7 @@
         </el-sub-menu>
         <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
           <el-icon><Document /></el-icon>
-          <span>我的操作日志</span>
+          <template #title><span>我的操作日志</span></template>
         </el-menu-item>
           </el-menu>
         </div>
@@ -187,12 +194,44 @@
             恢复超级管理员
           </el-button>
           <div class="meta-info" v-if="!isMobile">
-            <span>{{ currentTimeText }}</span>
-            <span class="divider">|</span>
-            <span class="weather-info">
-              <span class="weather-icon" aria-hidden="true">{{ weatherEmoji }}</span>
-              <span>{{ weatherText }}</span>
-            </span>
+            <div
+              class="clock-widget"
+              role="timer"
+              :aria-label="clockAriaLabel"
+              aria-live="polite"
+            >
+              <span class="clock-widget__date">{{ clockDateText }}</span>
+              <span class="clock-widget__week">周{{ clockWeekdayText }}</span>
+              <span class="clock-widget__sep" aria-hidden="true" />
+              <time class="clock-widget__time" :datetime="clockIso">{{ clockTimeText }}</time>
+            </div>
+            <div
+              class="weather-widget"
+              :class="[
+                `weather-widget--${weatherTheme}`,
+                {
+                  'weather-widget--loading': weatherStatus === 'loading',
+                  'weather-widget--error': weatherStatus === 'error'
+                }
+              ]"
+              role="status"
+              :aria-label="weatherDisplay"
+            >
+              <span class="weather-widget__icon" aria-hidden="true">{{ weatherEmoji }}</span>
+              <div class="weather-widget__body">
+                <template v-if="weatherStatus === 'ok'">
+                  <span class="weather-widget__city">{{ weatherCity }}</span>
+                  <span class="weather-widget__desc">{{ weatherCondition }}</span>
+                </template>
+                <span v-else class="weather-widget__hint">
+                  {{ weatherStatus === 'error' ? '天气获取失败' : '天气定位中…' }}
+                </span>
+              </div>
+              <span
+                v-if="weatherStatus === 'ok' && weatherTempC != null"
+                class="weather-widget__temp"
+              >{{ weatherTempC }}<small>°C</small></span>
+            </div>
           </div>
           <el-tooltip content="站内信" placement="bottom">
             <el-button
@@ -238,8 +277,13 @@
           </el-dropdown>
         </div>
       </el-header>
+      <PageTabs />
       <el-main class="main">
-        <router-view :key="$route.fullPath" />
+        <router-view v-slot="{ Component, route }">
+          <keep-alive :include="keepAliveInclude" :max="30">
+            <component :is="Component" v-if="Component" :key="route.fullPath" />
+          </keep-alive>
+        </router-view>
       </el-main>
     </el-container>
     <el-drawer
@@ -268,9 +312,44 @@
           >
             恢复超管
           </el-button>
-          <span>{{ currentTimeText }}</span>
-          <span class="divider">|</span>
-          <span>{{ weatherText }}</span>
+          <div
+            class="clock-widget clock-widget--compact"
+            role="timer"
+            :aria-label="clockAriaLabel"
+            aria-live="polite"
+          >
+            <span class="clock-widget__date">{{ clockDateText }}</span>
+            <span class="clock-widget__week">周{{ clockWeekdayText }}</span>
+            <span class="clock-widget__sep" aria-hidden="true" />
+            <time class="clock-widget__time" :datetime="clockIso">{{ clockTimeText }}</time>
+          </div>
+          <div
+            class="weather-widget weather-widget--compact"
+            :class="[
+              `weather-widget--${weatherTheme}`,
+              {
+                'weather-widget--loading': weatherStatus === 'loading',
+                'weather-widget--error': weatherStatus === 'error'
+              }
+            ]"
+            role="status"
+            :aria-label="weatherDisplay"
+          >
+            <span class="weather-widget__icon" aria-hidden="true">{{ weatherEmoji }}</span>
+            <div class="weather-widget__body">
+              <template v-if="weatherStatus === 'ok'">
+                <span class="weather-widget__city">{{ weatherCity }}</span>
+                <span class="weather-widget__desc">{{ weatherCondition }}</span>
+              </template>
+              <span v-else class="weather-widget__hint">
+                {{ weatherStatus === 'error' ? '获取失败' : '定位中…' }}
+              </span>
+            </div>
+            <span
+              v-if="weatherStatus === 'ok' && weatherTempC != null"
+              class="weather-widget__temp"
+            >{{ weatherTempC }}<small>°</small></span>
+          </div>
         </div>
         <el-menu
           :default-active="sidebarActivePath"
@@ -280,38 +359,38 @@
         >
           <el-menu-item v-if="perm('reports', 'list')" index="/reports">
             <el-icon><DocumentCopy /></el-icon>
-            <span>报告管理</span>
+            <template #title><span>报告管理</span></template>
           </el-menu-item>
           <el-menu-item v-if="isSuperAdminUser" index="/reports/image-library">
             <el-icon><Picture /></el-icon>
-            <span>系统图片库</span>
+            <template #title><span>系统图片库</span></template>
           </el-menu-item>
           <el-menu-item v-if="perm('templates', 'use')" index="/report-templates">
             <el-icon><Files /></el-icon>
-            <span>报告模板管理</span>
+            <template #title><span>报告模板管理</span></template>
           </el-menu-item>
           <el-menu-item
             v-if="perm('qc_yearbooks', 'view') || perm('qc_yearbooks', 'upload')"
             index="/qc-yearbooks"
           >
             <el-icon><DataAnalysis /></el-icon>
-            <span>品质管控数据</span>
+            <template #title><span>品质管控数据</span></template>
           </el-menu-item>
           <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
             <el-icon><Link /></el-icon>
-            <span>二维码管理</span>
+            <template #title><span>二维码管理</span></template>
           </el-menu-item>
           <el-menu-item v-if="perm('stamps', 'manage') || perm('stamps', 'view')" index="/stamps">
             <el-icon><Medal /></el-icon>
-            <span>公司章管理</span>
+            <template #title><span>公司章管理</span></template>
           </el-menu-item>
           <el-menu-item v-if="perm('company', 'manage') || perm('company', 'view')" index="/company">
             <el-icon><OfficeBuilding /></el-icon>
-            <span>公司信息</span>
+            <template #title><span>公司信息</span></template>
           </el-menu-item>
           <el-menu-item v-if="perm('wecom', 'manage')" index="/wecom-notifications">
             <el-icon><ChatDotRound /></el-icon>
-            <span>企业微信通知</span>
+            <template #title><span>企业微信通知</span></template>
           </el-menu-item>
           <el-sub-menu v-if="showSalesMenu" index="sales-submenu-mobile" class="no-parent-active">
             <template #title>
@@ -349,6 +428,13 @@
             >
               <el-icon><Tickets /></el-icon>
               <span>合同管理</span>
+            </el-menu-item>
+            <el-menu-item
+              v-if="canAccessInvoiceCenter()"
+              index="/sales/invoices"
+            >
+              <el-icon><Tickets /></el-icon>
+              <span>开票中心</span>
             </el-menu-item>
           </el-sub-menu>
           <el-sub-menu v-if="isSuperAdminUser" index="account-submenu-mobile" class="no-parent-active">
@@ -401,7 +487,11 @@
           </el-sub-menu>
           <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
             <el-icon><Document /></el-icon>
-            <span>我的操作日志</span>
+            <template #title><span>我的操作日志</span></template>
+          </el-menu-item>
+          <el-menu-item index="/operation-guide">
+            <el-icon><Reading /></el-icon>
+            <template #title><span>操作指南</span></template>
           </el-menu-item>
         </el-menu>
       </div>
@@ -491,7 +581,13 @@
                 <el-tag size="small" effect="plain" class="msg-card__type-tag">{{ messageKindLabel(m) }}</el-tag>
                 <el-tag v-if="!m.read_at" type="danger" size="small" effect="plain" class="msg-card__badge">未读</el-tag>
               </div>
-              <div class="msg-card__body">{{ m.body_text }}</div>
+              <div class="msg-card__body" :class="{ 'msg-card__body--collapsed': !isMsgExpanded(m.id) }">{{ m.body_text }}</div>
+              <div v-if="m.body_text && m.body_text.length > 100" class="msg-card__toggle-wrap">
+                <span class="msg-card__toggle" @click.stop="toggleExpand(m.id)">
+                  {{ isMsgExpanded(m.id) ? '收起' : '展开全部' }}
+                  <el-icon :size="12"><ArrowDown v-if="!isMsgExpanded(m.id)" /><ArrowUp v-else /></el-icon>
+                </span>
+              </div>
               <div class="msg-card__time">{{ $dt(m.created_at) }}</div>
             </div>
           </div>
@@ -509,21 +605,28 @@
 <script>
 import { mapState } from 'pinia';
 import { ElNotification } from 'element-plus';
-import { isSuperAdmin, perm, canAccessSalesContractWorkspace } from '../utils/permissions';
+import { isSuperAdmin, perm, canAccessSalesContractWorkspace, canAccessInvoiceCenter, canManageContractInvoice } from '../utils/permissions';
 import { changePassword, getMe, listSalesMessages, logout as apiLogout, markSalesMessageRead } from '../api';
 import { resolveInternalMessageRoute } from '../utils/internalMessageNavigate';
 import { useAuthStore } from '../stores/auth';
+import { usePageTabsStore } from '../stores/pageTabs';
+import { resolvePageDesc, resolvePageTitle, resolveRouteComponentName } from '../utils/pageRouteMeta';
+import PageTabs from '../components/PageTabs.vue';
 import SidebarGuide from '../components/SidebarGuide.vue';
+import { ArrowDown, ArrowUp } from '@element-plus/icons-vue';
 
 export default {
   name: 'Layout',
-  components: { SidebarGuide },
+  components: { PageTabs, SidebarGuide, ArrowDown, ArrowUp },
   data() {
     return {
       isMenuCollapsed: false,
       loginName: '',
-      currentTimeText: '',
-      weatherText: '天气定位中...',
+      clockTimestamp: Date.now(),
+      weatherStatus: 'loading',
+      weatherCity: '',
+      weatherCondition: '',
+      weatherTempC: null,
       weatherCode: null,
       pwDialog: false,
       pwSaving: false,
@@ -540,6 +643,7 @@ export default {
       unreadMessageCount: 0,
       messagesOpen: false,
       messages: [],
+      expandedIds: [],
       /** all | notice | todo | system */
       messageInboxFilter: 'all',
       bellAlertAnimating: false,
@@ -548,6 +652,14 @@ export default {
   },
   computed: {
     ...mapState(useAuthStore, ['impersonationBackupActive', 'forceChangePassword', 'accountType', 'username', 'realName', 'employeeCategoryCode']),
+    ...mapState(usePageTabsStore, { pageTabsCachedNames: 'cachedComponentNames' }),
+    /** 始终包含当前页组件名，避免首次进入时 keep-alive include 未就绪 */
+    keepAliveInclude() {
+      const names = new Set(this.pageTabsCachedNames);
+      const currentName = resolveRouteComponentName(this.$route);
+      if (currentName) names.add(currentName);
+      return [...names];
+    },
     displayLoginName() {
       if (this.accountType === 'super_admin') return '超级管理员';
       const realName = String(this.realName || '').trim();
@@ -607,73 +719,56 @@ export default {
       return list.filter((m) => this.messageKind(m) === f);
     },
     pageTitle() {
-      const p = this.$route.path;
-      if (p === '/dashboard') return '控制台';
-      if (p === '/reports/image-library') return '系统图片库';
-      if (p === '/report-templates') return '报告模板管理';
-      if (p === '/qc-yearbooks') return '品质管控数据台账';
-      if (p.startsWith('/reports')) return '报告管理';
-      if (p.startsWith('/qrcodes')) return '二维码管理';
-      if (p.startsWith('/stamps')) return '公司章管理';
-      if (p.startsWith('/company')) return '公司信息';
-      if (p.startsWith('/wecom-notifications')) return '企业微信通知';
-      if (p === '/sales/messages') return '站内信';
-      if (p.startsWith('/sales/orders')) return '销售数据 · 订单管理';
-      if (p.startsWith('/sales/internal-models')) return '销售数据 · 内部型号管理';
-      if (p.startsWith('/sales/contracts/templates')) return '销售数据 · 合同模板';
-      if (p.startsWith('/sales/contracts/editor')) return '销售数据 · 编辑合同';
-      if (p.startsWith('/sales/contracts')) return '销售数据 · 合同管理';
-      if (p.startsWith('/employee-categories')) return '账号管理 · 员工类别';
-      if (p.startsWith('/departments')) return '账号管理 · 部门管理';
-      if (p.startsWith('/users')) return '账号管理 · 员工账号';
-      if (p.startsWith('/support-contact')) return '账号管理 · 技术支持联系';
-      if (p.startsWith('/backups')) return '安全中心 · 备份与恢复';
-      if (p === '/security') return '系统安全';
-      if (p.startsWith('/audit/login-logs')) return '安全中心 · 登录日志';
-      if (p.startsWith('/audit/operations')) return '安全中心 · 操作日志';
-      if (p.startsWith('/audit/errors')) return '安全中心 · 错误日志';
-      if (p.startsWith('/my-operation-logs')) return '我的操作日志';
-      if (p === '/operation-guide') return '操作指南';
-      return '控制台';
+      return resolvePageTitle(this.$route.path);
     },
     pageDesc() {
-      const p = this.$route.path;
-      if (p === '/dashboard') return '系统概览：报表趋势与状态分布';
-      if (p === '/reports') return '查询、编辑、作废报告，批量生成二维码';
-      if (p === '/report-templates') return '统一管理报告模板，支持新增、编辑、删除与克隆';
-      if (p === '/qc-yearbooks') return '按年维护成品检验台账，支持 Excel 导入与结构化编辑';
-      if (p === '/reports/image-library') return '仅超级管理员维护，供报告样式设计器选用（服务器存储）';
-      if (p.startsWith('/reports')) return '录入报告与自定义字段';
-      if (p.startsWith('/qrcodes')) return '查看二维码与绑定报告';
-      if (p.startsWith('/stamps')) return '上传公司章并设置激活章';
-      if (p.startsWith('/company')) return '管理logo、描述语、公司名与报告标题';
-      if (p.startsWith('/wecom-notifications'))
-        return '绑定企业微信应用、维护成员 UserID 与模板，生成 HTTP 调用示例';
-      if (p === '/sales/messages') return '查看通知与待办，管理收件箱';
-      if (p.startsWith('/sales/orders')) return '销售订单录入、审核、发货与质检二维码关联';
-      if (p.startsWith('/sales/internal-models')) return '维护销售内部型号编码、名称、状态与备注，支持订单字段配置权限下的CRUD操作';
-      if (p.startsWith('/sales/contracts/templates'))
-        return '参考新建报告：套用已有模板或推荐版式，编辑正文与预览后保存（与报告编辑页同类操作习惯）';
-      if (p.startsWith('/sales/contracts/editor'))
-        return '修改已生成合同的标题与正文 HTML，右侧预览版式；保存后更新合同草稿';
-      if (p.startsWith('/sales/contracts'))
-        return '参照报告管理：查询与分页浏览合同，正文预览与打印；模板维护对应报告的版式配置，订单流程单独追溯';
-      if (p.startsWith('/employee-categories')) return '维护品管、客服等类别及各类别默认权限';
-      if (p.startsWith('/departments')) return '多级部门架构，供员工归档与合同等环节选人';
-      if (p.startsWith('/users')) return '创建员工账号、分配类别与个性化权限';
-      if (p.startsWith('/support-contact')) return '配置技术工程师微信号，供全员在操作指南中复制';
-      if (p.startsWith('/backups')) return '数据库与文件备份包导出、完整性校验与注意事项';
-      if (p === '/security') return '密码策略、登录锁定、会话超时、日志保留';
-      if (p.startsWith('/audit/login-logs')) return '全部账号登录记录，不可删改';
-      if (p.startsWith('/audit/operations')) return '全站操作审计';
-      if (p.startsWith('/audit/errors')) return '服务端错误，可导出';
-      if (p.startsWith('/my-operation-logs')) return '仅本人操作记录';
-      if (p === '/operation-guide') return '功能说明、常见问题与联系技术工程师';
-      return '';
+      return resolvePageDesc(this.$route.path);
+    },
+    clockNow() {
+      return new Date(this.clockTimestamp || Date.now());
+    },
+    clockDateText() {
+      const n = this.clockNow;
+      const pad = (v) => String(v).padStart(2, '0');
+      return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`;
+    },
+    clockWeekdayText() {
+      return '日一二三四五六'[this.clockNow.getDay()];
+    },
+    clockTimeText() {
+      const n = this.clockNow;
+      const pad = (v) => String(v).padStart(2, '0');
+      return `${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`;
+    },
+    clockIso() {
+      return this.clockNow.toISOString();
+    },
+    clockAriaLabel() {
+      return `${this.clockDateText} 星期${this.clockWeekdayText} ${this.clockTimeText}`;
+    },
+    weatherDisplay() {
+      if (this.weatherStatus === 'loading') return '天气定位中';
+      if (this.weatherStatus === 'error') return '天气获取失败';
+      const temp = this.weatherTempC != null ? `${this.weatherTempC}°C` : '';
+      return [this.weatherCity, this.weatherCondition, temp].filter(Boolean).join(' ');
+    },
+    weatherTheme() {
+      if (this.weatherStatus !== 'ok') return 'neutral';
+      const code = Number(this.weatherCode);
+      if (!Number.isFinite(code)) return 'neutral';
+      if (code === 0 || code === 1) return 'sunny';
+      if (code === 2 || code === 3) return 'cloudy';
+      if (code === 45 || code === 48) return 'fog';
+      if ([51, 53, 55, 61, 63, 80, 81].includes(code)) return 'drizzle';
+      if ([65, 82].includes(code)) return 'rain';
+      if ([71, 73, 75].includes(code)) return 'snow';
+      if (code === 95) return 'storm';
+      return 'neutral';
     },
     weatherEmoji() {
       const code = Number(this.weatherCode);
-      if (!Number.isFinite(code)) return '🌤️';
+      if (this.weatherStatus === 'loading') return '📍';
+      if (this.weatherStatus === 'error' || !Number.isFinite(code)) return '🌤️';
       if (code === 0 || code === 1) return '☀️';
       if (code === 2 || code === 3) return '⛅';
       if (code === 45 || code === 48) return '🌫️';
@@ -685,6 +780,11 @@ export default {
     }
   },
   watch: {
+    '$route'(to) {
+      if (to.path === '/login') {
+        usePageTabsStore().reset();
+      }
+    },
     forceChangePassword(v) {
       if (v) {
         // 触发强制改密时：停止站内信轮询，避免持续 403
@@ -703,6 +803,9 @@ export default {
     }
   },
   async mounted() {
+    if (this.$route.path !== '/login') {
+      usePageTabsStore().syncFromRoute(this.$route);
+    }
     this.handleViewportChange();
     window.addEventListener('resize', this.handleViewportChange, { passive: true });
     const bindActivity = () => {
@@ -774,6 +877,16 @@ export default {
   methods: {
     perm,
     canAccessSalesContractWorkspace,
+    canAccessInvoiceCenter,
+    canManageContractInvoice,
+    isMsgExpanded(id) {
+      return this.expandedIds.includes(id);
+    },
+    toggleExpand(id) {
+      const i = this.expandedIds.indexOf(id);
+      if (i >= 0) this.expandedIds.splice(i, 1);
+      else this.expandedIds.push(id);
+    },
     resolveLoginName(user) {
       if (!user || typeof user !== 'object') return '';
       if (user.accountType === 'super_admin') return '超级管理员';
@@ -810,8 +923,14 @@ export default {
     /** `el-menu` 的 `router` 模式在部分环境下与 hash 路由不同步，改为显式 push */
     navigateByMenuIndex(index) {
       if (typeof index !== 'string' || !index.startsWith('/')) return;
-      /** 侧栏一级菜单均不应携带上一页的 query；否则合同页残留 customer_code 等会导致列表被筛空，且 el-menu 在同 path 下可能不再触发有效跳转 */
-      this.$router.push({ path: index, query: {} }).catch(() => {});
+      /** 侧栏一级菜单均不应携带上一页的 query；否则合同页残留 customer_code 等会导致列表被筛空 */
+      const target = { path: index, query: {} };
+      if (this.$route.path === target.path && !Object.keys(this.$route.query || {}).length) return;
+      this.$router.push(target).catch((err) => {
+        if (err?.name !== 'NavigationDuplicated') {
+          console.warn('[Layout] sidebar navigation failed', err);
+        }
+      });
     },
     onSidebarMenuSelect(index) {
       this.navigateByMenuIndex(index);
@@ -827,9 +946,7 @@ export default {
       if (this.$route.path !== '/dashboard') this.$router.push('/dashboard');
     },
     tickClock() {
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      this.currentTimeText = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      this.clockTimestamp = Date.now();
     },
     weatherCodeText(code) {
       const m = {
@@ -879,7 +996,10 @@ export default {
         const code = Number(cw.weathercode);
         const codeText = this.weatherCodeText(code);
         this.weatherCode = Number.isFinite(code) ? code : null;
-        this.weatherText = `${cityLabel} ${codeText} ${t}°C`;
+        this.weatherCity = cityLabel;
+        this.weatherCondition = codeText;
+        this.weatherTempC = Number.isFinite(t) ? t : null;
+        this.weatherStatus = 'ok';
         return true;
       } catch (_) {
         this.weatherCode = null;
@@ -887,6 +1007,7 @@ export default {
       }
     },
     async fetchWeather() {
+      this.weatherStatus = 'loading';
       try {
         const pos = await this.getCurrentPosition();
         const lat = Number(pos?.coords?.latitude);
@@ -901,7 +1022,10 @@ export default {
       // 定位失败时兜底开封
       const ok = await this.fetchWeatherByCoords(34.797049, 114.307583, '开封');
       if (!ok) {
-        this.weatherText = '天气获取失败';
+        this.weatherStatus = 'error';
+        this.weatherCity = '';
+        this.weatherCondition = '';
+        this.weatherTempC = null;
       }
     },
     openChangePassword() {
@@ -970,6 +1094,7 @@ export default {
         /** 网络异常时仍清本地会话 */
       }
       useAuthStore().clearSession();
+      usePageTabsStore().reset();
       this.$router.push('/login');
     },
     startSalesInternalMessagePolling() {
@@ -1226,6 +1351,10 @@ export default {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
+.aside.is-collapsed .aside-menu-wrap {
+  padding-left: 0;
+  padding-right: 0;
+}
 .aside-menu-wrap::-webkit-scrollbar {
   display: none;
 }
@@ -1243,27 +1372,28 @@ export default {
 .collapse-btn {
   margin-left: auto;
   color: rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  padding: 4px;
 }
 .collapse-btn:hover {
-  color: rgba(255, 255, 255, 0.8);
+  background: rgba(34, 197, 94, 0.14) !important;
+  color: #ffffff !important;
 }
 
 /* When sidebar is collapsed, only collapse button is shown in brand;
-   center it and adjust hover background. */
+   center it in the brand row. */
 .aside.is-collapsed .brand {
   justify-content: center;
+  margin-left: 8px;
+  margin-right: 8px;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .aside.is-collapsed .collapse-btn {
   margin-left: 0;
   width: 100%;
   justify-content: center;
-}
-
-.aside.is-collapsed .collapse-btn:hover {
-  background: rgba(34, 197, 94, 0.14) !important;
-  border-radius: 8px;
-  padding: 4px;
 }
 .logo {
   width: 38px;
@@ -1350,17 +1480,173 @@ export default {
 .meta-info {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: 12px;
   color: #64748b;
 }
-.weather-info {
+.clock-widget {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+  white-space: nowrap;
 }
-.weather-icon {
+.clock-widget__date,
+.clock-widget__week,
+.clock-widget__time {
+  font-variant-numeric: tabular-nums;
+}
+.clock-widget__week {
+  color: #94a3b8;
+}
+.clock-widget__sep {
+  width: 1px;
+  height: 10px;
+  background: #cbd5e1;
+  flex-shrink: 0;
+}
+.clock-widget__time {
+  font-size: 12px;
+  font-weight: 500;
+  color: #475569;
+}
+.clock-widget--compact {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.weather-widget {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  transition: box-shadow 0.25s ease, transform 0.2s ease;
+}
+.weather-widget:hover {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+.weather-widget__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
   line-height: 1;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.65);
+  flex-shrink: 0;
+}
+.weather-widget__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  line-height: 1.2;
+  min-width: 0;
+}
+.weather-widget__city {
+  font-size: 11px;
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.92;
+}
+.weather-widget__desc {
+  font-size: 10px;
+  opacity: 0.78;
+}
+.weather-widget__hint {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.weather-widget__temp {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  padding-left: 2px;
+  flex-shrink: 0;
+}
+.weather-widget__temp small {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.weather-widget--loading .weather-widget__icon {
+  animation: weather-pulse 1.4s ease-in-out infinite;
+}
+.weather-widget--sunny {
+  color: #92400e;
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 55%, #fde68a 100%);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+.weather-widget--cloudy {
+  color: #334155;
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+.weather-widget--fog {
+  color: #475569;
+  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+  border-color: rgba(100, 116, 139, 0.25);
+}
+.weather-widget--drizzle,
+.weather-widget--rain {
+  color: #1e40af;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 55%, #bfdbfe 100%);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+.weather-widget--snow {
+  color: #0c4a6e;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+.weather-widget--storm {
+  color: #312e81;
+  background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 55%, #c4b5fd 100%);
+  border-color: rgba(139, 92, 246, 0.35);
+}
+.weather-widget--neutral,
+.weather-widget--loading,
+.weather-widget--error {
+  color: #64748b;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+.weather-widget--error {
+  color: #b45309;
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+.weather-widget--compact {
+  margin-top: 6px;
+  width: 100%;
+  justify-content: flex-start;
+  border-radius: 12px;
+  padding: 8px 10px;
+}
+.weather-widget--compact .weather-widget__icon {
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
+}
+.weather-widget--compact .weather-widget__temp {
+  margin-left: auto;
+}
+@keyframes weather-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.75;
+  }
 }
 .divider {
   color: #cbd5e1;
@@ -1565,6 +1851,28 @@ export default {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.msg-card__body--collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msg-card__toggle-wrap {
+  margin-top: 4px;
+}
+.msg-card__toggle {
+  font-size: 12px;
+  color: #2563eb;
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.msg-card__toggle:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
 .msg-card__time {
   font-size: 11px;
   color: #94a3b8;
@@ -1660,6 +1968,8 @@ export default {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .main {
@@ -1680,11 +1990,15 @@ export default {
 }
 
 .mobile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   font-size: 12px;
   color: #64748b;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
 }
-
 .mobile-menu {
   color: #0f172a;
 }

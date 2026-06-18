@@ -255,6 +255,15 @@
                         >
                           从关联订单带入
                         </el-button>
+                        <el-button
+                          v-if="isContractMode && contractOrders.length"
+                          size="small"
+                          type="info"
+                          plain
+                          @click="goToRuleSettings"
+                        >
+                          管理计算规则
+                        </el-button>
                         <el-button v-if="!isContractMode" size="small" @click="editMode = 'raw'" icon=Edit>
                           去源码编辑插入占位符
                         </el-button>
@@ -262,9 +271,14 @@
                       <div class="table-form-wrap mt12">
                         <table class="table-form-editor">
                           <thead>
-                            <tr>
-                              <th v-for="(h, hi) in orderLineHeaders" :key="'h-' + hi">
-                                {{ h }}
+                            <tr class="table-letter-row">
+                              <th v-for="({ letter }, hi) in orderLineHeadersWithLetters" :key="'letter-' + hi">
+                                {{ letter }}
+                              </th>
+                            </tr>
+                            <tr class="table-header-row">
+                              <th v-for="({ header }, hi) in orderLineHeadersWithLetters" :key="'h-' + hi">
+                                {{ header }}
                               </th>
                             </tr>
                           </thead>
@@ -349,7 +363,7 @@
                   </template>
                   <p class="tpl-advanced-p" v-pre>
                     占位符均为「双大括号 + 英文代号」。必须与按钮插入的拼写完全一致；卖方公司名称来自「企业信息」；买方信息来自客户档案；编号与签订日期在生成合同草稿时写入。
-                    订单明细表（编辑时）：品名、型号、单价（元）、不含税单价（元）、单位（吨）、数量（桶）、不含税金额（元）、税率、税额（元）、价税合计（元）。保存/落库的合同正文会自动去掉「单价」列。生成草稿时：订单 unit_price 视为含税单价（元/吨），税率默认 13%（可用订单 tax_rate / vat_rate，支持 0.13 或 13 或 13%）；不含税单价=单价÷(1+税率)，不含税金额=不含税单价×吨，价税合计=单价×吨，税额=价税合计−不含税金额；单位（吨）=数量×规格（千克列加 kg 等后缀时换算为吨），均为两位小数四舍五入。
+                    订单明细表（编辑时）：品名、型号、单价（元）、不含税单价（元）、单位（吨）、数量（桶）、不含税金额（元）、税率、税额（元）、价税合计（元）。保存/落库的合同正文会自动去掉「单价」列。生成草稿时：订单 unit_price 视为含税单价（元/吨，订单列表以元/kg 展示），税率默认 13%（可用订单 tax_rate / vat_rate，支持 0.13 或 13 或 13%）；不含税单价=单价÷(1+税率)，不含税金额=不含税单价×吨，价税合计=单价×吨，税额=价税合计−不含税金额；单位（吨）=数量×规格（千克列加 kg 等后缀时换算为吨），均为两位小数四舍五入。
                   </p>
                 </el-collapse-item>
               </el-collapse>
@@ -453,7 +467,7 @@
           <!-- 电子签章画板 -->
           <div class="signature-section mt24">
             <h4 class="section-title">电子签章画板</h4>
-            <SignaturePad @signature-saved="onSignatureSaved" />
+            <SignaturePad :contractId="numericContractId" @signature-saved="onSignatureSaved" />
           </div>
 
           <div class="actions-bar mt24">
@@ -477,15 +491,13 @@ import {
   getSalesContract,
   patchSalesContract,
   replaceSalesContractDocument,
-  downloadSalesContractDocument
+  downloadSalesContractDocument,
+  lookupInternalModelProductName
 } from '../api';
 import { startDownload } from '../composables/useDownloadProgress.js';
 import ContractVersionDiff from '../components/ContractVersionDiff.vue';
 import SignaturePad from '../components/SignaturePad.vue';
-import {
-  BLANK_TPL_BODY,
-  previewFillContractTemplate
-} from '../utils/contractTemplateDefaults';
+import { BLANK_TPL_BODY } from '../utils/contractTemplateDefaults';
 import { createDefaultVisual, CONTRACT_ORDER_LINE_HEADERS, CONTRACT_ORDER_LINE_HEADERS_FINAL } from '../utils/contractVisualDefaults';
 import { parseContractHtmlToVisual } from '../utils/contractBodyToVisual';
 import {
@@ -501,6 +513,9 @@ import {
   isOrderLineTriggerColumn,
   ORDER_LINE_COL
 } from '../utils/contractOrderLineCalc';
+import { evaluateFormulaInWorker } from '../utils/formulaWorker';
+import { getCurrentOrderCalcRule, getCurrentTotalAmountTargetColIndex, getCurrentDecimalPlaces, getCurrentRoundingMode, sortFormulasByDependency } from '../utils/orderCalcRuleStore';
+import { setRoundingConfig } from '../utils/contractOrderLineCalc';
 import {
   finalizeContractBodyForPreview,
   CONTRACT_PREVIEW_TITLE_FONT
@@ -557,11 +572,63 @@ export default {
       approvalSteps: [],
       hasMultiApprovePerm: false,
       showDiffDialog: false
+      ,
+      // 公式
+      formulaText: '',
+      formulaTargetColIndex: 3,
+      formulas: [],
+      formulaPreview: '',
+      savedCurrentRule: null,
+      needsFormulaSave: false
     };
   },
   computed: {
     orderLineHeaders() {
       return CONTRACT_ORDER_LINE_HEADERS;
+    },
+    orderLineHeadersWithLetters() {
+      return this.orderLineHeaders.map((name, index) => ({
+        header: name,
+        letter: String.fromCharCode(65 + index)
+      }));
+    },
+    formulaRuleLetters() {
+      return this.formulas.length > 0
+        ? this.formulas.map((f) => {
+            const target = this.orderLineHeadersWithLetters[f.targetColIndex];
+            if (!target) return f.formulaText;
+            return `${target.letter} = ${f.formulaText}`;
+          }).join('； ')
+        : '';
+    },
+    formulaRuleHeaders() {
+      return this.formulas.length > 0
+        ? this.formulas.map((f) => {
+            const hdrs = this.orderLineHeadersWithLetters.reduce((acc, item) => {
+              const letterReg = new RegExp(`\\b${item.letter}\\b`, 'g');
+              return acc.replace(letterReg, item.header);
+            }, f.formulaText);
+            const target = this.orderLineHeadersWithLetters[f.targetColIndex];
+            if (!target) return hdrs;
+            return `${target.header} = ${hdrs}`;
+          }).join('； ')
+        : '';
+    },
+    builtInCalcRuleLetters() {
+      return this.formulaRuleLetters || [
+        'D = ROUND(C / (1 + H), 2)',
+        'G = D * E',
+        'J = C * E',
+        'I = J - G'
+      ].join('； ');
+    },
+    builtInCalcRuleHeaders() {
+      return this.formulaRuleHeaders || [
+        '不含税单价 = ROUND(含税单价 / (1 + 税率), 2)',
+        '不含税金额 = 不含税单价 × 吨',
+        '价税合计 = 含税单价 × 吨',
+        '税额 = 价税合计 - 不含税金额'
+      ].join('； ');
     },
     orderLineTotalDisplay() {
       return (this.visual?.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
@@ -592,6 +659,17 @@ export default {
     routeEditKey() {
       return `${this.contractId ?? ''}|${this.id ?? ''}`;
     },
+    effectiveTotalAmountTargetColIndex() {
+      const fromVisual = this.visual?.totalAmountTargetColIndex;
+      if (Number.isFinite(Number(fromVisual))) return Number(fromVisual);
+      return getCurrentTotalAmountTargetColIndex();
+    },
+    roundingCfg() {
+      return {
+        decimalPlaces: getCurrentDecimalPlaces(),
+        roundingMode: getCurrentRoundingMode()
+      };
+    },
     /** 合同且正文未能拆成表单：锁定可视化字段，避免误操作覆盖原文 */
     contractBodyPreserveLocked() {
       return this.isContractMode && this.contractParseFailed;
@@ -603,7 +681,7 @@ export default {
       }
       const useVisual = this.editMode === 'visual' || this.isContractMode;
       const html = useVisual ? this.visualToBodyHtml() : this.form.body_html;
-      if (!useVisual) return previewFillContractTemplate(html);
+      if (!useVisual) return html.replace(/{{[^}]+}}/g, '');
       const totalDisplay = String(this.visual?.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
       const withVisualLines = String(html || '')
         .replaceAll(
@@ -616,7 +694,7 @@ export default {
           skipOrderLinesFromOrders: true
         });
       }
-      return previewFillContractTemplate(withVisualLines);
+      return withVisualLines.replace(/{{[^}]+}}/g, '');
     }
   },
   watch: {
@@ -717,6 +795,12 @@ export default {
         .catch(err => this.$message.error('设置失败'));
     },
 
+    onSignatureSaved(signatureUrl) {
+      if (signatureUrl) {
+        this.$message.success('签章已保存');
+      }
+    },
+
     unlockContractVisualReplaceBody() {
       this.$confirm(
         '将用「推荐版式」的空表单替换当前合同正文，当前排版与文字会丢失。确定继续吗？',
@@ -795,6 +879,10 @@ export default {
           CUSTOMER_ADDRESS: c.customer_address != null ? String(c.customer_address) : '',
           CUSTOMER_CONTACT: c.customer_contact != null ? String(c.customer_contact) : '',
           CUSTOMER_PHONE: c.customer_phone != null ? String(c.customer_phone) : '',
+          CUSTOMER_FAX: c.customer_fax != null ? String(c.customer_fax) : '',
+          CUSTOMER_BANK: c.customer_bank != null ? String(c.customer_bank) : '',
+          CUSTOMER_ACCOUNT: c.customer_account != null ? String(c.customer_account) : '',
+          CUSTOMER_TAX_ID: c.customer_tax_id != null ? String(c.customer_tax_id) : '',
           CONTRACT_NO: c.contract_no != null ? String(c.contract_no) : '',
           COMPANY_NAME_ZH: c.company_name_zh != null ? String(c.company_name_zh) : ''
         };
@@ -813,18 +901,47 @@ export default {
         }
         if (parsed) {
           this.contractParseFailed = false;
-          this.visual = parsed;
+            this.visual = parsed;
+            // 将已保存的公式同步到 UI
+            this.formulaText = String(this.visual.formulaText || '');
+            this.formulaTargetColIndex = Number.isFinite(Number(this.visual.formulaTargetColIndex)) ? Number(this.visual.formulaTargetColIndex) : this.formulaTargetColIndex;
+            this.formulas = Array.isArray(this.visual.formulas) ? this.visual.formulas.map(f => ({ ...f })) : [];
           this.normalizePartyVisual();
+          this.autoFillBuyerFromCustomer();
           this.ensureTableRowSpecsLength();
-          enrichVisualOrderLinesFromContractOrders(this.visual, this.contractOrders);
+          const modelProductMap = await this.buildModelProductNameMap(this.contractOrders);
+          enrichVisualOrderLinesFromContractOrders(this.visual, this.contractOrders, getCurrentTotalAmountTargetColIndex(), modelProductMap);
+          await this.loadCurrentSavedOrderCalcRule();
+          // 应用已保存的公式规则（若有）
+          const hadFormulasBefore = Array.isArray(this.visual?.formulas) && this.visual.formulas.length > 0;
+          await this.applySavedFormulaRules();
+          const hasFormulasNow = Array.isArray(this.visual?.formulas) && this.visual.formulas.length > 0;
+          if (hasFormulasNow && !hadFormulasBefore) {
+            this.needsFormulaSave = true;
+          }
           this.editMode = 'visual';
           this.form.name = title;
           this.syncContractBodyHtmlFromVisual();
+          if (this.needsFormulaSave) {
+            this.needsFormulaSave = false;
+            try {
+              const payload = {
+                body_html: this.form.body_html,
+                contract_visual: (await import('../utils/contractVisualSnapshot')).buildContractVisualSnapshot(this.visual)
+              };
+              const { patchSalesContract } = await import('../api');
+              await patchSalesContract(this.numericContractId, payload);
+            } catch (_e) {
+              // 静默：公式保存失败不影响编辑器使用，用户可手动保存
+            }
+          }
         } else {
           this.contractParseFailed = true;
           this.visual = createDefaultVisual();
+          this.normalizePartyVisual();
+          this.autoFillBuyerFromCustomer();
           this.editMode = 'visual';
-          this.form = { name: title, body_html: html };
+          this.form = { name: title, body_html: this.patchBuyerInBodyHtml(html) };
           this.$message.warning(
             '当前正文无法拆成标准表单，已锁定左侧表单项；右侧为真实合同预览。可改标题后保存，或点「改用推荐版式」再编辑正文。'
           );
@@ -849,7 +966,7 @@ export default {
      * 将已保存的 HTML 同步到左侧可视化模型；失败则切到源码编辑，避免「可视化仍是空表单却保存了库里旧 HTML」。
      * @returns {boolean} 是否成功解析为可视化
      */
-    syncTemplateBodyToVisualState(html) {
+    async syncTemplateBodyToVisualState(html) {
       const h = String(html || '');
       const base = createDefaultVisual();
       const TPL_OUTER_WRAP =
@@ -860,8 +977,13 @@ export default {
       }
       if (parsed) {
         this.visual = parsed;
+        // 将已保存的公式同步到 UI
+        this.formulaText = String(this.visual.formulaText || '');
+        this.formulaTargetColIndex = Number.isFinite(Number(this.visual.formulaTargetColIndex)) ? Number(this.visual.formulaTargetColIndex) : this.formulaTargetColIndex;
+        this.formulas = Array.isArray(this.visual.formulas) ? this.visual.formulas.map(f => ({ ...f })) : [];
         this.normalizePartyVisual();
         this.editMode = 'visual';
+        await this.applySavedFormulaRules();
         this.form.body_html = this.visualToBodyHtml();
         return true;
       }
@@ -881,7 +1003,7 @@ export default {
         const d = await getContractTemplate(this.numericId);
         const t = d.template;
         this.form = { name: t.name || '', body_html: '' };
-        const ok = this.syncTemplateBodyToVisualState(t.body_html || '');
+        const ok = await this.syncTemplateBodyToVisualState(t.body_html || '');
         if (!ok) {
           this.$message.warning(
             '当前模板正文无法拆成可视化表单，已切换到源码编辑；请直接修改 HTML 后保存。'
@@ -897,13 +1019,13 @@ export default {
       try {
         const d = await getContractTemplate(this.selectedTemplateId);
         const t = d.template;
-        const apply = () => {
+        const apply = async () => {
           this.form.body_html = t.body_html || '';
           if (!this.form.name?.trim() && t.name) {
             this.form.name = `${t.name}（副本）`;
           }
           if (this.editMode === 'visual') {
-            const ok = this.syncTemplateBodyToVisualState(this.form.body_html);
+            const ok = await this.syncTemplateBodyToVisualState(this.form.body_html);
             if (!ok) {
               this.$message.warning('套用后的正文无法拆成可视化表单，已切换到源码编辑。');
             }
@@ -912,7 +1034,7 @@ export default {
         if ((this.form.body_html || '').trim()) {
           await this.$confirm('套用模板将覆盖当前正文，确定吗？', '提示', { type: 'warning' });
         }
-        apply();
+        await apply();
         this.$message.success('已套用');
       } catch {
         this.$message.error('加载模板失败');
@@ -1012,14 +1134,48 @@ export default {
     },
     onOrderLineCellInput(ri, cj) {
       if (this.contractParseFailed) return;
+      if (cj === ORDER_LINE_COL.MODEL) {
+        this.scheduleModelToProductNameLookup(ri, cj);
+      }
       if (!isOrderLineTriggerColumn(cj)) return;
       this.scheduleOrderLineRowRecalc(ri, cj);
     },
     onOrderLineCellChange(ri, cj) {
       if (this.contractParseFailed) return;
+      if (cj === ORDER_LINE_COL.MODEL) {
+        this.flushModelToProductNameLookup(ri);
+        this.lookupModelToProductName(ri);
+      }
       if (!isOrderLineTriggerColumn(cj)) return;
       this.flushOrderLineRowRecalc(ri);
       this.recalcOrderLineRow(ri, cj);
+    },
+    scheduleModelToProductNameLookup(ri) {
+      if (!this._modelLookupTimers) this._modelLookupTimers = {};
+      clearTimeout(this._modelLookupTimers[ri]);
+      this._modelLookupTimers[ri] = setTimeout(() => {
+        delete this._modelLookupTimers[ri];
+        this.lookupModelToProductName(ri);
+      }, 400);
+    },
+    flushModelToProductNameLookup(ri) {
+      if (!this._modelLookupTimers) return;
+      clearTimeout(this._modelLookupTimers[ri]);
+      delete this._modelLookupTimers[ri];
+    },
+    async lookupModelToProductName(ri) {
+      if (this.contractParseFailed) return;
+      const row = this.visual.tableRows?.[ri];
+      if (!row) return;
+      const model = String(row[ORDER_LINE_COL.MODEL] ?? '').trim().toUpperCase();
+      if (!model) return;
+      try {
+        const result = await lookupInternalModelProductName(model);
+        if (result && result.product_name) {
+          row[ORDER_LINE_COL.PRODUCT_NAME] = result.product_name;
+          this.visual.tableRows.splice(ri, 1, [...row]);
+        }
+      } catch { /* 静默 */ }
     },
     scheduleOrderLineRowRecalc(ri, editedCol) {
       if (!this._orderLineRecalcTimers) this._orderLineRecalcTimers = {};
@@ -1049,7 +1205,7 @@ export default {
         editedCol
       });
       this.visual.tableRows.splice(ri, 1, patched);
-      const totalText = buildTableTotalTextFromEditorRows(this.visual.tableRows);
+      const totalText = buildTableTotalTextFromEditorRows(this.visual.tableRows, getCurrentTotalAmountTargetColIndex());
       if (totalText) {
         this.visual.tableTotalText = totalText;
       }
@@ -1063,19 +1219,122 @@ export default {
           editedCol: ORDER_LINE_COL.GROSS_UNIT
         })
       );
-      this.visual.tableTotalText = buildTableTotalTextFromEditorRows(this.visual.tableRows);
+      this.visual.tableTotalText = buildTableTotalTextFromEditorRows(this.visual.tableRows, getCurrentTotalAmountTargetColIndex());
       this.$message.success('已按单价重算');
     },
-    fillOrderLinesFromContractOrders() {
-      const { rows, orderSpecs } = editorRowsFromContractOrders(this.contractOrders);
+    async applyFormulasToRow(row, formulas) {
+      let next = Array.isArray(row) ? [...row] : Array.from({ length: this.orderLineHeaders.length }, () => '');
+      const sorted = sortFormulasByDependency(formulas);
+      for (const f of sorted) {
+        if (!f.formulaText) continue;
+        const val = await evaluateFormulaInWorker(f.formulaText, next, this.roundingCfg.decimalPlaces, this.roundingCfg.roundingMode);
+        next[f.targetColIndex] = val;
+      }
+      return next;
+    },
+    async previewFormula() {
+      const formulas = this.formulas.filter(f => f.formulaText.trim());
+      if (!formulas.length || !this.visual.tableRows || !this.visual.tableRows.length) {
+        this.formulaPreview = '';
+        this.$message.warning('请先输入公式并确保表中有行');
+        return;
+      }
+      const sample = this.visual.tableRows[0] || [];
+      try {
+        const updated = await this.applyFormulasToRow(sample, formulas);
+        const lastFormula = formulas[formulas.length - 1];
+        this.formulaPreview = updated[lastFormula.targetColIndex];
+        if (!this.visual) this.visual = {};
+        this.visual.formulas = formulas.map(f => ({ formulaText: f.formulaText, targetColIndex: f.targetColIndex }));
+        this.visual.formulaText = formulas[0].formulaText;
+        this.visual.formulaTargetColIndex = formulas[0].targetColIndex;
+        this.$message.info('已生成首行预览');
+      } catch (e) {
+        this.formulaPreview = '';
+        this.$message.error('公式预览失败');
+      }
+    },
+    async applyFormulaToAll() {
+      const formulas = this.formulas.filter(f => f.formulaText.trim());
+      if (!formulas.length) {
+        this.$message.warning('请先输入公式');
+        return;
+      }
+      if (!Array.isArray(this.visual.tableRows) || !this.visual.tableRows.length) {
+        this.$message.warning('表中无数据');
+        return;
+      }
+      if (!this.visual) this.visual = {};
+      this.visual.formulas = formulas.map(f => ({ formulaText: f.formulaText, targetColIndex: f.targetColIndex }));
+      this.visual.formulaText = formulas[0].formulaText;
+      this.visual.formulaTargetColIndex = formulas[0].targetColIndex;
+
+      const sorted = sortFormulasByDependency(formulas);
+      let currentRows = this.visual.tableRows.map(row => Array.isArray(row) ? [...row] : []);
+      for (const f of sorted) {
+        if (!f.formulaText) continue;
+        const results = await Promise.all(
+          currentRows.map((row) => evaluateFormulaInWorker(f.formulaText, row, this.roundingCfg.decimalPlaces, this.roundingCfg.roundingMode))
+        );
+        currentRows = currentRows.map((row, ri) => {
+          const next = [...row];
+          next[f.targetColIndex] = results[ri];
+          return next;
+        });
+      }
+      this.visual.tableRows = currentRows;
+      this.visual.tableTotalText = buildTableTotalTextFromEditorRows(currentRows, getCurrentTotalAmountTargetColIndex());
+      this.$message.success('公式已应用到全部行');
+    },
+    async loadCurrentSavedOrderCalcRule() {
+      const rule = getCurrentOrderCalcRule();
+      if (!rule) {
+        const fallbackDp = this.visual?.decimalPlaces ?? 2;
+        const fallbackRm = this.visual?.roundingMode ?? 'round';
+        setRoundingConfig(fallbackDp, fallbackRm);
+        return;
+      }
+      this.savedCurrentRule = rule;
+      const ruleFormulas = rule.formulas && rule.formulas.length > 0
+        ? rule.formulas.map(f => ({ formulaText: f.formulaText, targetColIndex: f.targetColIndex }))
+        : [{ formulaText: rule.formulaText || '', targetColIndex: rule.formulaTargetColIndex != null ? rule.formulaTargetColIndex : 3 }];
+      if (!this.formulaText && ruleFormulas.length > 0) {
+        this.formulas = ruleFormulas;
+        this.formulaText = ruleFormulas[0].formulaText;
+        this.formulaTargetColIndex = ruleFormulas[0].targetColIndex;
+        if (!this.visual) this.visual = {};
+        this.visual.formulas = ruleFormulas;
+        this.visual.formulaText = this.formulaText;
+        this.visual.formulaTargetColIndex = this.formulaTargetColIndex;
+        this.visual.formulaRuleId = rule.id;
+      }
+      this.visual.totalAmountTargetColIndex = rule.totalAmountTargetColIndex;
+      setRoundingConfig(rule.decimalPlaces, rule.roundingMode);
+    },
+    async fillOrderLinesFromContractOrders() {
+      const modelProductMap = await this.buildModelProductNameMap(this.contractOrders);
+      const { rows, orderSpecs } = editorRowsFromContractOrders(this.contractOrders, modelProductMap);
       if (!rows.length) {
         this.$message.warning('关联订单缺少单价或数量，无法带入');
         return;
       }
       this.visual.tableRows = rows;
       this.visual.tableRowSpecs = orderSpecs;
-      this.visual.tableTotalText = buildTableTotalTextFromEditorRows(rows);
+      this.visual.tableTotalText = buildTableTotalTextFromEditorRows(rows, getCurrentTotalAmountTargetColIndex());
       this.$message.success('已从关联订单填入并重算');
+    },
+    async buildModelProductNameMap(orders) {
+      const models = [...new Set((orders || []).map((o) => String(o?.product_model ?? '').trim().toUpperCase()).filter(Boolean))];
+      if (!models.length) return {};
+      const customerId = orders[0]?.customer_id;
+      const map = {};
+      for (const model of models) {
+        try {
+          const result = await lookupInternalModelProductName(model, customerId);
+          if (result && result.product_name) map[model.toUpperCase()] = result.product_name;
+        } catch { /* 静默，不影响加载 */ }
+      }
+      return map;
     },
     ensureTableRowSpecsLength() {
       const n = (this.visual.tableRows || []).length;
@@ -1133,15 +1392,122 @@ export default {
       if (!Array.isArray(this.visual[key])) this.visual[key] = [];
       this.visual[key].push(createEmptyPartyItem());
     },
+    /**
+     * 将 visual 中保存的公式规则应用于表格（在加载合同或模板后调用）
+     */
+    async applySavedFormulaRules() {
+      try {
+        const formulas = Array.isArray(this.visual?.formulas) && this.visual.formulas.length > 0
+          ? this.visual.formulas
+          : (this.visual?.formulaText
+              ? [{ formulaText: String(this.visual.formulaText).trim(), targetColIndex: Number.isFinite(Number(this.visual.formulaTargetColIndex)) ? Number(this.visual.formulaTargetColIndex) : 3 }]
+              : []);
+        if (!formulas.length || !Array.isArray(this.visual.tableRows)) return;
+        const sorted = sortFormulasByDependency(formulas);
+        let currentRows = this.visual.tableRows.map(row => Array.isArray(row) ? [...row] : []);
+        for (const f of sorted) {
+          if (!f.formulaText) continue;
+          const results = await Promise.all(
+            currentRows.map((row) => evaluateFormulaInWorker(f.formulaText, row, this.roundingCfg.decimalPlaces, this.roundingCfg.roundingMode))
+          );
+          currentRows = currentRows.map((row, ri) => {
+            const next = [...row];
+            next[f.targetColIndex] = results[ri];
+            return next;
+          });
+        }
+        this.visual.tableRows = currentRows;
+        this.visual.tableTotalText = buildTableTotalTextFromEditorRows(currentRows, getCurrentTotalAmountTargetColIndex());
+      } catch (e) {
+        console.warn('应用公式规则失败', e);
+      }
+    },
     removePartyItem(side, index) {
       this.normalizePartyVisual();
       const key = side === 'buyer' ? 'partyBuyerItems' : 'partySellerItems';
       const arr = this.visual[key] || [];
       arr.splice(index, 1);
     },
+    autoFillBuyerFromCustomer() {
+      if (!this.contractPreviewVars || !this.visual) return;
+      const vars = this.contractPreviewVars;
+      const BUYER_LABEL_TO_KEY = {
+        '单位': 'CUSTOMER_NAME',
+        '地址': 'CUSTOMER_ADDRESS',
+        '联系人': 'CUSTOMER_CONTACT',
+        '电话': 'CUSTOMER_PHONE',
+        '传真': 'CUSTOMER_FAX',
+        '开户银行': 'CUSTOMER_BANK',
+        '账号': 'CUSTOMER_ACCOUNT',
+        '税号': 'CUSTOMER_TAX_ID'
+      };
+      const HEADER_LABEL_TO_KEY = { '买方': 'CUSTOMER_NAME' };
+      const resolveKey = (item, labelMap) => {
+        if (item.fallback) {
+          const m = String(item.fallback).match(/^\{\{(\w+)\}\}$/);
+          if (m) return m[1];
+        }
+        return labelMap[String(item.label || '').trim()] || '';
+      };
+      const fillItems = (items, labelMap) => {
+        if (!Array.isArray(items)) return items;
+        return items.map(item => {
+          const key = resolveKey(item, labelMap);
+          if (!key) return { ...item };
+          const val = vars[key];
+          if (val != null && String(val).trim()) {
+            return { ...item, value: String(val) };
+          }
+          return { ...item };
+        });
+      };
+      this.visual.partyBuyerItems = fillItems(this.visual.partyBuyerItems, BUYER_LABEL_TO_KEY);
+      this.visual.headerItemsLeft = fillItems(this.visual.headerItemsLeft, HEADER_LABEL_TO_KEY);
+    },
+    patchBuyerInBodyHtml(html) {
+      if (!this.contractPreviewVars) return html;
+      const vars = this.contractPreviewVars;
+      const mapping = [
+        ['单位', vars.CUSTOMER_NAME],
+        ['地址', vars.CUSTOMER_ADDRESS],
+        ['联系人', vars.CUSTOMER_CONTACT],
+        ['电话', vars.CUSTOMER_PHONE],
+        ['传真', vars.CUSTOMER_FAX],
+        ['开户银行', vars.CUSTOMER_BANK],
+        ['账号', vars.CUSTOMER_ACCOUNT],
+        ['税号', vars.CUSTOMER_TAX_ID]
+      ];
+      let s = String(html || '');
+      const buyerMatch = s.match(/<td[^>]*>\s*<div[^>]*>\s*买方\s*<\/div>\s*<div[^>]*>([\s\S]*?)<\/div>\s*<\/td>/i);
+      if (!buyerMatch) return s;
+      let inner = buyerMatch[1];
+      for (const [label, val] of mapping) {
+        if (val == null) continue;
+        const re = new RegExp(`(${label}[：:])([^<]*)`, 'g');
+        inner = inner.replace(re, `$1${String(val)}`);
+      }
+      return s.replace(buyerMatch[1], inner);
+    },
+    goToRuleSettings() {
+      // 优先使用 visual 中保存的规则 id，其次使用已加载的 savedCurrentRule，再回退到 store 中的当前规则
+      const visualId = this.visual && this.visual.formulaRuleId;
+      const savedId = this.savedCurrentRule && this.savedCurrentRule.id;
+      const current = getCurrentOrderCalcRule();
+      const storeId = current && current.id;
+      const ruleId = visualId || savedId || storeId;
+      if (ruleId) {
+        this.$router.push({ path: '/sales/contracts/rule-settings', query: { ruleId } });
+      } else {
+        this.$router.push('/sales/contracts/rule-settings');
+      }
+    },
     /** 合同编辑：将可视化订单表写入 body_html（落库/预览与左侧表单一致） */
     syncContractBodyHtmlFromVisual() {
       if (!this.isContractMode || this.contractParseFailed) return;
+      if (!this.visual) this.visual = {};
+      if (this.visual.totalAmountTargetColIndex == null) {
+        this.visual.totalAmountTargetColIndex = getCurrentTotalAmountTargetColIndex();
+      }
       const bodyWithPlaceholder = this.visualToBodyHtml();
       const totalDisplay =
         String(this.visual?.tableTotalText || '').trim() || '{{AMOUNT_TOTAL_CN}}（￥{{AMOUNT_TOTAL}}）';
@@ -1537,7 +1903,7 @@ export default {
   background: #fff;
   border: 1px solid #000;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
-  padding: 25.4mm 31.7mm;
+  padding: 15mm 20mm;
   transform-origin: top left;
   transform: scale(var(--a4-scale, 0.55));
   font-family: FangSong_GB2312, 仿宋_GB2312, 仿宋, FangSong;
@@ -1592,7 +1958,6 @@ export default {
 .preview-a4 :deep(table.contract-order-lines th),
 .preview-a4 :deep(table.contract-order-lines td) {
   padding: 5px 10px;
-  white-space: nowrap;
 }
 .preview-a4 :deep(.party-table) {
   page-break-inside: avoid;
@@ -1741,6 +2106,39 @@ export default {
 .table-form-editor td:nth-child(1),
 .table-form-editor td:nth-child(2) {
   white-space: nowrap;
+}
+.table-form-editor .table-letter-row th {
+  background: #f5f7fa;
+  color: #606266;
+  font-weight: 700;
+  text-align: center;
+  height: 32px;
+  line-height: 32px;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+.table-form-editor .table-header-row th {
+  background: #fafbfc;
+  color: #606266;
+}
+.formula-rule-display {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.formula-rule-display .rule-line {
+  margin-top: 4px;
+}
+.formula-rule-display .rule-line:first-child {
+  margin-top: 0;
+}
+.formula-rule-display .rule-multiline {
+  white-space: pre-wrap;
+  line-height: 1.5;
+  margin-left: 12px;
 }
 .table-form-editor :deep(.el-input__wrapper) {
   box-shadow: none;

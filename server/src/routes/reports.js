@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getPool } from '../db/pool.js';
 import { getReportCustomerPayload } from '../lib/reportCustomerPayload.js';
 import { sanitizeReportPutBody } from '../lib/reportWriteSanitize.js';
+import { normalizeReportDateFieldsInPayload } from '../lib/reportDateNormalize.js';
 import { logOperationFromReq } from '../lib/audit.js';
 import { requireAuth, requireAnyPermission, requirePermission } from '../middleware/auth.js';
 import { hasPermission } from '../lib/permissions.js';
@@ -37,6 +38,7 @@ const upsertReportSchema = z.object({
   batchNoEn: z.string().max(128).optional().nullable(),
   productName: z.string().min(1).max(128),
   productNameEn: z.string().max(128).optional().nullable(),
+  customerId: z.number().int().positive().optional().nullable(),
   templateId: z.number().int().positive().optional().nullable(),
   conclusion: z.enum(['pass', 'fail', 'unknown']).optional(),
   fields: z.array(fieldSchema).optional()
@@ -210,21 +212,28 @@ router.get('/', requirePermission('reports', 'list'), async (req, res) => {
   const q = String(req.query.q || '').trim();
   const batchNo = String(req.query.batchNo || '').trim();
   const status = String(req.query.status || '').trim(); // active|void
+  const customerIdRaw = req.query.customerId ?? req.query.customer_id;
+  const customerId =
+    customerIdRaw != null && String(customerIdRaw).trim() !== '' ? Number(customerIdRaw) : null;
   const limit = Math.min(Number(req.query.limit || 50), 200);
   const offset = Math.max(Number(req.query.offset || 0), 0);
 
   const where = [];
   const params = [];
   if (q) {
-    where.push('(report_no LIKE ? OR product_name LIKE ? OR report_uid LIKE ?)');
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+    where.push('(r.report_no LIKE ? OR r.product_name LIKE ? OR r.report_uid LIKE ? OR c.customer_name LIKE ? OR c.contact_name LIKE ?)');
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
   if (batchNo) {
-    where.push('batch_no = ?');
+    where.push('r.batch_no = ?');
     params.push(batchNo);
   }
+  if (Number.isFinite(customerId) && customerId > 0) {
+    where.push('r.customer_id = ?');
+    params.push(customerId);
+  }
   if (status === 'active' || status === 'void') {
-    where.push('status = ?');
+    where.push('r.status = ?');
     params.push(status);
   }
 
@@ -232,15 +241,20 @@ router.get('/', requirePermission('reports', 'list'), async (req, res) => {
   const pool = getPool();
   const [countRows] = await pool.query(
     `SELECT COUNT(*) AS total
-     FROM reports
+     FROM reports r
+     LEFT JOIN sales_customers c ON c.id = r.customer_id
      ${sqlWhere}`,
     params
   );
   const [rows] = await pool.query(
-    `SELECT id, report_uid AS reportUid, report_no AS reportNo, batch_no AS batchNo, product_name AS productName, conclusion, status, created_at AS createdAt, updated_at AS updatedAt
-     FROM reports
+    `SELECT r.id, r.report_uid AS reportUid, r.report_no AS reportNo, r.batch_no AS batchNo,
+            r.product_name AS productName, r.customer_id AS customerId,
+            c.customer_name AS customerName, c.contact_name AS customerContact,
+            r.conclusion, r.status, r.created_at AS createdAt, r.updated_at AS updatedAt
+     FROM reports r
+     LEFT JOIN sales_customers c ON c.id = r.customer_id
      ${sqlWhere}
-     ORDER BY id DESC
+     ORDER BY r.id DESC
      LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
@@ -250,6 +264,93 @@ router.get('/', requirePermission('reports', 'list'), async (req, res) => {
 router.get('/suggest-report-no', requirePermission('reports', 'create'), async (req, res) => {
   res.json({ reportNo: FIXED_REPORT_NO });
 });
+
+/** 产品名称联想：历史报告、内部型号、订单标签型号 */
+router.get(
+  '/suggest-product-names',
+  requireAnyPermission('reports', ['create', 'edit']),
+  async (req, res, next) => {
+    try {
+      const q = String(req.query.q || req.query.productName || '').trim();
+      const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 50);
+      if (!q) return res.json({ items: [] });
+
+      const pool = getPool();
+      const like = `%${q}%`;
+      const qUpper = q.toUpperCase();
+      const likeUpper = `%${qUpper}%`;
+
+      const [reportRows] = await pool.query(
+        `SELECT DISTINCT TRIM(product_name) AS name
+         FROM reports
+         WHERE status = 'active' AND TRIM(product_name) <> ''
+           AND (product_name LIKE ? OR product_name LIKE ?)
+         ORDER BY product_name ASC
+         LIMIT ?`,
+        [like, likeUpper, limit]
+      );
+
+      const [modelRows] = await pool.query(
+        `SELECT DISTINCT TRIM(internal_code) AS name
+         FROM sales_internal_models
+         WHERE is_active = 1 AND TRIM(internal_code) <> ''
+           AND (internal_code LIKE ? OR internal_code LIKE ?)
+         ORDER BY internal_code ASC
+         LIMIT ?`,
+        [like, likeUpper, limit]
+      );
+
+      const [aliasRows] = await pool.query(
+        `SELECT DISTINCT TRIM(name) AS name
+         FROM sales_internal_models
+         WHERE is_active = 1 AND name IS NOT NULL AND TRIM(name) <> ''
+           AND (name LIKE ? OR name LIKE ?)
+         ORDER BY name ASC
+         LIMIT ?`,
+        [like, likeUpper, limit]
+      );
+
+      const [orderRows] = await pool.query(
+        `SELECT DISTINCT TRIM(product_model) AS name
+         FROM sales_orders
+         WHERE product_model IS NOT NULL AND TRIM(product_model) <> ''
+           AND (product_model LIKE ? OR product_model LIKE ?)
+         ORDER BY product_model ASC
+         LIMIT ?`,
+        [like, likeUpper, limit]
+      );
+
+      const seen = new Set();
+      const items = [];
+      const pushName = (raw) => {
+        const name = String(raw || '').trim().toUpperCase();
+        if (!name) return;
+        const key = name.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        items.push(name);
+      };
+
+      for (const r of [...reportRows, ...modelRows, ...aliasRows, ...orderRows]) {
+        pushName(r?.name);
+      }
+
+      const qKey = qUpper.toLowerCase();
+      items.sort((a, b) => {
+        const ak = a.toLowerCase();
+        const bk = b.toLowerCase();
+        const aStarts = ak.startsWith(qKey) ? 0 : 1;
+        const bStarts = bk.startsWith(qKey) ? 0 : 1;
+        if (aStarts !== bStarts) return aStarts - bStarts;
+        return ak.localeCompare(bk, 'zh');
+      });
+
+      res.json({ items: items.slice(0, limit) });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
 
 /** 与公开页同结构的报告 JSON，供管理端 iframe 加载 /miniprogram/report.html?adminPreview=1 等（需登录） */
 router.get(
@@ -274,8 +375,13 @@ router.get(
 
     const pool = getPool();
     const [rRows] = await pool.query(
-      `SELECT id, report_uid AS reportUid, report_no AS reportNo, batch_no AS batchNo, batch_no_en AS batchNoEn, product_name AS productName, product_name_en AS productNameEn, conclusion, status, created_at AS createdAt, updated_at AS updatedAt
-       FROM reports WHERE id = ? LIMIT 1`,
+      `SELECT r.id, r.report_uid AS reportUid, r.report_no AS reportNo, r.batch_no AS batchNo, r.batch_no_en AS batchNoEn,
+              r.product_name AS productName, r.product_name_en AS productNameEn, r.customer_id AS customerId,
+              c.customer_name AS customerName, c.contact_name AS customerContact,
+              r.conclusion, r.status, r.created_at AS createdAt, r.updated_at AS updatedAt
+       FROM reports r
+       LEFT JOIN sales_customers c ON c.id = r.customer_id
+       WHERE r.id = ? LIMIT 1`,
       [id]
     );
     const report = rRows?.[0];
@@ -313,6 +419,7 @@ router.post('/', requirePermission('reports', 'create'), async (req, res) => {
     batchNoEn,
     productName,
     productNameEn,
+    customerId = null,
     templateId = null,
     conclusion = 'unknown',
     fields = []
@@ -323,14 +430,15 @@ router.post('/', requirePermission('reports', 'create'), async (req, res) => {
   try {
     await conn.beginTransaction();
     const [result] = await conn.query(
-      `INSERT INTO reports (report_no, batch_no, batch_no_en, product_name, product_name_en, conclusion, status, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+      `INSERT INTO reports (report_no, batch_no, batch_no_en, product_name, product_name_en, customer_id, conclusion, status, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
       [
         FIXED_REPORT_NO,
         batchNo ?? null,
         batchNoEn ?? null,
         productName,
         productNameEn ?? null,
+        customerId ?? null,
         conclusion,
         req.user.userId,
         req.user.userId
@@ -351,7 +459,7 @@ router.post('/', requirePermission('reports', 'create'), async (req, res) => {
       finalFields = tplFields || [];
     }
 
-    for (const f of finalFields) {
+    for (const f of normalizeReportDateFieldsInPayload({ fields: finalFields }).fields) {
       await conn.query(
         `INSERT INTO report_fields (report_id, field_key, field_label, field_label_en, field_type, field_value_json, sort_order)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -398,7 +506,8 @@ router.put('/:id', requirePermission('reports', 'edit'), async (req, res) => {
     await conn.beginTransaction();
     const [rRows] = await conn.query(
       `SELECT id, report_no AS reportNo, report_uid AS reportUid, batch_no AS batchNo, batch_no_en AS batchNoEn,
-              product_name AS productName, product_name_en AS productNameEn, conclusion, template_id AS templateId
+              product_name AS productName, product_name_en AS productNameEn, customer_id AS customerId,
+              conclusion, template_id AS templateId
        FROM reports WHERE id = ? LIMIT 1`,
       [id]
     );
@@ -424,12 +533,15 @@ router.put('/:id', requirePermission('reports', 'edit'), async (req, res) => {
             : row.fieldValue
     }));
 
-    const sanitized = sanitizeReportPutBody(req.user, existingReport, existingFields, parsed.data);
+    const sanitized = normalizeReportDateFieldsInPayload(
+      sanitizeReportPutBody(req.user, existingReport, existingFields, parsed.data)
+    );
     const {
       batchNo: sBatchNo,
       batchNoEn: sBatchNoEn,
       productName: sProductName,
       productNameEn: sProductNameEn,
+      customerId: sCustomerId,
       templateId: sTemplateId,
       conclusion: sConclusion,
       fields: sFields
@@ -437,9 +549,20 @@ router.put('/:id', requirePermission('reports', 'edit'), async (req, res) => {
 
     await conn.query(
       `UPDATE reports
-       SET report_no=?, batch_no=?, batch_no_en=?, product_name=?, product_name_en=?, template_id=?, conclusion=?, updated_by=?
+       SET report_no=?, batch_no=?, batch_no_en=?, product_name=?, product_name_en=?, customer_id=?, template_id=?, conclusion=?, updated_by=?
        WHERE id=?`,
-      [FIXED_REPORT_NO, sBatchNo ?? null, sBatchNoEn ?? null, sProductName, sProductNameEn ?? null, sTemplateId, sConclusion, req.user.userId, id]
+      [
+        FIXED_REPORT_NO,
+        sBatchNo ?? null,
+        sBatchNoEn ?? null,
+        sProductName,
+        sProductNameEn ?? null,
+        sCustomerId ?? existingReport.customerId ?? null,
+        sTemplateId,
+        sConclusion,
+        req.user.userId,
+        id
+      ]
     );
 
     await conn.query('DELETE FROM report_fields WHERE report_id = ?', [id]);

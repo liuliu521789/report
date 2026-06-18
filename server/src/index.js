@@ -29,8 +29,6 @@ import { router as dashboardRouter } from './routes/dashboard.js';
 import { router as reportImageLibraryRouter } from './routes/reportImageLibrary.js';
 import { router as reportStylesRouter } from './routes/reportStyles.js';
 import { router as salesRouter } from './routes/sales.js';
-import { router as salesV2Router } from './routes/sales/v2.js';
-import { router as salesDomainRouter } from './routes/sales/index.js';
 import { router as wecomRouter } from './routes/wecom.js';
 import { router as wecomCallbackRouter } from './routes/wecomCallback.js';
 import { logErrorEntry, purgeExpiredErrorLogs } from './lib/audit.js';
@@ -44,6 +42,7 @@ import {
   ensureSalesInternalModelsTable,
   ensureDepartmentsTable,
   ensureReportsReportUidColumn,
+  ensureReportsCustomerIdColumn,
   ensureWecomNotificationsTables,
   ensureWecomNotifyJobsTable,
   ensureUsersWecomUseridColumn,
@@ -52,7 +51,11 @@ import {
   ensureWecomSecretsWideAndCallbackEvents,
   ensureSalesContractDocumentColumns,
   ensureSalesContractVersioning,
+  ensureSalesContractInvoiceTables,
+  ensureContractTemplatesSystemDefault,
   ensureSalesCustomerCodesWyFormat,
+  ensureOrderCalcRulesTable,
+  ensureCustomerPricesTable,
   ensureBackupJobsTable,
   ensureSalesOrderExportJobsTable,
   ensureSupportContactSettingsTable,
@@ -66,6 +69,7 @@ import { enrichApiErrorBody } from '../../shared/apiErrorZh.js';
 import { validateProductionConfigOrExit } from './lib/productionConfig.js';
 import { startWecomNotifyWorker } from './lib/wecomNotifyWorker.js';
 import { startSalesOrderExportWorker } from './lib/salesOrderExportWorker.js';
+import { diagnoseWecomPublicBaseUrl } from './lib/wecomPublicUrl.js';
 
 const port = Number(process.env.PORT || 3001);
 /** 与 admin Vite 开发服务器默认端口一致；API 不得与其共用 */
@@ -84,7 +88,13 @@ if (
 const app = express();
 app.set('trust proxy', 1);
 
-app.use(cors());
+app.use(
+  cors({
+    exposedHeaders: [
+      'Content-Disposition'
+    ]
+  })
+);
 app.use(express.json({ limit: '12mb' }));
 app.use(apiErrorI18nMiddleware());
 
@@ -207,10 +217,7 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/report-image-library', reportImageLibraryRouter);
 app.use('/api/report-styles', reportStylesRouter);
 app.use('/api/sales', salesRouter);
-// New v2 API surface (alpha)
-app.use('/api/sales/v2', salesV2Router);
 // Temporary: legacy aggregate domain router (optional, can be wired later when needed)
-app.use('/api/sales-domain', salesDomainRouter);
 app.use('/api/wecom', wecomRouter);
 app.use('/api/support-contact', supportContactRouter);
 app.use('/', publicRouter);
@@ -276,11 +283,16 @@ async function start() {
     await ensureReportStylesTable();
     await ensureQuickRoleUserColumns();
     await ensureSalesModuleTables();
+    await ensureReportsCustomerIdColumn();
     await ensureSalesOrderExportJobsTable();
     await ensureSalesCustomerCodesWyFormat();
     await ensureSalesInternalModelsTable();
     await ensureSalesContractDocumentColumns();
     await ensureSalesContractVersioning();
+    await ensureSalesContractInvoiceTables();
+    await ensureContractTemplatesSystemDefault();
+    await ensureOrderCalcRulesTable();
+    await ensureCustomerPricesTable();
     await ensureDepartmentsTable();
     await ensureWecomNotificationsTables();
     await ensureWecomNotifyJobsTable();
@@ -307,6 +319,15 @@ async function start() {
       console.error('[server] backup cron start failed', e?.message || e);
     }
   }
+  const wecomBaseDiag = diagnoseWecomPublicBaseUrl();
+  if (!wecomBaseDiag.ok) {
+    // eslint-disable-next-line no-console
+    console.warn(`[server] WeCom public URL: ${wecomBaseDiag.message}`);
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(`[server] WeCom PUBLIC_BASE_URL ok: ${wecomBaseDiag.base}`);
+  }
+
   const host = process.env.LISTEN_HOST || '0.0.0.0';
   const server = app.listen(port, host, () => {
     // eslint-disable-next-line no-console

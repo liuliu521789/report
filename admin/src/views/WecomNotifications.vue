@@ -13,6 +13,17 @@
       <code>detail</code>（与站内信相同摘要）、<code>orderNo</code>、<code>count</code>、<code>fromUser</code>。
       提交/撤回接收人：公司「快捷财务」或财务类别且已填企业微信 UserID 的成员；驳回接收人为订单创建人（须维护 UserID）。
     </el-alert>
+    <el-alert type="success" :closable="false" class="mb-3" title="系统自动推送（合同开票）">
+      模板代码
+      <code>sales_invoice_submit_finance</code>（提交/新建并提交）、
+      <code>sales_invoice_withdraw_finance</code>（撤销待开票）、
+      <code>sales_invoice_fulfilled_applicant</code>（财务已开票→申请人）、
+      <code>sales_invoice_deleted_finance</code>（删除待开票→财务）、
+      <code>sales_invoice_deleted_applicant</code>（删除已开票→申请人）。
+      变量含 <code>detail</code>、<code>contractNo</code>、<code>customerName</code>、<code>amount</code>、<code>fromUser</code>；
+      提交类文本卡片链接须用 <code>{{invoiceCenterUrl}}</code>（系统生成 <code>/api/public/wecom-invoice-center</code> 引导页，需 <code>PUBLIC_BASE_URL</code> 为 HTTPS 可访问的 API 根；引导页内跳转管理后台须另配 <code>ADMIN_PUBLIC_URL</code>）。
+      财务收件人：公司「快捷财务」或财务类别且已填企业微信 UserID；申请人收件人须维护 UserID。
+    </el-alert>
     <el-alert type="success" :closable="false" class="mb-3" title="财务通过 → 仓库（销售订单）">
       模板 <code>sales_order_approved_warehouse</code> 须为<strong>文本卡片</strong>：财务通过时<strong>按订单逐条</strong>推送企业微信，正文含厂家、标签型号、仓库型号、规格、批号、数量、备注；占位符除
       <code>detail</code>、<code>orderNo</code>、<code>count</code>、<code>fromUser</code> 外，「链接地址」须使用
@@ -631,6 +642,10 @@ export default {
         { key: 'notificationTitle', label: '卡片标题(合同审批)' },
         { key: 'shipConfirmUrl', label: '发货确认页链接' },
         { key: 'shipUrl', label: '发货兼容占位(同确认页)' },
+        { key: 'invoiceCenterUrl', label: '开票中心链接(文本卡片 url)' },
+        { key: 'amount', label: '开票金额' },
+        { key: 'invoiceNo', label: '发票号码' },
+        { key: 'invoiceCode', label: '发票代码' },
         { key: 'title', label: '短标题' }
       ]
     };

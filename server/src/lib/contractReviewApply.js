@@ -27,7 +27,8 @@ function parseApprovalFlow(c) {
     : [];
   const currentIndex = Number(flow?.current_index);
   const activeIndex = Number.isFinite(currentIndex) && currentIndex >= 0 ? currentIndex : 0;
-  return { chain, activeIndex };
+  const submittedBy = flow?.submitted_by != null ? Number(flow.submitted_by) : null;
+  return { chain, activeIndex, submittedBy };
 }
 
 /**
@@ -61,7 +62,8 @@ export async function applyContractReview(pool, { contractId, actorUserId, resul
   if (c.status !== 'pending_review') return { ok: false, code: 'INVALID_STATUS', httpStatus: 400 };
   if (Number(c.reviewer_user_id) !== expectedReviewer) return { ok: false, code: 'FORBIDDEN', httpStatus: 403 };
 
-  const { chain, activeIndex } = parseApprovalFlow(c);
+  const { chain, activeIndex, submittedBy } = parseApprovalFlow(c);
+  const originalSubmitter = submittedBy || c.created_by;
   const hasSequentialChain = chain.length > 1 && activeIndex < chain.length;
 
   if (result === 'approved' && hasSequentialChain && activeIndex < chain.length - 1) {
@@ -70,7 +72,8 @@ export async function applyContractReview(pool, { contractId, actorUserId, resul
     const nextFlow = {
       type: 'sequential',
       reviewer_user_ids: chain,
-      current_index: nextIndex
+      current_index: nextIndex,
+      submitted_by: originalSubmitter
     };
     await pool.query(
       `UPDATE sales_contracts
@@ -97,20 +100,21 @@ export async function applyContractReview(pool, { contractId, actorUserId, resul
       urge: false,
       actorUsername: ''
     });
+    const fromId = Number(originalSubmitter) || aid;
     await notifyUser(pool, nextReviewerId, {
       title:
         chain.length > 1
           ? `合同待审核（第 ${nextIndex + 1}/${chain.length} 位）`
           : '合同待审核',
       bodyText: inboxBody,
-      fromUserId: aid,
+      fromUserId: fromId,
       refType: 'contract',
       refId: cid,
       msgCategory: 'todo'
     });
     await tryNotifyContractReviewerOnSubmit(pool, {
       contractRow: c,
-      fromUserId: aid,
+      fromUserId: fromId,
       reviewerUserId: nextReviewerId,
       chainStep
     });

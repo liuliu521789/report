@@ -75,6 +75,155 @@ router.get('/', canReadTemplatesForReports, async (req, res) => {
   });
 });
 
+function parseTemplateFieldDefaultValue(raw) {
+  let defaultValue = raw;
+  if (typeof defaultValue === 'string') {
+    try {
+      defaultValue = JSON.parse(defaultValue);
+    } catch {
+      /* keep string */
+    }
+  }
+  return defaultValue;
+}
+
+/** 按产品名称联想报告模板：优先模板名精确，其次双向包含，再查模板内 product_name 默认值 */
+async function findTemplateByProductName(pool, productName) {
+  const q = String(productName || '').trim();
+  if (!q) return null;
+  const lower = q.toLowerCase();
+  const compact = lower.replace(/[\s\u3000\-－—_/／\\()（）\[\]【】]/g, '');
+
+  let [rows] = await pool.query(
+    `SELECT id, name FROM report_templates
+     WHERE LOWER(TRIM(name)) = ?
+     ORDER BY id DESC LIMIT 1`,
+    [lower]
+  );
+  if (rows?.[0]) return rows[0];
+
+  [rows] = await pool.query(
+    `SELECT id, name FROM report_templates
+     WHERE LOWER(TRIM(name)) LIKE CONCAT(?, '%') OR ? LIKE CONCAT(LOWER(TRIM(name)), '%')
+     ORDER BY
+       CASE WHEN LOWER(TRIM(name)) = ? THEN 0 WHEN LOWER(TRIM(name)) LIKE CONCAT(?, '%') THEN 1 ELSE 2 END,
+       LENGTH(name) DESC,
+       id DESC
+     LIMIT 1`,
+    [lower, lower, lower, lower]
+  );
+  if (rows?.[0]) return rows[0];
+
+  [rows] = await pool.query(
+    `SELECT id, name FROM report_templates
+     WHERE LOWER(TRIM(name)) LIKE CONCAT('%', ?, '%')
+     ORDER BY LENGTH(name) ASC, id DESC
+     LIMIT 1`,
+    [lower]
+  );
+  if (rows?.[0]) return rows[0];
+
+  if (compact) {
+    [rows] = await pool.query(
+      `SELECT id, name FROM report_templates
+       WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(name)),
+              ' ', ''), '　', ''), '-', ''), '－', ''), '—', ''), '_', ''), '/', ''), '／', ''), '\\\\', ''), '(', ''), ')', '')
+             LIKE CONCAT('%', ?, '%')
+       ORDER BY LENGTH(name) ASC, id DESC
+       LIMIT 1`,
+      [compact]
+    );
+    if (rows?.[0]) return rows[0];
+  }
+
+  [rows] = await pool.query(
+    `SELECT t.id, t.name FROM report_templates t
+     INNER JOIN report_template_fields f ON f.template_id = t.id AND f.field_key = 'product_name'
+     WHERE LOWER(TRIM(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(f.default_value_json, '$.zh')), ''))) = ?
+     ORDER BY t.id DESC LIMIT 1`,
+    [lower]
+  );
+  if (rows?.[0]) return rows[0];
+
+  return null;
+}
+
+import {
+  expandModelAliases,
+  resolveMappedInternalCodeByOrder
+} from '../lib/salesModelMapping.js';
+
+router.get('/suggest-by-product', canReadTemplatesForReports, async (req, res, next) => {
+  try {
+    const productName = String(req.query.productName || req.query.q || '').trim();
+    if (!productName) {
+      return res.json({ template: null });
+    }
+    const pool = getPool();
+    const fromOrderId = Number(req.query.fromOrder || req.query.orderId || 0);
+    const mappedInternalCode = await resolveMappedInternalCodeByOrder(pool, fromOrderId, productName);
+    const candidates = [];
+    const pushCandidates = (v) => {
+      for (const item of expandModelAliases(v)) {
+        const text = String(item || '').trim();
+        if (!text || candidates.includes(text)) continue;
+        candidates.push(text);
+      }
+    };
+    if (mappedInternalCode) pushCandidates(mappedInternalCode);
+    pushCandidates(productName);
+    let matched = null;
+    for (const candidate of candidates) {
+      const c = String(candidate || '').trim();
+      if (!c) continue;
+      matched = await findTemplateByProductName(pool, c);
+      if (matched) break;
+    }
+    if (!matched) {
+      return res.json({ template: null });
+    }
+
+    const [fRows] = await pool.query(
+      `SELECT field_key AS fieldKey, field_type AS fieldType, default_value_json AS defaultValue
+       FROM report_template_fields
+       WHERE template_id = ?
+         AND (field_key IN ('inspection_table', 'test_conclusion', 'remarks') OR field_type = 'table')
+       ORDER BY (field_key = 'inspection_table') DESC, sort_order ASC, id ASC`,
+      [matched.id]
+    );
+
+    let inspectionTable = null;
+    let testConclusion = null;
+    let remarks = null;
+    for (const f of fRows || []) {
+      const val = parseTemplateFieldDefaultValue(f.defaultValue);
+      if (f.fieldType === 'table' && !inspectionTable) {
+        inspectionTable = val;
+      } else if (f.fieldKey === 'test_conclusion') {
+        testConclusion = val;
+      } else if (f.fieldKey === 'remarks') {
+        remarks = val;
+      }
+    }
+
+    if (!inspectionTable) {
+      return res.json({ template: null });
+    }
+
+    res.json({
+      template: {
+        id: matched.id,
+        name: matched.name,
+        inspectionTable,
+        testConclusion,
+        remarks
+      }
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.get('/:id', canReadTemplatesForReports, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });

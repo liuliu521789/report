@@ -123,7 +123,13 @@ function mergeHeaderSide(parsedList, defaults) {
   const def = defaults || [];
   return parsedList.map((p, i) => {
     const d = def[i] || { label: p.label, value: '', placeholder: '', fallback: '' };
-    return { ...d, label: p.label || d.label, value: p.value };
+    let value = p.value;
+    let fallback = d.fallback ?? '';
+    if (/^\{\{.+?\}\}$/.test(value)) {
+      fallback = value;
+      value = d.value || '';
+    }
+    return { ...d, label: p.label || d.label, value, fallback };
   });
 }
 
@@ -221,28 +227,63 @@ function parsePartyTdToItems(td, side) {
   const items = [];
   const divs = td?.querySelectorAll?.(':scope > div');
   if (!divs || divs.length < 2) return items;
-  const html = divs[1].innerHTML;
-  const parts = html.split(/<br\s*\/?>/i);
-  for (const part of parts) {
-    const cleaned = normText(part.replace(/<[^>]+>/g, ''));
-    if (!cleaned) continue;
-    const { label, value } = splitFirstColon(cleaned);
-    if (!label) continue;
-    const item = { label, value };
-    if (label === '单位') {
-      if (value === '{{COMPANY_NAME_ZH}}') {
-        item.value = '';
-        item.fallback = PARTY_FALLBACK_COMPANY;
-      } else if (value === '{{CUSTOMER_NAME}}') {
-        item.value = '';
-        item.fallback = PARTY_FALLBACK_CUSTOMER;
-      } else if (side === 'seller' && !value) {
-        item.fallback = PARTY_FALLBACK_COMPANY;
-      } else if (side === 'buyer' && !value) {
-        item.fallback = PARTY_FALLBACK_CUSTOMER;
+  // 支持两种结构：
+  //   1) 标题 + 单 div（内含 <br> 分隔的多行）
+  //   2) 标题 + 每行一个 div
+  if (divs.length === 2) {
+    const html = divs[1].innerHTML;
+    const parts = html.split(/<br\s*\/?>/i);
+    for (const part of parts) {
+      const cleaned = normText(part.replace(/<[^>]+>/g, ''));
+      if (!cleaned) continue;
+      const { label, value } = splitFirstColon(cleaned);
+      if (!label) continue;
+      const item = { label, value };
+      if (label === '单位') {
+        if (value === '{{COMPANY_NAME_ZH}}') {
+          item.value = '';
+          item.fallback = PARTY_FALLBACK_COMPANY;
+        } else if (value === '{{CUSTOMER_NAME}}') {
+          item.value = '';
+          item.fallback = PARTY_FALLBACK_CUSTOMER;
+        } else if (side === 'seller' && !value) {
+          item.fallback = PARTY_FALLBACK_COMPANY;
+        } else if (side === 'buyer' && !value) {
+          item.fallback = PARTY_FALLBACK_CUSTOMER;
+        }
       }
+      if (!item.fallback && /^\{\{.+?\}\}$/.test(item.value)) {
+        item.fallback = item.value;
+        item.value = '';
+      }
+      items.push(item);
     }
-    items.push(item);
+  } else {
+    for (let i = 1; i < divs.length; i++) {
+      const cleaned = normText(divs[i].textContent);
+      if (!cleaned) continue;
+      const { label, value } = splitFirstColon(cleaned);
+      if (!label) continue;
+      const item = { label, value };
+      if (label === '单位') {
+        if (value === '{{COMPANY_NAME_ZH}}') {
+          item.value = '';
+          item.fallback = PARTY_FALLBACK_COMPANY;
+        } else if (value === '{{CUSTOMER_NAME}}') {
+          item.value = '';
+          item.fallback = PARTY_FALLBACK_CUSTOMER;
+        } else if (side === 'seller' && !value) {
+          item.fallback = PARTY_FALLBACK_COMPANY;
+        } else if (side === 'buyer' && !value) {
+          item.fallback = PARTY_FALLBACK_CUSTOMER;
+        }
+      }
+      if (!item.fallback && /^\{\{.+?\}\}$/.test(item.value)) {
+        item.fallback = item.value;
+        item.value = '';
+      }
+      items.push(item);
+    }
   }
   return items;
 }
@@ -301,6 +342,11 @@ export function parseContractHtmlToVisual(html, base) {
   if (first.tagName === 'DIV') {
     const st = first.getAttribute('style') || '';
     kids = [...first.children];
+    // 外层可能被 ensureStandardContractOuterWrap 套了一层 SimSun 包裹 div
+    // 如果只有一个子元素且是 div，则解一层，让可视化解析看到真实的合同结构
+    if (kids.length === 1 && kids[0].tagName === 'DIV') {
+      kids = [...kids[0].children];
+    }
     if (!kidsLookLikeContractLayout(kids, st, rawHasKnownBodyFont)) return null;
   } else {
     /* 正文无单一外包 div（顶层多为 p + table…），与带外层 div 时子节点序列一致 */
@@ -335,6 +381,10 @@ export function parseContractHtmlToVisual(html, base) {
     }
   } else {
     return null;
+  }
+
+  if (/^\{\{.+?\}\}$/.test(visual.headerCompanyZh)) {
+    visual.headerCompanyZh = '';
   }
 
   let headerIdx = indexAfterEmptyParagraphs(kids, titleIdx + 1);

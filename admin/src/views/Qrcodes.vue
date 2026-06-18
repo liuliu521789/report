@@ -1,76 +1,207 @@
 <template>
   <div class="qrcodes-page">
-    <div class="toolbar">
-      <div class="toolbar-left">
-        <el-input
-          v-model="q"
-          placeholder="产品名称/批次号"
-          clearable
-          class="search-input"
-          @keyup.enter="onSearch"
-        />
-        <el-button type="primary" @click="onSearch" icon=Search>查询</el-button>
+    <el-card class="toolbar-card" shadow="never">
+      <div class="page-intro">
+        <span>查看已生成的二维码及绑定报告；扫码链接失效时请确认关联报告仍为有效状态。</span>
+        <el-button
+          v-if="canCreateQrcode"
+          type="primary"
+          link
+          :icon="Promotion"
+          @click="$router.push('/reports')"
+        >
+          去报告列表生成二维码
+        </el-button>
+      </div>
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <el-input
+            v-model="q"
+            placeholder="按产品名称或批次号搜索"
+            clearable
+            class="search-input"
+            @keyup.enter="onSearch"
+            @clear="onSearch"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <el-button type="primary" :icon="Search" :loading="listLoading" @click="onSearch">查询</el-button>
+          <el-button :icon="RefreshLeft" @click="onReset">重置</el-button>
+        </div>
+        <div class="toolbar-right">
+          <span v-if="selected.length" class="selected-tip">已选 {{ selected.length }} 条</span>
+          <el-button :icon="Refresh" :loading="listLoading" @click="load">刷新</el-button>
+        </div>
+      </div>
+      <div v-if="canDeleteQrcode" class="batch-actions">
         <el-button
           type="danger"
           plain
-          v-if="canDeleteQrcode"
+          size="small"
+          :icon="Delete"
           :disabled="selected.length === 0"
           @click="removeSelected"
-         icon=Delete>批量删除</el-button>
+        >
+          批量删除
+        </el-button>
       </div>
-      <div class="toolbar-right">
-        <el-button @click="load" icon=Refresh>刷新</el-button>
-      </div>
-    </div>
+    </el-card>
 
     <div class="table-wrap">
-      <el-table class="desktop-table" :data="items" border @selection-change="selected = $event">
-      <el-table-column type="selection" width="48" />
-      <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column label="二维码" width="100">
-        <template #default="{ row }">
-          <img v-if="row.qrThumbDataUrl" :src="row.qrThumbDataUrl" alt="qr-thumb" class="qr-thumb" />
-          <span v-else class="muted">-</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="token" label="Token" min-width="200" />
-      <el-table-column prop="reportCount" label="绑定报告数" width="120" />
-      <el-table-column label="关联报告（产品/批次）" min-width="320">
-        <template #default="{ row }">
-          <div class="tag-wrap">
-            <el-tag
-              v-for="(t, idx) in row.reportTags || []"
-              :key="`${row.id}-${idx}`"
-              size="small"
-              type="info"
-              effect="plain"
-              class="report-tag"
+      <el-table
+        v-loading="listLoading"
+        class="desktop-table"
+        :data="items"
+        border
+        stripe
+        highlight-current-row
+        row-key="id"
+        @selection-change="selected = $event"
+        @row-click="onRowClick"
+      >
+        <el-table-column type="selection" width="48" />
+        <el-table-column prop="id" label="ID" width="72" />
+        <el-table-column label="二维码" width="88" align="center">
+          <template #default="{ row }">
+            <button
+              v-if="row.qrThumbDataUrl && canViewDetail"
+              type="button"
+              class="qr-thumb-btn"
+              title="点击查看详情"
+              @click.stop="open(row)"
             >
-              {{ (t.productName || '未命名产品') + ' / ' + (t.batchNo || '无批次') }}
+              <img :src="row.qrThumbDataUrl" alt="二维码缩略图" class="qr-thumb" />
+            </button>
+            <img
+              v-else-if="row.qrThumbDataUrl"
+              :src="row.qrThumbDataUrl"
+              alt="二维码缩略图"
+              class="qr-thumb"
+            />
+            <span v-else class="muted">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Token" min-width="200">
+          <template #default="{ row }">
+            <div class="token-cell" @click.stop>
+              <span class="token-text" :title="row.token">{{ truncateToken(row.token) }}</span>
+              <el-button
+                link
+                type="primary"
+                size="small"
+                :icon="DocumentCopy"
+                title="复制 Token"
+                @click="copyText(row.token, 'Token 已复制')"
+              />
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="绑定报告" width="108" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.reportCount > 0" type="success" effect="plain" round>
+              {{ row.reportCount }} 份
             </el-tag>
-            <span v-if="!(row.reportTags && row.reportTags.length)" class="muted">无</span>
-          </div>
+            <span v-else class="muted">无</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="关联报告（产品 / 批次）" min-width="300">
+          <template #default="{ row }">
+            <div class="tag-wrap">
+              <el-tag
+                v-for="(t, idx) in visibleReportTags(row)"
+                :key="`${row.id}-${idx}`"
+                size="small"
+                type="info"
+                effect="plain"
+                class="report-tag"
+              >
+                {{ formatReportTag(t) }}
+              </el-tag>
+              <el-tag
+                v-if="extraReportTagCount(row) > 0"
+                size="small"
+                type="info"
+                effect="plain"
+              >
+                +{{ extraReportTagCount(row) }}
+              </el-tag>
+              <span v-if="!(row.reportTags && row.reportTags.length)" class="muted">无关联报告</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" width="168">
+          <template #default="{ row }">{{ $dt(row.createdAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="148" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              v-if="canViewDetail"
+              link
+              type="primary"
+              :icon="View"
+              @click.stop="open(row)"
+            >
+              查看
+            </el-button>
+            <el-button
+              v-if="canDeleteQrcode"
+              link
+              type="danger"
+              :icon="Delete"
+              @click.stop="removeOne(row)"
+            >
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty :description="emptyDescription">
+            <el-button v-if="canCreateQrcode" type="primary" @click="$router.push('/reports')">
+              去报告列表生成
+            </el-button>
+          </el-empty>
         </template>
-      </el-table-column>
-      <el-table-column label="创建时间" width="200">
-        <template #default="{ row }">{{ $dt(row.createdAt) }}</template>
-      </el-table-column>
-      <el-table-column label="操作" width="180">
-        <template #default="{ row }">
-          <el-button link @click="open(row)" icon=View>查看</el-button>
-          <el-button v-if="canDeleteQrcode" link type="danger" @click="removeOne(row)" icon=Delete>删除</el-button>
-        </template>
-      </el-table-column>
       </el-table>
     </div>
-    <div class="mobile-list">
-      <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
+
+    <div class="mobile-list" v-loading="listLoading">
+      <div
+        v-for="row in items"
+        :key="'m-' + row.id"
+        class="mobile-card"
+        :class="{ clickable: canViewDetail }"
+        @click="canViewDetail && open(row)"
+      >
         <div class="mobile-head">
-          <strong>#{{ row.id }}</strong>
+          <div class="mobile-head-left">
+            <img
+              v-if="row.qrThumbDataUrl"
+              :src="row.qrThumbDataUrl"
+              alt="二维码"
+              class="mobile-qr-thumb"
+            />
+            <strong>#{{ row.id }}</strong>
+            <el-tag v-if="row.reportCount > 0" size="small" type="success" effect="plain" round>
+              {{ row.reportCount }} 份报告
+            </el-tag>
+          </div>
           <span>{{ $dt(row.createdAt) }}</span>
         </div>
-        <div class="mobile-line"><span>Token</span><span>{{ row.token }}</span></div>
-        <div class="mobile-line"><span>绑定报告数</span><span>{{ row.reportCount }}</span></div>
+        <div class="mobile-line">
+          <span>Token</span>
+          <span class="mobile-token">
+            {{ truncateToken(row.token) }}
+            <el-button
+              link
+              type="primary"
+              size="small"
+              :icon="DocumentCopy"
+              @click.stop="copyText(row.token, 'Token 已复制')"
+            />
+          </span>
+        </div>
         <div class="mobile-tags">
           <el-tag
             v-for="(t, idx) in row.reportTags || []"
@@ -79,25 +210,33 @@
             type="info"
             effect="plain"
           >
-            {{ (t.productName || '未命名产品') + ' / ' + (t.batchNo || '无批次') }}
+            {{ formatReportTag(t) }}
           </el-tag>
           <span v-if="!(row.reportTags && row.reportTags.length)" class="muted">无关联报告</span>
         </div>
-        <div class="mobile-actions">
-          <el-button size="small" @click="open(row)" icon=View>查看</el-button>
+        <div class="mobile-actions" @click.stop>
+          <el-button v-if="canViewDetail" size="small" type="primary" plain :icon="View" @click="open(row)">
+            查看
+          </el-button>
           <el-button
             v-if="canDeleteQrcode"
             size="small"
             type="danger"
             plain
+            :icon="Delete"
             @click="removeOne(row)"
-           icon=Delete>
+          >
             删除
           </el-button>
         </div>
       </div>
-      <el-empty v-if="!items.length" description="暂无二维码" />
+      <el-empty v-if="!listLoading && !items.length" :description="emptyDescription">
+        <el-button v-if="canCreateQrcode" type="primary" @click="$router.push('/reports')">
+          去报告列表生成
+        </el-button>
+      </el-empty>
     </div>
+
     <div class="pagination-wrap">
       <el-pagination
         background
@@ -111,85 +250,192 @@
       />
     </div>
 
-    <el-drawer title="二维码详情" v-model="drawer" size="48%" class="qrcode-drawer">
-      <div v-loading="qrLoading" v-if="detail">
-        <div style="margin-bottom: 12px">
-          <el-table :data="detail.qrcode.reports" border size="small">
-            <el-table-column prop="reportUid" label="报告ID" width="130" />
-            <el-table-column prop="reportNo" label="报告编号" width="110" />
-            <el-table-column prop="productName" label="产品名称" />
-            <el-table-column prop="batchNo" label="批次" width="140" />
-            <el-table-column label="判定" width="90">
-              <template #default="{ row }">
-                {{ formatConclusion(row.conclusion) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                {{ formatStatus(row.status) }}
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-        <div v-if="qrDataUrl" class="qr-preview-wrap">
-          <img :src="qrDataUrl" alt="qr" class="qr-preview-image" />
-          <div class="qr-actions">
-            <el-button size="small" type="primary" plain :disabled="!qrScanUrl" @click="openScanUrl" icon=View>预览二维码</el-button>
-            <el-button size="small" @click="downloadQr" icon=Download>下载二维码</el-button>
+    <el-drawer
+      v-model="drawer"
+      :title="drawerTitle"
+      size="520px"
+      class="qrcode-drawer"
+      destroy-on-close
+      @closed="onDrawerClosed"
+    >
+      <div v-loading="qrLoading" class="drawer-body">
+        <template v-if="detail">
+          <div v-if="qrDataUrl" class="qr-preview-section">
+            <img :src="qrDataUrl" alt="二维码" class="qr-preview-image" />
+            <div class="qr-meta">
+              <div class="qr-meta-row">
+                <span class="qr-meta-label">扫码链接</span>
+                <span class="qr-meta-value" :title="qrScanUrl">{{ truncateUrl(qrScanUrl) }}</span>
+              </div>
+              <div class="qr-meta-row">
+                <span class="qr-meta-label">Token</span>
+                <span class="qr-meta-value mono" :title="qrToken">{{ truncateToken(qrToken) }}</span>
+              </div>
+            </div>
+            <div class="qr-actions">
+              <el-button size="small" type="primary" :icon="View" :disabled="!qrScanUrl" @click="openScanUrl">
+                预览扫码页
+              </el-button>
+              <el-button size="small" :icon="DocumentCopy" :disabled="!qrScanUrl" @click="copyText(qrScanUrl, '扫码链接已复制')">
+                复制链接
+              </el-button>
+              <el-button size="small" :icon="DocumentCopy" :disabled="!qrToken" @click="copyText(qrToken, 'Token 已复制')">
+                复制 Token
+              </el-button>
+              <el-button size="small" :icon="Download" @click="downloadQr">下载图片</el-button>
+            </div>
           </div>
-        </div>
+
+          <div class="reports-section">
+            <div class="section-head">
+              <h4>关联报告</h4>
+              <span class="section-sub">{{ detail.qrcode.reports?.length || 0 }} 份</span>
+            </div>
+            <el-empty
+              v-if="!(detail.qrcode.reports && detail.qrcode.reports.length)"
+              description="暂无关联报告"
+              :image-size="72"
+            />
+            <el-table
+              v-else
+              :data="detail.qrcode.reports"
+              border
+              size="small"
+              stripe
+              @row-click="onReportRowClick"
+            >
+              <el-table-column prop="reportNo" label="报告编号" width="108" />
+              <el-table-column prop="productName" label="产品名称" min-width="120" show-overflow-tooltip />
+              <el-table-column prop="batchNo" label="批次" width="108" show-overflow-tooltip />
+              <el-table-column label="判定" width="80" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="row.conclusion === 'pass'" type="success" size="small">合格</el-tag>
+                  <el-tag v-else-if="row.conclusion === 'fail'" type="danger" size="small">不合格</el-tag>
+                  <el-tag v-else type="info" size="small">未知</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="72" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="row.status === 'active'" size="small">有效</el-tag>
+                  <el-tag v-else type="warning" size="small">作废</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="" width="56" align="center" fixed="right">
+                <template #default="{ row }">
+                  <el-button
+                    v-if="canOpenReport(row)"
+                    link
+                    type="primary"
+                    size="small"
+                    @click.stop="goReport(row)"
+                  >
+                    打开
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </template>
       </div>
     </el-drawer>
   </div>
 </template>
 
 <script>
+import {
+  Delete,
+  DocumentCopy,
+  Download,
+  Promotion,
+  Refresh,
+  RefreshLeft,
+  Search,
+  View
+} from '@element-plus/icons-vue';
 import { deleteQrcodes, getQrcode, getQrcodeQr, listQrcodes } from '../api';
 import { isSuperAdmin, perm } from '../utils/permissions';
 
+const MAX_VISIBLE_TAGS = 3;
+
 export default {
   name: 'Qrcodes',
-  computed: {
-    canDeleteQrcode() {
-      if (isSuperAdmin()) return true;
-      return perm('qrcodes', 'delete') || perm('qrcodes', 'create');
-    }
-  },
   data() {
     return {
+      Delete,
+      DocumentCopy,
+      Download,
+      Promotion,
+      Refresh,
+      RefreshLeft,
+      Search,
+      View,
       q: '',
       items: [],
       total: 0,
       page: 1,
       pageSize: 20,
       selected: [],
+      listLoading: false,
       drawer: false,
       detail: null,
       qrDataUrl: '',
       qrToken: '',
       qrLoading: false,
-      qrScanUrl: ''
+      qrScanUrl: '',
+      activeRowId: null
     };
+  },
+  computed: {
+    canDeleteQrcode() {
+      if (isSuperAdmin()) return true;
+      return perm('qrcodes', 'delete') || perm('qrcodes', 'create');
+    },
+    canViewDetail() {
+      if (isSuperAdmin()) return true;
+      return perm('qrcodes', 'viewDetail');
+    },
+    canCreateQrcode() {
+      return perm('qrcodes', 'create');
+    },
+    drawerTitle() {
+      if (!this.activeRowId) return '二维码详情';
+      return `二维码详情 #${this.activeRowId}`;
+    },
+    emptyDescription() {
+      return this.q ? '未找到匹配的二维码，请调整搜索条件' : '暂无二维码，请先在报告列表勾选报告后生成';
+    }
   },
   mounted() {
     this.load();
   },
   methods: {
     async load() {
-      const { items, total } = await listQrcodes({
-        q: this.q || undefined,
-        limit: this.pageSize,
-        offset: (this.page - 1) * this.pageSize
-      });
-      this.items = items;
-      this.total = Number(total || 0);
-      this.selected = [];
-      if (this.total > 0 && this.items.length === 0 && this.page > 1) {
-        this.page -= 1;
-        await this.load();
+      this.listLoading = true;
+      try {
+        const { items, total } = await listQrcodes({
+          q: this.q || undefined,
+          limit: this.pageSize,
+          offset: (this.page - 1) * this.pageSize
+        });
+        this.items = items;
+        this.total = Number(total || 0);
+        this.selected = [];
+        if (this.total > 0 && this.items.length === 0 && this.page > 1) {
+          this.page -= 1;
+          await this.load();
+        }
+      } catch (e) {
+        this.$message.error(this.$apiUserMsg(e, '加载二维码列表失败'));
+      } finally {
+        this.listLoading = false;
       }
     },
     async onSearch() {
+      this.page = 1;
+      await this.load();
+    },
+    async onReset() {
+      this.q = '';
       this.page = 1;
       await this.load();
     },
@@ -202,11 +448,19 @@ export default {
       this.page = 1;
       await this.load();
     },
+    onRowClick(row) {
+      if (!this.canViewDetail) return;
+      this.open(row);
+    },
     async open(row) {
+      if (!this.canViewDetail) return;
+      this.activeRowId = row.id;
       this.drawer = true;
+      this.detail = null;
       this.qrLoading = true;
       this.qrDataUrl = '';
       this.qrScanUrl = '';
+      this.qrToken = '';
       try {
         const [detail, qr] = await Promise.all([getQrcode(row.id), getQrcodeQr(row.id)]);
         this.detail = detail;
@@ -215,14 +469,25 @@ export default {
         this.qrDataUrl = qr.qrDataUrl;
       } catch (e) {
         this.$message.error(this.$apiUserMsg(e, '获取二维码详情失败'));
+        this.drawer = false;
       } finally {
         this.qrLoading = false;
       }
+    },
+    onDrawerClosed() {
+      this.detail = null;
+      this.qrDataUrl = '';
+      this.qrScanUrl = '';
+      this.qrToken = '';
+      this.activeRowId = null;
     },
     async doDelete(ids, hint) {
       await this.$confirm(`确认删除${hint}？删除后不可恢复`, '提示', { type: 'warning' });
       await deleteQrcodes(ids);
       this.$message.success('删除成功');
+      if (this.activeRowId && ids.includes(this.activeRowId)) {
+        this.drawer = false;
+      }
       await this.load();
     },
     async removeOne(row) {
@@ -245,32 +510,91 @@ export default {
       if (!this.qrDataUrl) return;
       const a = document.createElement('a');
       a.href = this.qrDataUrl;
-      a.download = `qrcode-${this.qrToken}.png`;
+      a.download = `qrcode-${this.qrToken || this.activeRowId}.png`;
       a.click();
     },
     openScanUrl() {
       if (!this.qrScanUrl) return;
       window.open(this.qrScanUrl, '_blank');
     },
-    formatConclusion(v) {
-      if (v === 'pass') return '合格';
-      if (v === 'fail') return '不合格';
-      return '未知';
+    async copyText(text, okMsg = '已复制') {
+      const s = String(text ?? '').trim();
+      if (!s) {
+        this.$message.warning('内容为空，无法复制');
+        return;
+      }
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(s);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = s;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        this.$message.success(okMsg);
+      } catch {
+        this.$message.error('复制失败');
+      }
     },
-    formatStatus(v) {
-      if (v === 'active') return '有效';
-      if (v === 'void') return '作废';
-      return '未知';
+    truncateToken(token) {
+      const s = String(token || '');
+      if (s.length <= 16) return s;
+      return `${s.slice(0, 8)}…${s.slice(-6)}`;
+    },
+    truncateUrl(url) {
+      const s = String(url || '');
+      if (s.length <= 42) return s;
+      return `${s.slice(0, 28)}…${s.slice(-10)}`;
+    },
+    formatReportTag(t) {
+      return `${t.productName || '未命名产品'} / ${t.batchNo || '无批次'}`;
+    },
+    visibleReportTags(row) {
+      return (row.reportTags || []).slice(0, MAX_VISIBLE_TAGS);
+    },
+    extraReportTagCount(row) {
+      const n = (row.reportTags || []).length;
+      return n > MAX_VISIBLE_TAGS ? n - MAX_VISIBLE_TAGS : 0;
+    },
+    canOpenReport(row) {
+      return perm('reports', 'view') || perm('reports', 'edit');
+    },
+    goReport(row) {
+      if (!row?.id) return;
+      this.$router.push(`/reports/${row.id}`);
+    },
+    onReportRowClick(row) {
+      if (this.canOpenReport(row)) this.goReport(row);
     }
   }
 };
 </script>
 
 <style scoped>
+.toolbar-card {
+  margin-bottom: 12px;
+}
+.toolbar-card :deep(.el-card__body) {
+  padding: 14px 16px;
+}
+.page-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+}
 .toolbar {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 12px;
   gap: 8px;
 }
 .toolbar-left,
@@ -281,7 +605,16 @@ export default {
   flex-wrap: wrap;
 }
 .search-input {
-  width: 260px;
+  width: 280px;
+}
+.selected-tip {
+  font-size: 13px;
+  color: #64748b;
+}
+.batch-actions {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e5e7eb;
 }
 .table-wrap {
   width: 100%;
@@ -296,17 +629,37 @@ export default {
 .mobile-card {
   border: 1px solid #e5e7eb;
   border-radius: 10px;
-  padding: 10px;
+  padding: 12px;
   background: #fff;
   margin-bottom: 8px;
+}
+.mobile-card.clickable {
+  cursor: pointer;
+}
+.mobile-card.clickable:active {
+  background: #f8fafc;
 }
 .mobile-head {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 8px;
   margin-bottom: 8px;
   font-size: 12px;
   color: #64748b;
+}
+.mobile-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mobile-qr-thumb {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  background: #fff;
 }
 .mobile-line {
   display: flex;
@@ -316,7 +669,10 @@ export default {
   font-size: 13px;
   color: #475569;
 }
-.mobile-line span:last-child {
+.mobile-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   text-align: right;
   word-break: break-all;
 }
@@ -337,8 +693,19 @@ export default {
   justify-content: flex-end;
 }
 .muted {
-  color: #666;
+  color: #94a3b8;
   font-size: 12px;
+}
+.qr-thumb-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 6px;
+  line-height: 0;
+}
+.qr-thumb-btn:hover .qr-thumb {
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.35);
 }
 .qr-thumb {
   width: 56px;
@@ -347,33 +714,102 @@ export default {
   border-radius: 6px;
   background: #fff;
 }
+.token-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.token-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #475569;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tag-wrap {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 .report-tag {
-  max-width: 280px;
+  max-width: 260px;
 }
-.qr-preview-wrap {
-  margin-top: 14px;
+.drawer-body {
+  min-height: 120px;
+}
+.qr-preview-section {
   display: flex;
   flex-direction: column;
   align-items: center;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #ebeef5;
 }
 .qr-preview-image {
   width: 220px;
   height: 220px;
   border: 1px solid #ebeef5;
-  border-radius: 8px;
+  border-radius: 10px;
+  background: #fff;
+}
+.qr-meta {
+  width: 100%;
+  margin-top: 12px;
+}
+.qr-meta-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.qr-meta-label {
+  flex: 0 0 64px;
+  color: #94a3b8;
+}
+.qr-meta-value {
+  flex: 1;
+  min-width: 0;
+  color: #334155;
+  word-break: break-all;
+}
+.qr-meta-value.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 .qr-actions {
-  margin-top: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.reports-section .section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.reports-section h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e293b;
+}
+.section-sub {
+  font-size: 13px;
+  color: #94a3b8;
+}
+:deep(.el-table__row) {
+  cursor: pointer;
 }
 @media (max-width: 992px) {
+  .page-intro {
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .toolbar {
     flex-direction: column;
     align-items: stretch;
@@ -384,9 +820,6 @@ export default {
   }
   .search-input {
     width: 100%;
-  }
-  .toolbar .el-button {
-    flex: 1 1 calc(50% - 8px);
   }
   .desktop-table {
     display: none;
@@ -401,11 +834,4 @@ export default {
     width: calc(100vw - 20px) !important;
   }
 }
-:deep(.el-table__row) {
-  cursor: pointer;
-}
-:deep(.el-table__row:hover) {
-  background-color: #f5f7fa;
-}
 </style>
-

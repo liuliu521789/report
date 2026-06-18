@@ -445,6 +445,13 @@ export function mergeRowDataJson(row, definitions) {
   for (const d of definitions.filter((x) => x.is_active)) {
     display[d.field_key] = base[d.field_key] ?? '';
   }
+  const priceDef = (definitions || []).find((d) => d.maps_to === 'unit_price');
+  const priceKey = priceDef?.field_key || 'unit_price';
+  const rowUp = Number(row?.unit_price);
+  if (Number.isFinite(rowUp) && rowUp > 0) {
+    display[priceKey] = rowUp;
+    base[priceKey] = rowUp;
+  }
   return { dataJson: base, display_data: display };
 }
 

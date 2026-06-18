@@ -50,10 +50,10 @@ export const RECOMMENDED_CONTRACT_BODY_HTML = `<div style="width:100%;margin:0 a
       <div>地址：{{CUSTOMER_ADDRESS}}</div>
       <div>联系人：{{CUSTOMER_CONTACT}}</div>
       <div>电话：{{CUSTOMER_PHONE}}</div>
-      <div>传真：</div>
-      <div>开户银行：</div>
-      <div>账号：</div>
-      <div>税号：</div>
+      <div>传真：{{CUSTOMER_FAX}}</div>
+      <div>开户银行：{{CUSTOMER_BANK}}</div>
+      <div>账号：{{CUSTOMER_ACCOUNT}}</div>
+      <div>税号：{{CUSTOMER_TAX_ID}}</div>
     </td>
   </tr>
 </table>

@@ -46,7 +46,10 @@
     >
       <el-table-column v-if="isSuperAdminUser || perm('audit', 'exportAudit')" type="selection" width="48" />
       <el-table-column prop="id" label="ID" width="72" />
-      <el-table-column prop="username" label="账号" width="140" />
+      <el-table-column label="姓名" width="120">
+        <template #default="{ row }">{{ userDisplay(row) }}</template>
+      </el-table-column>
+      <el-table-column prop="username" label="账号" width="120" show-overflow-tooltip />
       <el-table-column prop="ip" label="IP" width="140" />
       <el-table-column prop="deviceSummary" label="设备/浏览器" min-width="180" show-overflow-tooltip />
       <el-table-column label="状态" width="88">
@@ -67,6 +70,7 @@
           <el-tag v-if="row.success" type="success" size="small">成功</el-tag>
           <el-tag v-else type="danger" size="small">失败</el-tag>
         </div>
+        <div class="mobile-line"><span>姓名</span><span>{{ userDisplay(row) }}</span></div>
         <div class="mobile-line"><span>账号</span><span>{{ row.username || '-' }}</span></div>
         <div class="mobile-line"><span>IP</span><span>{{ row.ip || '-' }}</span></div>
         <div class="mobile-line"><span>设备</span><span>{{ row.deviceSummary || '-' }}</span></div>
@@ -91,6 +95,7 @@ import { bulkDeleteLoginLogs, exportLoginLogs, listLoginLogs } from '../api';
 import { formatDateTime } from '../utils/formatDateTime';
 import { isSuperAdmin, perm } from '../utils/permissions';
 import { startDownload } from '../composables/useDownloadProgress.js';
+import { actorDisplay } from '../utils/userActorDisplay';
 
 export default {
   name: 'AuditLoginLogs',
@@ -116,6 +121,9 @@ export default {
   },
   methods: {
     perm,
+    userDisplay(row) {
+      return actorDisplay(row);
+    },
     async load() {
       this.loading = true;
       try {
@@ -191,6 +199,7 @@ export default {
     onBulkExportTable() {
       const rows = (this.selected || []).map((x) => ({
         id: x.id,
+        realName: actorDisplay(x),
         username: x.username,
         ip: x.ip,
         deviceSummary: x.deviceSummary,
@@ -203,6 +212,7 @@ export default {
         `login-logs-${Date.now()}.csv`,
         [
           { key: 'id', label: 'ID' },
+          { key: 'realName', label: '姓名' },
           { key: 'username', label: '账号' },
           { key: 'ip', label: 'IP' },
           { key: 'deviceSummary', label: '设备/浏览器' },
