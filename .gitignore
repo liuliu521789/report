@@ -1,6 +1,8 @@
 # dependencies
 node_modules/
 **/node_modules/
+**/node_modules/.vite/
+**/node_modules/.vitest/
 
 # logs
 logs/
@@ -34,8 +36,25 @@ server/data/order-exports/
 Thumbs.db
 .idea/
 .vscode/
+.vs/
+
+# local caches and generated scratch files
+__pycache__/
+*.py[cod]
+server/scripts/_*
+server/test-*.png
+/*.png
+/*.xlsx
 
 # database backups and local recovery dumps (do not commit)
 server/backup/
 server/recovery_*.sql
 server/pre_final_restore*.sql
+
+# one-off refactor scripts
+scripts/cleanup*.cjs
+scripts/fix-*.cjs
+scripts/find-dead*.cjs
+scripts/check-remaining.cjs
+scripts/rebuild-methods.cjs
+scripts/full-cleanup.cjs

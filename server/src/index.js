@@ -31,7 +31,7 @@ import { router as reportStylesRouter } from './routes/reportStyles.js';
 import { router as salesRouter } from './routes/sales.js';
 import { router as wecomRouter } from './routes/wecom.js';
 import { router as wecomCallbackRouter } from './routes/wecomCallback.js';
-import { logErrorEntry, purgeExpiredErrorLogs } from './lib/audit.js';
+import { logErrorEntry, purgeExpiredAuditLogs } from './lib/audit.js';
 import { getPool, pingDb } from './db/pool.js';
 import {
   ensureReportImageLibraryTable,
@@ -42,6 +42,7 @@ import {
   ensureSalesInternalModelsTable,
   ensureDepartmentsTable,
   ensureReportsReportUidColumn,
+  ensureQrcodesQrcodeUidColumn,
   ensureReportsCustomerIdColumn,
   ensureWecomNotificationsTables,
   ensureWecomNotifyJobsTable,
@@ -69,6 +70,7 @@ import { enrichApiErrorBody } from '../../shared/apiErrorZh.js';
 import { validateProductionConfigOrExit } from './lib/productionConfig.js';
 import { startWecomNotifyWorker } from './lib/wecomNotifyWorker.js';
 import { startSalesOrderExportWorker } from './lib/salesOrderExportWorker.js';
+import { diagnosePublicBaseUrl } from './lib/publicBaseUrl.js';
 import { diagnoseWecomPublicBaseUrl } from './lib/wecomPublicUrl.js';
 
 const port = Number(process.env.PORT || 3001);
@@ -278,6 +280,7 @@ async function start() {
     await ensureAccountModuleHardeningColumns();
     await ensureCompanySettingsColumns();
     await ensureReportsReportUidColumn();
+    await ensureQrcodesQrcodeUidColumn();
     await ensureReportImageLibraryTable();
     await ensureChairmanAndTotpColumns();
     await ensureReportStylesTable();
@@ -303,7 +306,7 @@ async function start() {
     await ensureSupportContactSettingsTable();
     await ensureStampsSvgFields();
     await ensureQcYearbookDataTables();
-    await purgeExpiredErrorLogs();
+    await purgeExpiredAuditLogs();
     // eslint-disable-next-line no-console
     console.log('[server] db connected');
   } catch (e) {
@@ -319,6 +322,18 @@ async function start() {
       console.error('[server] backup cron start failed', e?.message || e);
     }
   }
+  const publicBaseDiag = diagnosePublicBaseUrl();
+  if (publicBaseDiag.autoCorrected) {
+    // eslint-disable-next-line no-console
+    console.warn(`[server] QR public URL: ${publicBaseDiag.message}`);
+  } else if (!publicBaseDiag.ok) {
+    // eslint-disable-next-line no-console
+    console.warn(`[server] QR public URL: ${publicBaseDiag.message}`);
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(`[server] QR public URL ok: ${publicBaseDiag.effective}`);
+  }
+
   const wecomBaseDiag = diagnoseWecomPublicBaseUrl();
   if (!wecomBaseDiag.ok) {
     // eslint-disable-next-line no-console
@@ -339,6 +354,38 @@ async function start() {
     if (String(process.env.SALES_ORDER_EXPORT_WORKER_DISABLED || '').toLowerCase() !== 'true') {
       const oems = Number(process.env.SALES_ORDER_EXPORT_WORKER_MS || 4000);
       startSalesOrderExportWorker(Number.isFinite(oems) && oems >= 2000 ? oems : 4000);
+    }
+    const auditPurgeMs = Number(process.env.AUDIT_LOG_PURGE_MS || 24 * 60 * 60 * 1000);
+    if (Number.isFinite(auditPurgeMs) && auditPurgeMs >= 60 * 60 * 1000) {
+      setInterval(() => {
+        purgeExpiredAuditLogs().catch((e) => {
+          // eslint-disable-next-line no-console
+          console.error('[audit] scheduled purge failed', e?.message || e);
+        });
+      }, auditPurgeMs);
+      // eslint-disable-next-line no-console
+      console.log(`[server] audit log purge scheduled every ${Math.round(auditPurgeMs / 3600000)}h`);
+    }
+    const orphanQcHealMs = Number(process.env.ORPHAN_PENDING_QC_HEAL_MS || 15 * 60 * 1000);
+    if (
+      String(process.env.ORPHAN_PENDING_QC_HEAL_DISABLED || '').toLowerCase() !== 'true' &&
+      Number.isFinite(orphanQcHealMs) &&
+      orphanQcHealMs >= 60 * 1000
+    ) {
+      const runHeal = () => {
+        import('./lib/salesOrderFlowRuntime.js')
+          .then(({ healOrphanPendingQcBatch }) => healOrphanPendingQcBatch(getPool()))
+          .catch((e) => {
+            // eslint-disable-next-line no-console
+            console.error('[orders] scheduled orphan pending_qc heal failed', e?.message || e);
+          });
+      };
+      setTimeout(runHeal, 30 * 1000);
+      setInterval(runHeal, orphanQcHealMs);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[server] orphan pending_qc heal scheduled every ${Math.round(orphanQcHealMs / 60000)}m`
+      );
     }
   });
   server.on('error', (err) => {

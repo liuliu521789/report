@@ -4,17 +4,21 @@ import QRCode from 'qrcode';
 
 import { getPool } from '../../db/pool.js';
 import { logOperationFromReq } from '../../lib/audit.js';
+import { attachQrcodeUid } from '../../lib/qrcodeUid.js';
 
 import {
   perm,
   isSuper,
   canViewAllSalesOrders,
+  canSeeOrderListQcQrcode,
   isOrderCreatedByCurrentUser,
   fetchSalesContractRow,
   assertSalesContractVisible,
   financeOrderListScopeSql,
   departmentSubtreeIds,
-  publicBaseUrl
+  publicBaseUrl,
+  enrichOrdersQc,
+  loadQcMap
 } from './salesShared.js';
 import { sendUnifiedError, sendUnifiedSuccess } from './salesOrderRouterHelpers.js';
 
@@ -80,7 +84,7 @@ router.get('/qrcodes/bind-candidates', async (req, res, next) => {
     const [countRows] = await pool.query(`SELECT COUNT(*) AS total FROM qrcodes qrc ${sqlWhere}`, params);
     const total = Number(countRows?.[0]?.total || 0);
     const [idRows] = await pool.query(
-      `SELECT qrc.id, qrc.token, qrc.created_at AS createdAt
+      `SELECT qrc.id, qrc.token, qrc.qrcode_uid AS qrcodeUid, qrc.created_at AS createdAt
        FROM qrcodes qrc
        ${sqlWhere}
        ORDER BY qrc.id DESC
@@ -118,13 +122,14 @@ router.get('/qrcodes/bind-candidates', async (req, res, next) => {
     }
     const items = idRows.map((r) => {
       const it = byId.get(r.id) || { id: r.id, token: r.token, reportTags: [] };
-      return {
+      return attachQrcodeUid({
         id: it.id,
         qrcodeId: it.id,
+        qrcodeUid: r.qrcodeUid,
         token: it.token,
         createdAt: r.createdAt,
         reportTags: it.reportTags
-      };
+      });
     });
     for (const item of items) {
       const scanUrl = base
@@ -133,6 +138,57 @@ router.get('/qrcodes/bind-candidates', async (req, res, next) => {
       item.qrThumbDataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 72, errorCorrectionLevel: 'M' });
     }
     sendUnifiedSuccess(res, { items, total, limit, offset });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** 订单质检二维码：下载用全尺寸 PNG（列表缩略图仅 72px，不可用于打印） */
+router.get('/orders/:id/qrcode-qr', async (req, res, next) => {
+  try {
+    const canOrderQuery =
+      perm(req, 'order_management', 'order_query') || perm(req, 'order_management', 'order_status_qc');
+    if (!canOrderQuery || !canSeeOrderListQcQrcode(req)) return sendUnifiedError(res, 403, 'FORBIDDEN');
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) return sendUnifiedError(res, 400, 'BAD_REQUEST');
+
+    const pool = getPool();
+    const [rows] = await pool.query(
+      `SELECT o.id, o.order_no, o.customer_id, o.qc_qrcode_id, o.created_by,
+              o.product_code, o.product_model,
+              c.customer_name, c.contact_name
+       FROM sales_orders o
+       INNER JOIN sales_customers c ON c.id = o.customer_id
+       WHERE o.id = ? LIMIT 1`,
+      [id]
+    );
+    const order = rows[0];
+    if (!order) return sendUnifiedError(res, 404, 'NOT_FOUND');
+    if (!canViewAllSalesOrders(req) && !isOrderCreatedByCurrentUser(order, req)) {
+      return sendUnifiedError(res, 403, 'FORBIDDEN');
+    }
+
+    const qcMap = await loadQcMap(pool, [order]);
+    const [enriched] = await enrichOrdersQc(pool, [order], qcMap);
+    const scanUrl = enriched?.qc_public_url;
+    if (!scanUrl) return sendUnifiedError(res, 404, 'NO_QRCODE');
+
+    const qrDataUrl = await QRCode.toDataURL(scanUrl, {
+      margin: 1,
+      width: 400,
+      errorCorrectionLevel: 'M'
+    });
+    sendUnifiedSuccess(
+      res,
+      attachQrcodeUid({
+        orderId: id,
+        orderNo: order.order_no,
+        scanUrl,
+        qrDataUrl,
+        qrcodeUid: enriched.qc_qrcode_uid || null
+      })
+    );
   } catch (e) {
     next(e);
   }

@@ -56,7 +56,24 @@ test('applyQcResultsToInspectionTable fills result column', () => {
   );
   assert.equal(applied, 2);
   assert.equal(next.rows[0].result.zh, '清澈');
-  assert.equal(next.rows[1].result.zh, '46.2');
+  assert.equal(next.rows[1].result.zh, '46.20');
+});
+
+test('applyQcResultsToInspectionTable respects integer resultFormat', () => {
+  const tableValue = {
+    resultFormat: 'integer',
+    columnLabels: [{ key: 'item' }, { key: 'unit' }, { key: 'standard' }, { key: 'result' }],
+    rows: [
+      { item: { zh: '固体份', en: 'Solidity' }, unit: { zh: '%' }, standard: { zh: '45±2' }, result: { zh: '', en: '' } }
+    ]
+  };
+  const qcFields = mapQcRowToReportFields({ solid_content_pct: 46.7 });
+  const { applied, tableValue: next } = applyQcResultsToInspectionTable(
+    tableValue,
+    qcFields.inspectionTable
+  );
+  assert.equal(applied, 1);
+  assert.equal(next.rows[0].result.zh, '47');
 });
 
 test('applyQcYearbookFieldsToFormFields updates form fields', () => {
@@ -74,7 +91,7 @@ test('applyQcYearbookFieldsToFormFields updates form fields', () => {
   const qcFields = mapQcRowToReportFields({ appearance: '合格外观', inspection_conclusion: '合格' });
   const { inspectionApplied } = applyQcYearbookFieldsToFormFields(formFields, qcFields);
   assert.equal(inspectionApplied, 1);
-  assert.equal(formFields[1].fieldValue.zh, '合格');
+  assert.equal(formFields[1].fieldValue.zh, '');
   assert.equal(formFields[2].fieldValue.rows[0].result.zh, '合格外观');
 });
 

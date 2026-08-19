@@ -103,6 +103,8 @@ const updateSchema = z.object({
   loginLockMinutes: z.number().int().min(5).max(1440).optional(),
   confirmSensitiveOperations: z.boolean().optional(),
   errorLogRetentionDays: z.number().int().min(30).max(3650).optional(),
+  loginLogRetentionDays: z.number().int().min(30).max(3650).optional(),
+  operationLogRetentionDays: z.number().int().min(30).max(3650).optional(),
   backupConfig: z.object({
     backupEnabled: z.boolean().optional(),
     backupCron: z.string().min(1).max(64).optional(),

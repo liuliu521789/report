@@ -90,24 +90,6 @@ export const ORDER_LINE_TRIGGER_COLS = new Set([
 
 
 
-/** @deprecated 联动列已并入 TRIGGER_COLS */
-
-export const ORDER_LINE_CALC_COLS = new Set([
-
-  ORDER_LINE_COL.NET_UNIT,
-
-  ORDER_LINE_COL.TONS,
-
-  ORDER_LINE_COL.NET_AMOUNT,
-
-  ORDER_LINE_COL.TAX_AMOUNT,
-
-  ORDER_LINE_COL.TOTAL
-
-]);
-
-
-
 function parseNum(raw) {
 
   if (raw == null || raw === '') return NaN;
@@ -570,22 +552,6 @@ export function recalcEditorOrderLineRow(row, options = {}) {
 
 
 
-/** @deprecated 使用 recalcEditorOrderLineRow */
-
-export function calcEditorOrderLineRow(row, options = {}) {
-
-  return recalcEditorOrderLineRow(row, {
-
-    ...options,
-
-    editedCol: options.editedCol ?? ORDER_LINE_COL.GROSS_UNIT
-
-  });
-
-}
-
-
-
 export function patchEditorOrderLineCalcColumns(row, options = {}) {
 
   return recalcEditorOrderLineRow(row, options);
@@ -783,90 +749,9 @@ export function editorRowsFromContractOrders(orders = [], modelProductMap = {}) 
 
 
 
-export function isOrderLineCalcColumn(colIndex) {
-
-  return ORDER_LINE_CALC_COLS.has(colIndex);
-
-}
-
-
-
 export function isOrderLineTriggerColumn(colIndex) {
 
   return ORDER_LINE_TRIGGER_COLS.has(colIndex);
 
 }
-
-/**
- * 轻量公式执行器（POC）
- * 支持以 `=` 开头的表达式，允许使用列常量：GROSS_UNIT, NET_UNIT, TONS, QTY, NET_AMOUNT, TAX_RATE, TAX_AMOUNT, TOTAL
- * 例如: "=ROUND((GROSS_UNIT/(1+TAX_RATE))*TONS,2)" 或 "=IF(QTY>100, GROSS_UNIT*0.95, GROSS_UNIT)"
- */
-export function evaluateFormulaOnRow(formula, row) {
-  if (!formula || typeof formula !== 'string') return '';
-  let expr = formula.trim();
-  if (expr.startsWith('=')) expr = expr.slice(1);
-
-  // 简单替换百分号数值（如 13% -> 0.13）在 row 中读取时处理
-  const colGet = (key) => {
-    switch ((key || '').toString().toUpperCase()) {
-      case 'GROSS_UNIT': return parseNum(row[ORDER_LINE_COL.GROSS_UNIT]) || 0;
-      case 'NET_UNIT': return parseNum(row[ORDER_LINE_COL.NET_UNIT]) || 0;
-      case 'TONS': return parseNum(row[ORDER_LINE_COL.TONS]) || 0;
-      case 'QTY': return parseNum(row[ORDER_LINE_COL.QTY]) || 0;
-      case 'NET_AMOUNT': return parseNum(row[ORDER_LINE_COL.NET_AMOUNT]) || 0;
-      case 'TAX_RATE': {
-        const v = resolveVatRateFractionFromCell(row[ORDER_LINE_COL.TAX_RATE]);
-        return Number.isFinite(v) ? v : DEFAULT_VAT_RATE;
-      }
-      case 'TAX_AMOUNT': return parseNum(row[ORDER_LINE_COL.TAX_AMOUNT]) || 0;
-      case 'TOTAL': return parseNum(row[ORDER_LINE_COL.TOTAL]) || 0;
-      default: return undefined;
-    }
-  };
-
-  // 将标识符替换为变量访问，例如 GROSS_UNIT -> __v.GROSS_UNIT
-  // 只允许字母、数字、下划线及括号、逗号、点号和运算符
-  // 为了简单实现，我们构建一个安全的执行函数，将列值作为参数传入
-  try {
-    const vars = {
-      GROSS_UNIT: colGet('GROSS_UNIT'),
-      NET_UNIT: colGet('NET_UNIT'),
-      TONS: colGet('TONS'),
-      QTY: colGet('QTY'),
-      NET_AMOUNT: colGet('NET_AMOUNT'),
-      TAX_RATE: colGet('TAX_RATE'),
-      TAX_AMOUNT: colGet('TAX_AMOUNT'),
-      TOTAL: colGet('TOTAL')
-    };
-
-    // 提供常用 Math 函数和 IF、ROUND 的简单实现
-    const IF = (cond, a, b) => (cond ? a : b);
-    const ROUND = (v, d) => {
-      if (d === undefined || d === null) d = _decimalPlaces;
-      const p = Math.pow(10, d);
-      return roundTo(v, d, 'round');
-    };
-
-    // 允许表达式中使用 Math, IF, ROUND 和变量名
-    const fnArgs = ['Math', 'IF', 'ROUND', ...Object.keys(vars)];
-    const fnVals = [Math, IF, ROUND, ...Object.values(vars)];
-
-    // 禁止分号，尽量降低注入风险
-    if (/[;\n]/.test(expr)) return '';
-
-    const func = new Function(...fnArgs, `return (${expr});`);
-    const res = func(...fnVals);
-    if (res == null || Number.isNaN(Number(res))) return '';
-    if (typeof res === 'number') {
-      return roundTo(res, _decimalPlaces, _roundingMode).toFixed(_decimalPlaces);
-    }
-    return String(res);
-  } catch (e) {
-    // 任何错误返回空字符串
-    return '';
-  }
-
-}
-
 

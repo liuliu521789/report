@@ -287,4 +287,33 @@ export default {
   white-space: nowrap;
   border: 0;
 }
+
+@media (max-width: 992px) {
+  .image-library-page {
+    margin: 0 -4px;
+  }
+
+  .image-library-page .main-card :deep(.el-card__body) {
+    padding: 12px;
+  }
+
+  .image-library-page .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .image-library-page .toolbar .el-button {
+    width: 100%;
+    margin: 0;
+  }
+
+  .image-library-page .meta {
+    width: 100%;
+  }
+
+  .image-library-page .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+}
 </style>

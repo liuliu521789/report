@@ -28,6 +28,8 @@ describe('Security Policy', () => {
       expect(result.idleTimeoutMinutes).toBe(30);
       // Should keep defaults for unset
       expect(result.errorLogRetentionDays).toBe(DEFAULT_SECURITY_SETTINGS.errorLogRetentionDays);
+      expect(result.loginLogRetentionDays).toBe(DEFAULT_SECURITY_SETTINGS.loginLogRetentionDays);
+      expect(result.operationLogRetentionDays).toBe(DEFAULT_SECURITY_SETTINGS.operationLogRetentionDays);
     });
 
     it('should clamp values to valid ranges', () => {

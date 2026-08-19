@@ -426,7 +426,13 @@
             <el-table-column label="创建时间" prop="created_at" width="160" />
             <el-table-column label="操作" width="140">
               <template #default="{ row }">
-                <el-button size="small" @click="showVersionDiff(row.version_num - 1, row.version_num)">对比上一版</el-button>
+                <el-button
+                  size="small"
+                  :disabled="Number(row.version_num) <= 1"
+                  @click="showVersionDiff(row.version_num - 1, row.version_num)"
+                >
+                  对比上一版
+                </el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -745,16 +751,33 @@ export default {
     },
 
     showVersionDiff(v1, v2) {
-      const minV = Math.min(v1, v2);
-      const maxV = Math.max(v1, v2);
+      const minV = Math.min(Number(v1), Number(v2));
+      const maxV = Math.max(Number(v1), Number(v2));
+      if (!Number.isFinite(minV) || !Number.isFinite(maxV) || minV < 1 || minV === maxV) {
+        this.$message.warning('首版没有上一版可对比，请先编辑保存生成新版本后再对比');
+        return;
+      }
       http.get(`/api/sales/contracts/${this.numericContractId}/versions/${minV}/${maxV}/diff`)
         .then(res => {
-          this.currentDiff = res.data;
+          const data = res.data || {};
+          if (data.error === 'VERSIONS_NOT_FOUND') {
+            this.$message.warning(data.message || '找不到可对比的两个版本');
+            return;
+          }
+          this.currentDiff = data;
           this.showDiffDialog = true;
-          this.$message.success(`已加载 v${minV} → v${maxV} 对比`);
+          if (!data.changes?.length) {
+            this.$message.info(`v${minV} → v${maxV} 无结构化字段差异`);
+          } else {
+            this.$message.success(`已加载 v${minV} → v${maxV} 对比`);
+          }
         })
         .catch(err => {
-          this.$message.error('获取 Diff 失败');
+          const msg =
+            err?.response?.data?.message ||
+            this.$apiUserMsg?.(err, '获取版本对比失败') ||
+            '获取版本对比失败';
+          this.$message.error(msg);
           console.error(err);
         });
     },

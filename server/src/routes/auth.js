@@ -164,14 +164,16 @@ router.post('/login', loginIpLimiter(), loginUsernameLimiter(), async (req, res)
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'BAD_REQUEST' });
   const { username, password } = parsed.data;
+  const loginId = String(username || '').trim();
   const pool = getPool();
   const settings = await getSecuritySettings(pool);
   const ip = clientIp(req);
   const ua = req.headers['user-agent'] || '';
   const device = summarizeUserAgent(ua);
 
+  /** 支持登录账号 / 手机号 / 姓名全称；账号与手机优先，同名多人则拒绝以免误登 */
   const [rows] = await pool.query(
-    `SELECT u.id, u.username, u.real_name, u.password_hash, u.is_active, u.account_type, u.employee_category_id,
+    `SELECT u.id, u.username, u.real_name, u.phone, u.password_hash, u.is_active, u.account_type, u.employee_category_id,
             u.permissions_json, u.failed_login_count, u.locked_until,
             u.totp_secret, u.totp_enabled_at,
             IFNULL(u.token_version, 0) AS token_version,
@@ -182,17 +184,24 @@ router.post('/login', loginIpLimiter(), loginUsernameLimiter(), async (req, res)
             IFNULL(c.require_two_factor, 0) AS category_require_two_factor
      FROM users u
      LEFT JOIN employee_categories c ON c.id = u.employee_category_id
-     WHERE (u.username = ? OR u.phone = ?) AND u.deleted_at IS NULL
-     ORDER BY (u.username = ?) DESC
-     LIMIT 1`,
-    [username, username, username]
+     WHERE u.deleted_at IS NULL
+       AND (u.username = ? OR u.phone = ? OR TRIM(IFNULL(u.real_name, '')) = ?)
+     ORDER BY (u.username = ?) DESC, (u.phone = ?) DESC, u.id ASC
+     LIMIT 2`,
+    [loginId, loginId, loginId, loginId, loginId]
   );
-  const user = rows?.[0];
+  let user = rows?.[0] || null;
+  if (user) {
+    const matchedByIdOrPhone = user.username === loginId || String(user.phone || '') === loginId;
+    if (!matchedByIdOrPhone && rows.length > 1) {
+      user = null;
+    }
+  }
 
   const fail = async (reason) => {
     await logLogin(pool, {
       userId: user?.id ?? null,
-      username,
+      username: loginId,
       ip,
       userAgent: ua,
       deviceSummary: device,
@@ -202,7 +211,7 @@ router.post('/login', loginIpLimiter(), loginUsernameLimiter(), async (req, res)
   };
 
   if (!user) {
-    await fail('用户不存在');
+    await fail(rows?.length > 1 ? '姓名重复，请使用登录账号或手机号' : '用户不存在');
     return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
   }
 
@@ -261,7 +270,7 @@ router.post('/login', loginIpLimiter(), loginUsernameLimiter(), async (req, res)
   const isStaff = isPermissionedStaffType(user.account_type);
   const isSuper = user.account_type === 'super_admin';
   const need2fa =
-    (isStaff && Number(user.category_require_two_factor) === 1) ||
+    (isStaff && (Number(user.category_require_two_factor) === 1 || Number(user.user_require_two_factor) === 1)) ||
     (isSuper && (Number(user.user_require_two_factor) === 1 || settings.enforceTwoFactorForSuperAdmin === true));
 
   if (!need2fa) {
@@ -313,7 +322,9 @@ async function userNeedsTwoFactor(pool, settings, row) {
     return Number(row.user_require_two_factor) === 1 || settings.enforceTwoFactorForSuperAdmin === true;
   }
   if (isPermissionedStaffType(row.account_type)) {
-    return Number(row.category_require_two_factor) === 1;
+    return (
+      Number(row.category_require_two_factor) === 1 || Number(row.user_require_two_factor) === 1
+    );
   }
   return false;
 }

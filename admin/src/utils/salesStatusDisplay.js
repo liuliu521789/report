@@ -89,9 +89,8 @@ export function orderFlowStatusZh(status, opts = {}) {
 /**
  * @param {{ status?: string, submitted_for_review_at?: string | null }} row
  */
-function shipperSuffix(row) {
-  const name = String(row?.shipped_by_name ?? row?.shippedByName ?? '').trim();
-  return name ? `（发货：${name}）` : '';
+function shipperNameOf(row) {
+  return String(row?.shipped_by_name ?? row?.shippedByName ?? '').trim();
 }
 
 export function orderStatusDisplay(row) {
@@ -99,15 +98,15 @@ export function orderStatusDisplay(row) {
   const label = ORDER_PHASE_LABEL[phase] || ORDER_BASE_LABEL[row?.status] || row?.status || '—';
 
   const phaseStyle = {
-    pending_submit: { type: 'info', icon: 'EditPen' },
-    pending_finance: { type: 'warning', icon: 'Clock' },
-    finance_rejected: { type: 'danger', icon: 'CircleClose' },
-    pending_qc: { type: 'warning', icon: 'View' },
-    qc_rejected: { type: 'danger', icon: 'CircleClose' },
-    pending_ship: { type: 'success', icon: 'CircleCheck' },
-    shipped_open: { type: 'primary', icon: 'Van' },
-    completed: { type: 'success', icon: 'Finished' },
-    cancelled: { type: 'info', icon: 'CloseBold' }
+    pending_submit: { type: 'info', icon: 'EditPen', tone: 'slate' },
+    pending_finance: { type: 'warning', icon: 'Clock', tone: 'amber' },
+    finance_rejected: { type: 'danger', icon: 'CircleClose', tone: 'rose' },
+    pending_qc: { type: 'warning', icon: 'View', tone: 'orange' },
+    qc_rejected: { type: 'danger', icon: 'CircleClose', tone: 'rose' },
+    pending_ship: { type: 'success', icon: 'CircleCheck', tone: 'emerald' },
+    shipped_open: { type: 'primary', icon: 'Van', tone: 'sky' },
+    completed: { type: 'success', icon: 'Finished', tone: 'green' },
+    cancelled: { type: 'info', icon: 'CloseBold', tone: 'muted' }
   };
 
   const m = phaseStyle[phase];
@@ -120,11 +119,27 @@ export function orderStatusDisplay(row) {
               : row.finance_comment || row.qc_comment || ''
           ).trim()
         : '';
-    const shipTag = phase === 'shipped_open' || phase === 'completed' ? shipperSuffix(row) : '';
-    const displayLabel = shipTag ? `${label}${shipTag}` : label;
-    return { type: m.type, icon: m.icon, label: displayLabel, rejectReason };
+    const shipperName =
+      phase === 'shipped_open' || phase === 'completed' ? shipperNameOf(row) : '';
+    return {
+      type: m.type,
+      icon: m.icon,
+      label,
+      phase,
+      tone: m.tone,
+      shipperName,
+      rejectReason
+    };
   }
-  return { type: 'info', icon: 'InfoFilled', label, rejectReason: '' };
+  return {
+    type: 'info',
+    icon: 'InfoFilled',
+    label,
+    phase: phase || 'unknown',
+    tone: 'muted',
+    shipperName: '',
+    rejectReason: ''
+  };
 }
 
 const CONTRACT_LABEL = {

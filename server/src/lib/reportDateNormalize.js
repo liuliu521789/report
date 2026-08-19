@@ -1,5 +1,7 @@
 /** 报告检验日期 / 出厂日期：统一 YYYY-MM-DD */
 
+import { normalizeInspectionTableForDisplay } from './inspectionResultFormat.js';
+
 export const REPORT_DATE_FIELD_KEYS = new Set(['analysis_date', 'ex_mill_date']);
 
 function pad2(n) {
@@ -72,6 +74,9 @@ export function normalizeReportFieldValueForDisplay(fieldKey, raw) {
   const parsed = parseReportFieldValueJson(raw);
   if (REPORT_DATE_FIELD_KEYS.has(fieldKey)) {
     return normalizeReportDateFieldValue(parsed);
+  }
+  if (fieldKey === 'inspection_table' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return normalizeInspectionTableForDisplay(parsed);
   }
   // 检验项目表等复杂结构保持原样，勿按 { zh, en } 文本字段处理
   if (parsed != null) return parsed;

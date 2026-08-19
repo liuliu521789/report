@@ -1,4 +1,17 @@
 import { getPool } from '../db/pool.js';
+import {
+  parseQuantityToLegacyNumber,
+  roundOrderDecimal4,
+  specNumericToTonFactor,
+  tonsFromQtyAndSpec
+} from '../../../shared/salesOrderTonAmount.js';
+
+export {
+  parseQuantityToLegacyNumber,
+  roundOrderDecimal4,
+  specNumericToTonFactor,
+  tonsFromQtyAndSpec
+};
 
 /** 与数据库 maps_to 一致，用于同步旧列、合同、质检匹配 */
 export const MAPS_TO_KEYS = new Set([
@@ -309,45 +322,6 @@ export function legacyRowToDataJson(row) {
     if (v !== undefined && v !== null && v !== '') o[k] = v;
   }
   return o;
-}
-
-/** 订单数量/单价/金额：与 DECIMAL(18,4) 对齐，全链路统一四位小数 */
-export function roundOrderDecimal4(n) {
-  if (n == null || n === '') return 0;
-  const x = typeof n === 'number' ? n : Number(n);
-  if (!Number.isFinite(x)) return 0;
-  return Math.round(x * 10000) / 10000;
-}
-
-/** 数量支持「数字+单位」（如 10桶、2.5吨桶）；提取首个正数用于 DB 数值列与金额试算 */
-export function parseQuantityToLegacyNumber(raw) {
-  if (raw == null || raw === '') return 0;
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return raw > 0 ? raw : 0;
-  }
-  const m = String(raw).match(/(\d+(?:\.\d+)?)/);
-  if (!m) return 0;
-  const n = Number(m[1]);
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-/** 规格文本中首个正数；含 kg/千克/公斤 时按千克→吨因子，否则为可与数量相乘的吨/桶系数 */
-export function specNumericToTonFactor(specText) {
-  const raw = String(specText ?? '');
-  const n = parseQuantityToLegacyNumber(raw);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  if (/千克|公斤|kg/i.test(raw)) return n / 1000;
-  return n;
-}
-
-/** 单位（吨）= 数量 × 规格因子，四舍五入两位小数；无法计算时返回 null */
-export function tonsFromQtyAndSpec(qtyRaw, specText) {
-  const q = parseQuantityToLegacyNumber(qtyRaw);
-  const factor = specNumericToTonFactor(specText);
-  if (!Number.isFinite(q) || q <= 0 || factor == null) return null;
-  const tons = q * factor;
-  if (!Number.isFinite(tons) || tons <= 0) return null;
-  return Math.round(tons * 100) / 100;
 }
 
 export function dataJsonToLegacyColumns(definitions, dataJson) {

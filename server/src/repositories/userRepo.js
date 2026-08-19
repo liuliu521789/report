@@ -7,6 +7,19 @@ import { getPool } from '../db/pool.js';
 
 const ACTIVE_FILTER = 'u.deleted_at IS NULL';
 
+/** 员工账号列表：董事长第一；超级管理员/管理类在前；管理员账号类型在员工之上 */
+const USER_LIST_ORDER_BY = `
+  CASE WHEN IFNULL(c.code, '') = 'chairman' THEN 0 ELSE 1 END ASC,
+  CASE u.account_type
+    WHEN 'super_admin' THEN 1
+    WHEN 'manager' THEN 2
+    WHEN 'employee' THEN 3
+    ELSE 4
+  END ASC,
+  CASE WHEN IFNULL(c.code, '') = 'sales_admin' THEN 0 ELSE 1 END ASC,
+  IFNULL(c.sort_order, 9999) ASC,
+  u.id ASC`;
+
 const BASE_SELECT = `
   SELECT u.id, u.username, u.real_name AS realName, u.phone, u.account_type AS accountType,
          u.employee_category_id AS employeeCategoryId,
@@ -15,10 +28,12 @@ const BASE_SELECT = `
          IFNULL(u.token_version, 0) AS tokenVersion,
          IFNULL(u.force_change_password, 0) AS forceChangePassword,
          IFNULL(u.require_two_factor, 0) AS requireTwoFactor,
+         (CASE WHEN u.totp_enabled_at IS NOT NULL THEN 1 ELSE 0 END) AS totpBound,
          u.totp_enabled_at AS totpEnabledAt,
          u.created_at AS createdAt, u.updated_at AS updatedAt,
          u.password_changed_at AS passwordChangedAt,
          c.name_zh AS categoryNameZh, c.code AS categoryCode,
+         IFNULL(c.require_two_factor, 0) AS categoryRequireTwoFactor,
          d.name_zh AS departmentNameZh
   FROM users u
   LEFT JOIN employee_categories c ON c.id = u.employee_category_id
@@ -73,7 +88,7 @@ export async function findUsersPaged({
   const total = Number(countRows?.[0]?.c || 0);
 
   const [rows] = await pool.query(
-    `${BASE_SELECT} ${whereSql} ORDER BY u.id ASC LIMIT ? OFFSET ?`,
+    `${BASE_SELECT} ${whereSql} ORDER BY ${USER_LIST_ORDER_BY} LIMIT ? OFFSET ?`,
     [...params, safeSize, offset]
   );
   return { items: rows || [], total, page: safePage, pageSize: safeSize };
@@ -97,7 +112,7 @@ export async function findUsersLite({ activeOnly = true, accountType = '' } = {}
      FROM users u
      LEFT JOIN employee_categories c ON c.id = u.employee_category_id
      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-     ORDER BY u.id ASC`,
+     ORDER BY ${USER_LIST_ORDER_BY}`,
     params
   );
   return rows || [];

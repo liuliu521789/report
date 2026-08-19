@@ -2,7 +2,7 @@
   <div class="qrcodes-page">
     <el-card class="toolbar-card" shadow="never">
       <div class="page-intro">
-        <span>查看已生成的二维码及绑定报告；扫码链接失效时请确认关联报告仍为有效状态。</span>
+        <span>查看已生成的二维码及绑定报告；编号格式 QR-年份-序号（如 QR-2026-000001）；支持 Token、编号、ZJ-报告ID、产品、批次、客户搜索。</span>
         <el-button
           v-if="canCreateQrcode"
           type="primary"
@@ -17,7 +17,7 @@
         <div class="toolbar-left">
           <el-input
             v-model="q"
-            placeholder="按产品名称或批次号搜索"
+            placeholder="Token / QR-2026-000001 / ZJ-报告ID / 产品 / 批次 / 客户"
             clearable
             class="search-input"
             @keyup.enter="onSearch"
@@ -62,7 +62,11 @@
         @row-click="onRowClick"
       >
         <el-table-column type="selection" width="48" />
-        <el-table-column prop="id" label="ID" width="72" />
+        <el-table-column label="二维码编号" width="148" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="mono">{{ displayQrcodeUid(row) || '—' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="二维码" width="88" align="center">
           <template #default="{ row }">
             <button
@@ -105,6 +109,9 @@
             </el-tag>
             <span v-else class="muted">无</span>
           </template>
+        </el-table-column>
+        <el-table-column label="客户" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ formatQrcodeCustomers(row) }}</template>
         </el-table-column>
         <el-table-column label="关联报告（产品 / 批次）" min-width="300">
           <template #default="{ row }">
@@ -182,7 +189,7 @@
               alt="二维码"
               class="mobile-qr-thumb"
             />
-            <strong>#{{ row.id }}</strong>
+            <strong>{{ displayQrcodeUid(row) || '—' }}</strong>
             <el-tag v-if="row.reportCount > 0" size="small" type="success" effect="plain" round>
               {{ row.reportCount }} 份报告
             </el-tag>
@@ -201,6 +208,10 @@
               @click.stop="copyText(row.token, 'Token 已复制')"
             />
           </span>
+        </div>
+        <div class="mobile-line">
+          <span>客户</span>
+          <span>{{ formatQrcodeCustomers(row) }}</span>
         </div>
         <div class="mobile-tags">
           <el-tag
@@ -253,40 +264,109 @@
     <el-drawer
       v-model="drawer"
       :title="drawerTitle"
-      size="520px"
+      size="560px"
       class="qrcode-drawer"
       destroy-on-close
       @closed="onDrawerClosed"
     >
       <div v-loading="qrLoading" class="drawer-body">
         <template v-if="detail">
-          <div v-if="qrDataUrl" class="qr-preview-section">
-            <img :src="qrDataUrl" alt="二维码" class="qr-preview-image" />
-            <div class="qr-meta">
-              <div class="qr-meta-row">
-                <span class="qr-meta-label">扫码链接</span>
-                <span class="qr-meta-value" :title="qrScanUrl">{{ truncateUrl(qrScanUrl) }}</span>
-              </div>
-              <div class="qr-meta-row">
-                <span class="qr-meta-label">Token</span>
-                <span class="qr-meta-value mono" :title="qrToken">{{ truncateToken(qrToken) }}</span>
-              </div>
+          <section class="qr-hero">
+            <div v-if="qrDataUrl" class="qr-hero__img-wrap">
+              <img :src="qrDataUrl" alt="二维码" class="qr-hero__img" />
             </div>
-            <div class="qr-actions">
-              <el-button size="small" type="primary" :icon="View" :disabled="!qrScanUrl" @click="openScanUrl">
-                预览扫码页
-              </el-button>
-              <el-button size="small" :icon="DocumentCopy" :disabled="!qrScanUrl" @click="copyText(qrScanUrl, '扫码链接已复制')">
-                复制链接
-              </el-button>
-              <el-button size="small" :icon="DocumentCopy" :disabled="!qrToken" @click="copyText(qrToken, 'Token 已复制')">
-                复制 Token
-              </el-button>
-              <el-button size="small" :icon="Download" @click="downloadQr">下载图片</el-button>
+            <div class="qr-hero__main">
+              <div class="qr-hero__head">
+                <span class="qr-hero__uid">{{ qrQrcodeUid || '—' }}</span>
+                <span v-if="detail.qrcode.createdAt" class="qr-hero__time">
+                  {{ $dt(detail.qrcode.createdAt) }}
+                </span>
+              </div>
+              <dl class="qr-info-list">
+                <div class="qr-info-item">
+                  <dt>扫码链接</dt>
+                  <dd>
+                    <span class="qr-info-value" :title="qrScanUrl">{{ truncateUrl(qrScanUrl) }}</span>
+                    <span class="qr-info-actions">
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        :icon="DocumentCopy"
+                        :disabled="!qrScanUrl"
+                        @click="copyText(qrScanUrl, '扫码链接已复制')"
+                      >
+                        复制
+                      </el-button>
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        :icon="View"
+                        :disabled="!qrScanUrl"
+                        @click="openScanUrl"
+                      >
+                        预览
+                      </el-button>
+                    </span>
+                  </dd>
+                </div>
+                <div class="qr-info-item">
+                  <dt>Token</dt>
+                  <dd>
+                    <span class="qr-info-value mono" :title="qrToken">{{ truncateToken(qrToken) }}</span>
+                    <span class="qr-info-actions">
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        :icon="DocumentCopy"
+                        :disabled="!qrToken"
+                        @click="copyText(qrToken, 'Token 已复制')"
+                      >
+                        复制
+                      </el-button>
+                    </span>
+                  </dd>
+                </div>
+              </dl>
             </div>
-          </div>
+          </section>
 
-          <div class="reports-section">
+          <section class="qr-toolbar">
+            <el-button size="small" :icon="Download" :loading="qrLabelBusy" :disabled="!qrDataUrl" @click="downloadQr">
+              下载图片
+            </el-button>
+            <el-button size="small" :icon="Printer" :loading="qrLabelBusy" :disabled="!qrDataUrl" @click="printQr">
+              打印标签
+            </el-button>
+          </section>
+
+          <section class="qr-label-panel">
+            <div class="qr-label-panel__head">标签设置</div>
+            <div class="qr-label-panel__row">
+              <span class="qr-label-panel__label">尺寸</span>
+              <el-select v-model="labelPreset" size="small" class="qr-label-preset-select">
+                <el-option
+                  v-for="item in labelPresetOptions"
+                  :key="item.key"
+                  :label="item.label"
+                  :value="item.key"
+                />
+              </el-select>
+            </div>
+            <div class="qr-label-panel__row qr-label-panel__row--fields">
+              <span class="qr-label-panel__label">显示</span>
+              <el-checkbox-group v-model="labelFields" class="qr-label-panel__checks">
+                <el-checkbox value="qrcodeUid">二维码编号</el-checkbox>
+                <el-checkbox value="product">产品</el-checkbox>
+                <el-checkbox value="batch">批号</el-checkbox>
+                <el-checkbox value="customer">客户</el-checkbox>
+              </el-checkbox-group>
+            </div>
+          </section>
+
+          <section class="reports-section">
             <div class="section-head">
               <h4>关联报告</h4>
               <span class="section-sub">{{ detail.qrcode.reports?.length || 0 }} 份</span>
@@ -294,47 +374,48 @@
             <el-empty
               v-if="!(detail.qrcode.reports && detail.qrcode.reports.length)"
               description="暂无关联报告"
-              :image-size="72"
+              :image-size="64"
             />
-            <el-table
-              v-else
-              :data="detail.qrcode.reports"
-              border
-              size="small"
-              stripe
-              @row-click="onReportRowClick"
-            >
-              <el-table-column prop="reportNo" label="报告编号" width="108" />
-              <el-table-column prop="productName" label="产品名称" min-width="120" show-overflow-tooltip />
-              <el-table-column prop="batchNo" label="批次" width="108" show-overflow-tooltip />
-              <el-table-column label="判定" width="80" align="center">
-                <template #default="{ row }">
-                  <el-tag v-if="row.conclusion === 'pass'" type="success" size="small">合格</el-tag>
-                  <el-tag v-else-if="row.conclusion === 'fail'" type="danger" size="small">不合格</el-tag>
-                  <el-tag v-else type="info" size="small">未知</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="72" align="center">
-                <template #default="{ row }">
-                  <el-tag v-if="row.status === 'active'" size="small">有效</el-tag>
-                  <el-tag v-else type="warning" size="small">作废</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="" width="56" align="center" fixed="right">
-                <template #default="{ row }">
-                  <el-button
-                    v-if="canOpenReport(row)"
-                    link
-                    type="primary"
-                    size="small"
-                    @click.stop="goReport(row)"
-                  >
-                    打开
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
+            <div v-else class="reports-table-wrap">
+              <el-table
+                :data="detail.qrcode.reports"
+                border
+                size="small"
+                stripe
+                @row-click="onReportRowClick"
+              >
+                <el-table-column prop="reportNo" label="报告编号" min-width="100" show-overflow-tooltip />
+                <el-table-column prop="productName" label="产品" min-width="88" show-overflow-tooltip />
+                <el-table-column prop="batchNo" label="批次" min-width="80" show-overflow-tooltip />
+                <el-table-column label="判定" width="68" align="center">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.conclusion === 'pass'" type="success" size="small">合格</el-tag>
+                    <el-tag v-else-if="row.conclusion === 'fail'" type="danger" size="small">不合格</el-tag>
+                    <el-tag v-else type="info" size="small">未知</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="60" align="center">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.status === 'active'" size="small">有效</el-tag>
+                    <el-tag v-else type="warning" size="small">作废</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="" width="48" align="center">
+                  <template #default="{ row }">
+                    <el-button
+                      v-if="canOpenReport(row)"
+                      link
+                      type="primary"
+                      size="small"
+                      @click.stop="goReport(row)"
+                    >
+                      打开
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </section>
         </template>
       </div>
     </el-drawer>
@@ -346,6 +427,7 @@ import {
   Delete,
   DocumentCopy,
   Download,
+  Printer,
   Promotion,
   Refresh,
   RefreshLeft,
@@ -354,6 +436,17 @@ import {
 } from '@element-plus/icons-vue';
 import { deleteQrcodes, getQrcode, getQrcodeQr, listQrcodes } from '../api';
 import { isSuperAdmin, perm } from '../utils/permissions';
+import {
+  buildQrcodeLabelDataUrl,
+  DEFAULT_QRCODE_LABEL_FIELDS,
+  DEFAULT_QRCODE_LABEL_PRESET,
+  downloadDataUrl,
+  enrichReportsForQrcodeLabel,
+  printQrcodeLabelImage,
+  QRCODE_LABEL_SCENES,
+  QRCODE_LABEL_PRESET_OPTIONS
+} from '../utils/qrcodeLabelImage';
+import { displayQrcodeUid } from '../utils/qrcodeUid';
 
 const MAX_VISIBLE_TAGS = 3;
 
@@ -364,6 +457,7 @@ export default {
       Delete,
       DocumentCopy,
       Download,
+      Printer,
       Promotion,
       Refresh,
       RefreshLeft,
@@ -382,7 +476,12 @@ export default {
       qrToken: '',
       qrLoading: false,
       qrScanUrl: '',
-      activeRowId: null
+      activeRowId: null,
+      activeListRow: null,
+      labelFields: [...DEFAULT_QRCODE_LABEL_FIELDS],
+      labelPreset: DEFAULT_QRCODE_LABEL_PRESET,
+      labelPresetOptions: QRCODE_LABEL_PRESET_OPTIONS,
+      qrLabelBusy: false
     };
   },
   computed: {
@@ -399,7 +498,18 @@ export default {
     },
     drawerTitle() {
       if (!this.activeRowId) return '二维码详情';
-      return `二维码详情 #${this.activeRowId}`;
+      const uid =
+        displayQrcodeUid(this.detail?.qrcode) ||
+        displayQrcodeUid(this.items.find((r) => r.id === this.activeRowId)) ||
+        '';
+      return uid ? `二维码详情 ${uid}` : '二维码详情';
+    },
+    qrQrcodeUid() {
+      return (
+        displayQrcodeUid(this.detail?.qrcode) ||
+        displayQrcodeUid(this.items.find((r) => r.id === this.activeRowId)) ||
+        ''
+      );
     },
     emptyDescription() {
       return this.q ? '未找到匹配的二维码，请调整搜索条件' : '暂无二维码，请先在报告列表勾选报告后生成';
@@ -409,6 +519,7 @@ export default {
     this.load();
   },
   methods: {
+    displayQrcodeUid,
     async load() {
       this.listLoading = true;
       try {
@@ -455,6 +566,7 @@ export default {
     async open(row) {
       if (!this.canViewDetail) return;
       this.activeRowId = row.id;
+      this.activeListRow = row;
       this.drawer = true;
       this.detail = null;
       this.qrLoading = true;
@@ -480,21 +592,33 @@ export default {
       this.qrScanUrl = '';
       this.qrToken = '';
       this.activeRowId = null;
+      this.activeListRow = null;
     },
     async doDelete(ids, hint) {
       await this.$confirm(`确认删除${hint}？删除后不可恢复`, '提示', { type: 'warning' });
+      const idSet = new Set(ids);
       await deleteQrcodes(ids);
       this.$message.success('删除成功');
       if (this.activeRowId && ids.includes(this.activeRowId)) {
         this.drawer = false;
       }
+      this.items = this.items.filter((row) => !idSet.has(row.id));
+      this.total = Math.max(0, this.total - ids.length);
+      this.selected = this.selected.filter((row) => !idSet.has(row.id));
+      if (!this.items.length && this.page > 1 && this.total > 0) {
+        this.page -= 1;
+      }
       await this.load();
+    },
+    isConfirmDismiss(e) {
+      return e === 'cancel' || e === 'close';
     },
     async removeOne(row) {
       try {
-        await this.doDelete([row.id], `该二维码（ID: ${row.id}）`);
-      } catch (_) {
-        // cancelled
+        await this.doDelete([row.id], `该二维码（${displayQrcodeUid(row) || row.id}）`);
+      } catch (e) {
+        if (this.isConfirmDismiss(e)) return;
+        this.$message.error(this.$apiUserMsg(e, '删除失败'));
       }
     },
     async removeSelected() {
@@ -502,16 +626,48 @@ export default {
       if (!ids.length) return;
       try {
         await this.doDelete(ids, `选中的 ${ids.length} 条二维码`);
-      } catch (_) {
-        // cancelled
+      } catch (e) {
+        if (this.isConfirmDismiss(e)) return;
+        this.$message.error(this.$apiUserMsg(e, '删除失败'));
       }
     },
     downloadQr() {
-      if (!this.qrDataUrl) return;
-      const a = document.createElement('a');
-      a.href = this.qrDataUrl;
-      a.download = `qrcode-${this.qrToken || this.activeRowId}.png`;
-      a.click();
+      this.outputQrLabel('download');
+    },
+    printQr() {
+      this.outputQrLabel('print');
+    },
+    async outputQrLabel(mode) {
+      if (!this.qrDataUrl || this.qrLabelBusy) return;
+      this.qrLabelBusy = true;
+      try {
+        const listRow = this.activeListRow || this.items.find((r) => r.id === this.activeRowId);
+        const reportRows = enrichReportsForQrcodeLabel(
+          this.detail?.qrcode?.reports || [],
+          listRow?.reportTags || []
+        );
+        const { dataUrl, labelFailed } = await buildQrcodeLabelDataUrl(
+          this.qrDataUrl,
+          reportRows,
+          this.labelFields,
+          { qrcodeUid: this.qrQrcodeUid },
+          {
+            labelPreset: this.labelPreset,
+            scene: mode === 'print' ? QRCODE_LABEL_SCENES.PRINT : QRCODE_LABEL_SCENES.DOWNLOAD
+          }
+        );
+        if (labelFailed) {
+          this.$message.warning('标签合成失败，已使用纯二维码');
+        }
+        if (mode === 'print') {
+          this.$message.info('请在打印对话框中关闭「页眉和页脚」，边距选「无」，纸张选与标签尺寸一致');
+          printQrcodeLabelImage(dataUrl, this.qrQrcodeUid || '二维码标签', this.labelPreset);
+          return;
+        }
+        downloadDataUrl(dataUrl, `qrcode-${this.qrToken || this.activeRowId}.png`);
+      } finally {
+        this.qrLabelBusy = false;
+      }
     },
     openScanUrl() {
       if (!this.qrScanUrl) return;
@@ -553,6 +709,17 @@ export default {
     },
     formatReportTag(t) {
       return `${t.productName || '未命名产品'} / ${t.batchNo || '无批次'}`;
+    },
+    formatReportCustomer(row) {
+      const name = String(row?.customerName || '').trim();
+      const contact = String(row?.customerContact || '').trim();
+      if (name && contact && name !== contact) return `${name}（${contact}）`;
+      return name || contact || '—';
+    },
+    formatQrcodeCustomers(row) {
+      const tags = row.customerTags || [];
+      if (!tags.length) return '—';
+      return tags.map((t) => this.formatReportCustomer(t)).join('、');
     },
     visibleReportTags(row) {
       return (row.reportTags || []).slice(0, MAX_VISIBLE_TAGS);
@@ -621,7 +788,7 @@ export default {
   overflow-x: auto;
 }
 .desktop-table {
-  min-width: 980px;
+  min-width: 1120px;
 }
 .mobile-list {
   display: none;
@@ -738,53 +905,151 @@ export default {
 }
 .drawer-body {
   min-height: 120px;
-}
-.qr-preview-section {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding-bottom: 16px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid #ebeef5;
+  gap: 16px;
 }
-.qr-preview-image {
-  width: 220px;
-  height: 220px;
-  border: 1px solid #ebeef5;
+.qrcode-drawer :deep(.el-drawer__body) {
+  padding-top: 8px;
+}
+.qr-hero {
+  display: flex;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
   border-radius: 10px;
+  background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
+}
+.qr-hero__img-wrap {
+  flex: 0 0 auto;
+}
+.qr-hero__img {
+  display: block;
+  width: 148px;
+  height: 148px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
   background: #fff;
 }
-.qr-meta {
-  width: 100%;
-  margin-top: 12px;
-}
-.qr-meta-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 13px;
-}
-.qr-meta-label {
-  flex: 0 0 64px;
-  color: #94a3b8;
-}
-.qr-meta-value {
+.qr-hero__main {
   flex: 1;
   min-width: 0;
-  color: #334155;
+}
+.qr-hero__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+.qr-hero__uid {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 600;
+  color: #0f172a;
   word-break: break-all;
 }
-.qr-meta-value.mono {
+.qr-hero__time {
+  font-size: 12px;
+  color: #94a3b8;
+}
+.qr-info-list {
+  margin: 0;
+}
+.qr-info-item {
+  margin: 0 0 10px;
+}
+.qr-info-item:last-child {
+  margin-bottom: 0;
+}
+.qr-info-item dt {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 400;
+}
+.qr-info-item dd {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+}
+.qr-info-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.qr-info-value.mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
 }
-.qr-actions {
-  margin-top: 12px;
+.qr-info-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.qr-info-actions :deep(.el-button) {
+  padding: 0 4px;
+  height: auto;
+}
+.qr-toolbar {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 8px;
+}
+.qr-label-panel {
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+.qr-label-panel__head {
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+}
+.qr-label-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.qr-label-panel__row + .qr-label-panel__row {
+  margin-top: 10px;
+}
+.qr-label-panel__row--fields {
+  align-items: flex-start;
+}
+.qr-label-panel__label {
+  flex: 0 0 36px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 24px;
+}
+.qr-label-preset-select {
+  width: 140px;
+}
+.qr-label-panel__checks {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.qr-label-panel__checks :deep(.el-checkbox) {
+  margin-right: 0;
+  height: 24px;
+}
+.reports-section {
+  margin-top: 4px;
+}
+.reports-table-wrap {
+  overflow-x: auto;
 }
 .reports-section .section-head {
   display: flex;
@@ -832,6 +1097,25 @@ export default {
   }
   .qrcode-drawer :deep(.el-drawer) {
     width: calc(100vw - 20px) !important;
+  }
+  .qr-hero {
+    flex-direction: column;
+    align-items: center;
+  }
+  .qr-hero__main {
+    width: 100%;
+  }
+  .qr-hero__head {
+    justify-content: center;
+    text-align: center;
+  }
+  .qr-label-panel__row--fields {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .qr-label-panel__label {
+    flex: none;
   }
 }
 </style>

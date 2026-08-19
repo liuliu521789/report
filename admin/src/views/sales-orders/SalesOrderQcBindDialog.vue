@@ -24,7 +24,7 @@
         <div v-for="it in items" :key="it.id" class="qc-bind-row">
           <img :src="it.qrThumbDataUrl" class="qc-bind-thumb" alt="">
           <div class="qc-bind-meta">
-            <div class="qc-bind-id">二维码 #{{ it.id }}</div>
+            <div class="qc-bind-id">{{ displayQrcodeUid(it) || '—' }}</div>
             <div class="qc-bind-tags text-muted">{{ formatTags(it.reportTags) }}</div>
           </div>
           <el-button type="primary" size="small" :loading="saving" @click="handleBind(it)">
@@ -41,6 +41,7 @@
 import { ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { listSalesQrcodeBindCandidates, patchSalesOrderQcQrcode } from '../../api';
+import { displayQrcodeUid } from '../../utils/qrcodeUid';
 
 const props = defineProps({
   visible: Boolean,

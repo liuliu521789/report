@@ -1,5 +1,5 @@
 <template>
-  <div class="report-templates-page">
+  <div class="report-templates-page ref-list-page legacy-list-page">
     <div class="toolbar">
       <div class="toolbar-left">
         <el-input
@@ -37,10 +37,11 @@
       </div>
     </div>
 
-    <div class="table-wrap">
+    <div class="desktop-table-wrap table-wrap">
       <el-table
         ref="tableRef"
         v-loading="loading"
+        class="desktop-table"
         :data="items"
         border
         size="small"
@@ -67,7 +68,42 @@
       </el-table>
     </div>
 
-    <div class="pagination-wrap">
+    <div class="mobile-list" v-loading="loading">
+      <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
+        <div class="mobile-head">
+          <div class="mobile-head-main">
+            <div>
+              <strong>{{ row.name || '—' }}</strong>
+              <span class="name-sub">ID {{ row.id }}</span>
+            </div>
+          </div>
+          <el-tag size="small" effect="plain">{{ Number(row.fieldCount || 0) }} 字段</el-tag>
+        </div>
+        <div v-if="row.description" class="mobile-line">
+          <span>描述</span><span class="mobile-val">{{ row.description }}</span>
+        </div>
+        <div class="mobile-line"><span>更新</span><span>{{ $dt(row.updatedAt) }}</span></div>
+        <div class="mobile-actions">
+          <el-button size="small" type="primary" @click="goEditReport(row)">编辑</el-button>
+          <el-button size="small" type="danger" plain @click="onDelete(row)">删除</el-button>
+        </div>
+      </div>
+      <el-empty v-if="!loading && !items.length" description="暂无报告模板" />
+      <div v-if="total > 0" class="mobile-pager">
+        <el-pagination
+          background
+          layout="total, prev, pager, next"
+          :current-page="page"
+          :page-size="pageSize"
+          :total="total"
+          small
+          @current-change="onPageChange"
+          @size-change="onSizeChange"
+        />
+      </div>
+    </div>
+
+    <div class="pagination-wrap desktop-pagination">
       <el-pagination
         background
         layout="total, sizes, prev, pager, next, jumper"
@@ -556,6 +592,8 @@ export default {
 </script>
 
 <style scoped>
+@import '../styles/refListPage.css';
+
 .toolbar {
   display: flex;
   justify-content: space-between;

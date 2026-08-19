@@ -28,7 +28,6 @@ import {
   orderEditable
 } from './salesShared.js';
 import { sendUnifiedError, sendUnifiedSuccess, sendSalesOrderCrudError } from './salesOrderRouterHelpers.js';
-import { healOrphanPendingQcBatch } from '../../lib/salesOrderFlowRuntime.js';
 import { buildOrderReportPrefill } from '../../lib/orderReportPrefill.js';
 import { lookupQcYearbookForReport } from '../../lib/qcYearbookReportLookup.js';
 
@@ -137,12 +136,6 @@ router.get('/orders', async (req, res, next) => {
     if (!canOrderQuery) return sendUnifiedError(res, 403, 'FORBIDDEN');
     const q = listQuerySchema.parse(req.query);
     const pool = getPool();
-    try {
-      await healOrphanPendingQcBatch(pool);
-    } catch (healErr) {
-      // eslint-disable-next-line no-console
-      console.warn('[orders] heal orphan pending_qc failed:', healErr?.message || healErr);
-    }
     const uid = req.user.userId;
     const seeAll = canViewAllSalesOrders(req);
 
@@ -200,13 +193,6 @@ router.get('/orders', async (req, res, next) => {
           `SELECT sco.order_id,
                   c.id AS contract_id,
                   c.status AS contract_status,
-                  (
-                    SELECT a.comment_text
-                    FROM sales_contract_audit_logs a
-                    WHERE a.contract_id = c.id AND a.result = 'rejected'
-                    ORDER BY a.id DESC
-                    LIMIT 1
-                  ) AS contract_last_reject_comment,
                   c.created_at AS contract_created_at
            FROM sales_contract_orders sco
            INNER JOIN sales_contracts c ON c.id = sco.contract_id
@@ -222,7 +208,7 @@ router.get('/orders', async (req, res, next) => {
             contractByOrderId.set(oid, {
               contract_id: r.contract_id,
               contract_status: r.contract_status,
-              contract_last_reject_comment: r.contract_last_reject_comment || null
+              contract_last_reject_comment: null
             });
           }
         }
@@ -232,14 +218,15 @@ router.get('/orders', async (req, res, next) => {
     const listFieldDefs = await loadOrderFieldDefinitions(pool, { activeOnly: true });
     const listFieldDefsForViewer = filterOrderFieldDefsForList(req, listFieldDefs);
     const enriched = rows.map((r) => {
-      const { display_data, dataJson } = mergeRowDataJson(r, listFieldDefs);
+      const { display_data } = mergeRowDataJson(r, listFieldDefs);
       const c = contractByOrderId.get(Number(r.id)) || null;
+      // 列表不回传 data_json，展示用 display_data；编辑走详情接口
+      const { data_json: _omitDataJson, ...rowSansDataJson } = r;
       return redactOrderListRowForViewer(
         req,
         {
-          ...r,
+          ...rowSansDataJson,
           display_data,
-          data_json: dataJson,
           contract_id: c ? c.contract_id : null,
           contract_status: c ? c.contract_status : null,
           contract_last_reject_comment: c ? c.contract_last_reject_comment : null

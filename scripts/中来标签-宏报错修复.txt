@@ -1,0 +1,18 @@
+中来标签宏报错修复说明
+====================
+
+原宏报错原因（常见于「第x行第y列」类提示）：
+- 使用了 msoPicture / 在线 API / ADODB，在 WPS 或部分 Excel 下不兼容
+
+已改为：
+- 宏只负责调用本机 Python
+- 在「当前已打开」的工作簿上直接换二维码图（不用关文件）
+
+请重新导入宏：
+1. 打开你的 中来标签 - PR02-fixed-qr.xlsm
+2. Alt+F11 → 左侧若已有 ZhonglaiQR，右键删除该模块
+3. 文件 → 导入文件 → 选桌面或 d:\report\scripts\ZhonglaiQR.bas
+4. 保存
+5. Alt+F8 → 运行 RefreshZhonglaiQRCodes
+
+日常：改右侧表 → 点「刷新二维码」（或 Alt+F8）

@@ -8,7 +8,7 @@ export const API_ERROR_ZH = {
   FORBIDDEN: '没有权限执行此操作',
   NOT_FOUND: '记录不存在',
 
-  INVALID_CREDENTIALS: '用户名或密码错误',
+  INVALID_CREDENTIALS: '用户编号或密码错误',
   ACCOUNT_LOCKED: '登录尝试过多，账号已暂时锁定',
 
   INVALID_PENDING_TOKEN: '会话已失效，请重新登录后再试',
@@ -18,7 +18,7 @@ export const API_ERROR_ZH = {
 
   INVALID_IMPERSONATION_TARGET: '不能以该用户身份登录',
   OLD_PASSWORD_WRONG: '原密码不正确',
-  USERNAME_EXISTS: '用户名已存在',
+  USERNAME_EXISTS: '用户编号已存在',
 
   BAD_DEPARTMENT: '部门无效或不存在',
   ACCOUNT_TYPE_SCHEMA: '账号类型配置与数据库不一致，请更新服务或执行迁移',

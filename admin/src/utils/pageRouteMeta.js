@@ -72,7 +72,7 @@ export function resolvePageDesc(path) {
   }
   if (p.startsWith('/employee-categories')) return '维护品管、客服等类别及各类别默认权限';
   if (p.startsWith('/departments')) return '多级部门架构，供员工归档与合同等环节选人';
-  if (p.startsWith('/users')) return '创建员工账号、分配类别与个性化权限';
+  if (p.startsWith('/users')) return '创建用户编号、分配岗位与权限；双击行可快速编辑';
   if (p.startsWith('/support-contact')) return '配置技术工程师企业微信，供全员在操作指南中发送求助通知';
   if (p.startsWith('/backups')) return '数据库与文件备份包导出、完整性校验与注意事项';
   if (p === '/security') return '密码策略、登录锁定、会话超时、日志保留';

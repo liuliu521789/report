@@ -1,7 +1,17 @@
 <template>
   <div class="perm-toggles">
     <div class="perm-block">
-      <div class="perm-title">报告</div>
+      <div class="perm-block-head">
+        <div class="perm-title">报告</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('reports', { withFieldEdit: true })"
+          :indeterminate="isModuleIndeterminate('reports', { withFieldEdit: true })"
+          @change="(v) => setModuleAll('reports', v, { withFieldEdit: true })"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.reports.list" @change="emit">列表</el-checkbox>
       <el-checkbox v-model="inner.reports.view" @change="emit">查看详情</el-checkbox>
       <el-checkbox v-model="inner.reports.create" @change="emit">新建</el-checkbox>
@@ -30,37 +40,98 @@
       </div>
     </div>
     <div class="perm-block">
-      <div class="perm-title">二维码</div>
+      <div class="perm-block-head">
+        <div class="perm-title">二维码</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('qrcodes')"
+          :indeterminate="isModuleIndeterminate('qrcodes')"
+          @change="(v) => setModuleAll('qrcodes', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.qrcodes.list" @change="emit">列表</el-checkbox>
       <el-checkbox v-model="inner.qrcodes.create" @change="emit">生成</el-checkbox>
       <el-checkbox v-model="inner.qrcodes.viewDetail" @change="emit">详情/下载图</el-checkbox>
       <el-checkbox v-model="inner.qrcodes.delete" @change="emit">删除</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">模板</div>
+      <div class="perm-block-head">
+        <div class="perm-title">模板</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('templates')"
+          :indeterminate="isModuleIndeterminate('templates')"
+          @change="(v) => setModuleAll('templates', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.templates.use" @change="emit">使用模板/存为模板</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">公司章 / 公司信息</div>
+      <div class="perm-block-head">
+        <div class="perm-title">公司章 / 公司信息</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isMultiModuleAllChecked(['stamps', 'company'])"
+          :indeterminate="isMultiModuleIndeterminate(['stamps', 'company'])"
+          @change="(v) => setMultiModuleAll(['stamps', 'company'], v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.stamps.view" @change="emit">公司章查看</el-checkbox>
       <el-checkbox v-model="inner.stamps.manage" @change="emit">公司章管理</el-checkbox>
       <el-checkbox v-model="inner.company.view" @change="emit">公司信息查看</el-checkbox>
       <el-checkbox v-model="inner.company.manage" @change="emit">公司信息管理</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">企业微信通知（module=wecom）</div>
+      <div class="perm-block-head">
+        <div class="perm-title">企业微信通知</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('wecom')"
+          :indeterminate="isModuleIndeterminate('wecom')"
+          @change="(v) => setModuleAll('wecom', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.wecom.manage" @change="emit">配置企业与模板、通知对象</el-checkbox>
       <el-checkbox v-model="inner.wecom.send" @change="emit">仅调用发送接口（自动化/对接，不含密钥配置）</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">安全审计（非超管按此处授权；不可删日志、不可改安全策略）</div>
+      <div class="perm-block-head">
+        <div class="perm-title">安全审计</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('audit')"
+          :indeterminate="isModuleIndeterminate('audit')"
+          @change="(v) => setModuleAll('audit', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
+      <div class="perm-subtitle">不可删除日志、不可修改安全策略</div>
       <el-checkbox v-model="inner.audit.viewLogin" @change="emit">登录日志查看</el-checkbox>
       <el-checkbox v-model="inner.audit.viewOperations" @change="emit">操作日志查看</el-checkbox>
       <el-checkbox v-model="inner.audit.viewErrors" @change="emit">错误日志查看</el-checkbox>
       <el-checkbox v-model="inner.audit.exportAudit" @change="emit">审计数据导出</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">销售 · 订单（module=order_management）</div>
+      <div class="perm-block-head">
+        <div class="perm-title">销售 · 订单</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('order_management')"
+          :indeterminate="isModuleIndeterminate('order_management')"
+          @change="(v) => setModuleAll('order_management', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.order_management.order_input" @change="emit">录入 / Excel 导入</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_query" @change="emit">查询列表</el-checkbox>
       <el-checkbox v-model="inner.order_management.order_query_all" @change="emit">查看全部订单（否则仅本人）</el-checkbox>
@@ -79,7 +150,17 @@
       <el-checkbox v-model="inner.order_management.order_list_qc_qrcode" @change="emit">订单列表显示质检二维码列</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">销售 · 合同（module=contract_management）</div>
+      <div class="perm-block-head">
+        <div class="perm-title">销售 · 合同</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('contract_management')"
+          :indeterminate="isModuleIndeterminate('contract_management')"
+          @change="(v) => setModuleAll('contract_management', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.contract_management.template_manage" @change="emit">合同模板管理</el-checkbox>
       <el-checkbox v-model="inner.contract_management.contract_generate" @change="emit">生成合同</el-checkbox>
       <el-checkbox v-model="inner.contract_management.contract_submit" @change="emit">提交合同审核</el-checkbox>
@@ -91,24 +172,64 @@
       <el-checkbox v-model="inner.contract_management.contract_multi_approve" @change="emit">多人审批流程</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">销售 · 流程（module=process_management）</div>
+      <div class="perm-block-head">
+        <div class="perm-title">销售 · 流程</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('process_management')"
+          :indeterminate="isModuleIndeterminate('process_management')"
+          @change="(v) => setModuleAll('process_management', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.process_management.view_flow" @change="emit">流程状态追溯</el-checkbox>
       <el-checkbox v-model="inner.process_management.edit_flow" @change="emit">配置订单审核流程</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">销售 · 数据（module=data_management）</div>
+      <div class="perm-block-head">
+        <div class="perm-title">销售 · 数据导出</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('data_management')"
+          :indeterminate="isModuleIndeterminate('data_management')"
+          @change="(v) => setModuleAll('data_management', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.data_management.data_export" @change="emit">导出 Excel（权限范围内）</el-checkbox>
       <el-checkbox v-model="inner.data_management.data_export_all" @change="emit">全量导出 / 订单号前缀设置</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">销售 · 客户管理（module=customer_management）</div>
+      <div class="perm-block-head">
+        <div class="perm-title">销售 · 客户管理</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('customer_management')"
+          :indeterminate="isModuleIndeterminate('customer_management')"
+          @change="(v) => setModuleAll('customer_management', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.customer_management.view" @change="emit">查看客户列表</el-checkbox>
       <el-checkbox v-model="inner.customer_management.create" @change="emit">新增客户</el-checkbox>
       <el-checkbox v-model="inner.customer_management.edit" @change="emit">编辑客户信息</el-checkbox>
       <el-checkbox v-model="inner.customer_management.disable" @change="emit">启用/停用客户</el-checkbox>
     </div>
     <div class="perm-block">
-      <div class="perm-title">品质台账（module=qc_yearbooks）</div>
+      <div class="perm-block-head">
+        <div class="perm-title">品质台账</div>
+        <el-checkbox
+          class="perm-select-all"
+          :model-value="isModuleAllChecked('qc_yearbooks')"
+          :indeterminate="isModuleIndeterminate('qc_yearbooks')"
+          @change="(v) => setModuleAll('qc_yearbooks', v)"
+        >
+          全选
+        </el-checkbox>
+      </div>
       <el-checkbox v-model="inner.qc_yearbooks.view" @change="emit">查看各年份台账数据</el-checkbox>
       <el-checkbox v-model="inner.qc_yearbooks.upload" @change="emit">维护（新增年份、Excel 导入与成品检验台账）</el-checkbox>
     </div>
@@ -144,6 +265,58 @@ export default {
   methods: {
     emit() {
       this.$emit('update:modelValue', JSON.parse(JSON.stringify(this.inner)));
+    },
+    moduleBoolKeys(modKey) {
+      const obj = this.inner[modKey];
+      if (!obj || typeof obj !== 'object') return [];
+      return Object.keys(obj).filter((k) => k !== 'fieldEdit');
+    },
+    moduleFieldEditKeys(modKey) {
+      const fe = this.inner[modKey]?.fieldEdit;
+      if (!fe || typeof fe !== 'object') return [];
+      return Object.keys(fe);
+    },
+    isModuleAllChecked(modKey, { withFieldEdit = false } = {}) {
+      const boolKeys = this.moduleBoolKeys(modKey);
+      if (!boolKeys.length) return false;
+      const mainAll = boolKeys.every((k) => !!this.inner[modKey][k]);
+      if (!withFieldEdit) return mainAll;
+      const feKeys = this.moduleFieldEditKeys(modKey);
+      if (!feKeys.length) return mainAll;
+      return mainAll && feKeys.every((k) => !!this.inner[modKey].fieldEdit[k]);
+    },
+    isModuleAnyChecked(modKey, { withFieldEdit = false } = {}) {
+      const boolKeys = this.moduleBoolKeys(modKey);
+      if (boolKeys.some((k) => !!this.inner[modKey][k])) return true;
+      if (!withFieldEdit) return false;
+      const feKeys = this.moduleFieldEditKeys(modKey);
+      return feKeys.some((k) => !!this.inner[modKey].fieldEdit[k]);
+    },
+    isModuleIndeterminate(modKey, opts = {}) {
+      return this.isModuleAnyChecked(modKey, opts) && !this.isModuleAllChecked(modKey, opts);
+    },
+    setModuleAll(modKey, checked, { withFieldEdit = false, emitChange = true } = {}) {
+      for (const k of this.moduleBoolKeys(modKey)) {
+        this.inner[modKey][k] = !!checked;
+      }
+      if (withFieldEdit) {
+        for (const k of this.moduleFieldEditKeys(modKey)) {
+          this.inner[modKey].fieldEdit[k] = !!checked;
+        }
+      }
+      if (emitChange) this.emit();
+    },
+    isMultiModuleAllChecked(modKeys, opts = {}) {
+      return modKeys.every((m) => this.isModuleAllChecked(m, opts));
+    },
+    isMultiModuleIndeterminate(modKeys, opts = {}) {
+      return modKeys.some((m) => this.isModuleAnyChecked(m, opts)) && !this.isMultiModuleAllChecked(modKeys, opts);
+    },
+    setMultiModuleAll(modKeys, checked, opts = {}) {
+      for (const m of modKeys) {
+        this.setModuleAll(m, checked, { ...opts, emitChange: false });
+      }
+      this.emit();
     }
   }
 };
@@ -161,13 +334,27 @@ export default {
 .perm-block:last-child {
   border-bottom: none;
 }
+.perm-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
 .perm-title {
   font-weight: 600;
-  margin-bottom: 8px;
   color: #334155;
 }
+.perm-block-head .perm-title {
+  margin-bottom: 0;
+}
+.perm-select-all :deep(.el-checkbox__label) {
+  font-size: 12px;
+  font-weight: normal;
+  color: #64748b;
+}
 .perm-subtitle {
-  margin-top: 12px;
+  margin-top: 4px;
   margin-bottom: 6px;
   font-size: 12px;
   color: #64748b;

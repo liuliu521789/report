@@ -32,12 +32,35 @@ export async function createContractVersion(pool, contractId, newBodyHtml, newDa
   return { version: nextVersion, changeSummary };
 }
 
+/** mysql2 可能返回已解析的对象，也可能是 JSON 字符串 */
+function parseVersionDataJson(raw) {
+  if (raw == null || raw === '') return {};
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  try {
+    const o = JSON.parse(String(raw));
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+function stableStringify(val) {
+  try {
+    return JSON.stringify(val ?? null);
+  } catch {
+    return String(val);
+  }
+}
+
 /** Simple diff summary generator (can be enhanced with deep diff library) */
 function generateChangeSummary(oldData, newData) {
-  if (!oldData || !newData) return '初始版本或重大更新';
+  const prev = parseVersionDataJson(oldData);
+  const next = parseVersionDataJson(newData);
+  if (!oldData || !Object.keys(prev).length) return '初始版本或重大更新';
   const changes = [];
-  for (const key in newData) {
-    if (JSON.stringify(oldData[key]) !== JSON.stringify(newData[key])) {
+  const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (stableStringify(prev[key]) !== stableStringify(next[key])) {
       changes.push(key);
     }
   }
@@ -59,14 +82,26 @@ export async function getContractVersions(pool, contractId) {
   return rows;
 }
 
-/** Compute diff between two versions (basic field-level for now) */
+const FIELD_LABELS = {
+  title: '标题',
+  body_html: '正文',
+  contract_visual: '订单明细/可视化'
+};
+
+/** Compute diff between two versions（字段级 + 正文） */
 export async function getVersionDiff(pool, contractId, v1, v2) {
+  const fromNum = Math.min(Number(v1), Number(v2));
+  const toNum = Math.max(Number(v1), Number(v2));
+  if (!Number.isFinite(fromNum) || !Number.isFinite(toNum) || fromNum < 1 || toNum < 1 || fromNum === toNum) {
+    return { error: 'VERSIONS_NOT_FOUND' };
+  }
+
   const [rows] = await pool.query(
-    `SELECT version_num, data_json, change_summary 
+    `SELECT version_num, body_html, data_json, change_summary 
      FROM contract_versions 
      WHERE contract_id = ? AND version_num IN (?, ?) 
      ORDER BY version_num`,
-    [contractId, Math.min(v1, v2), Math.max(v1, v2)]
+    [contractId, fromNum, toNum]
   );
 
   if (rows.length < 2) return { error: 'VERSIONS_NOT_FOUND' };
@@ -75,17 +110,36 @@ export async function getVersionDiff(pool, contractId, v1, v2) {
   const newV = rows[1];
   const diff = [];
 
-  const oldData = oldV.data_json ? JSON.parse(oldV.data_json) : {};
-  const newData = newV.data_json ? JSON.parse(newV.data_json) : {};
+  const oldData = parseVersionDataJson(oldV.data_json);
+  const newData = parseVersionDataJson(newV.data_json);
 
-  for (const key in newData) {
-    if (JSON.stringify(oldData[key]) !== JSON.stringify(newData[key])) {
+  // data_json 未写入时，用 body_html 列兜底，避免「有版本但对比为空」
+  if (oldData.body_html == null && oldV.body_html != null) oldData.body_html = oldV.body_html;
+  if (newData.body_html == null && newV.body_html != null) newData.body_html = newV.body_html;
+
+  const keys = new Set([...Object.keys(oldData), ...Object.keys(newData)]);
+  for (const key of keys) {
+    if (stableStringify(oldData[key]) !== stableStringify(newData[key])) {
       diff.push({
         field: key,
+        label: FIELD_LABELS[key] || key,
         old: oldData[key],
         new: newData[key]
       });
     }
+  }
+
+  // data_json 完全相同但正文列不同时仍展示正文差异
+  if (
+    !diff.some((c) => c.field === 'body_html') &&
+    String(oldV.body_html || '') !== String(newV.body_html || '')
+  ) {
+    diff.unshift({
+      field: 'body_html',
+      label: '正文',
+      old: oldV.body_html,
+      new: newV.body_html
+    });
   }
 
   return {

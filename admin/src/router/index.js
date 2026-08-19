@@ -24,7 +24,7 @@ import Dashboard from '../views/Dashboard.vue';
 import ReportDesigner from '../views/ReportDesigner.vue';
 import ImageLibrary from '../views/ImageLibrary.vue';
 import ReportTemplates from '../views/ReportTemplates.vue';
-import SalesOrders from '../views/SalesOrders.vue';
+const SalesOrders = () => import('../views/SalesOrders.vue');
 import SalesInternalMessages from '../views/SalesInternalMessages.vue';
 import SalesContracts from '../views/SalesContracts.vue';
 import SalesInvoiceCenter from '../views/SalesInvoiceCenter.vue';
@@ -195,21 +195,6 @@ const router = createRouter({
     }
   ]
 });
-
-function canRoutePerm(mod, key) {
-  const auth = useAuthStore();
-  if (auth.accountType === 'super_admin') return true;
-  const perms = auth.permissions || {};
-  return !!(perms[mod] && perms[mod][key]);
-}
-
-function canRouteAnyPerm(pairs) {
-  const auth = useAuthStore();
-  if (auth.accountType === 'super_admin') return true;
-  if (!Array.isArray(pairs) || pairs.length === 0) return false;
-  const perms = auth.permissions || {};
-  return pairs.some(([mod, key]) => !!(perms[mod] && perms[mod][key]));
-}
 
 async function hydrateAuthIfStale(auth) {
   if (!auth?.token) return;

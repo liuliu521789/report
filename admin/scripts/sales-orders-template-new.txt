@@ -1,0 +1,220 @@
+<template>
+  <div class="sales-orders" :class="{ 'sales-orders--touch': isTouchLike || isMobile }">
+    <SalesOrderListToolbar
+      v-model:filters="filters"
+      v-model:date-range="dateRange"
+      v-model:status-filter-selection="statusFilterSelection"
+      v-model:mobile-batch-open="mobileBatchOpen"
+      :is-mobile="isMobile"
+      :status-options="statusOptions"
+      :active-filter-tags="activeFilterTags"
+      :has-active-filters="hasActiveFilters"
+      :order-date-range-start-ph="orderDateRangeStartPh"
+      :order-date-range-end-ph="orderDateRangeEndPh"
+      :show-toolbar-manage-menu="showToolbarManageMenu"
+      :can-export="canExport"
+      :exporting="exporting"
+      v-bind="batchActionProps"
+      @search-input="onSearchInput"
+      @load-now="loadNow"
+      @load="load"
+      @reset-filters="resetFilters"
+      @status-filter-change="onStatusFilterChange"
+      @open-create="openCreate"
+      @toolbar-manage="onToolbarManageCommand"
+      @import-file="onImportFile"
+      @export-xlsx="exportXlsx"
+      @download-template="downloadTpl"
+      @batch-submit="batchSubmitReview"
+      @batch-withdraw="batchWithdrawReview"
+      @open-finance-batch="openFinanceBatch"
+      @open-qc-batch="openQcReviewBatch"
+      @open-ship-batch="openShipBatch"
+      @batch-delete="batchDeleteOrders"
+      @open-contract-gen="openContractGen"
+    />
+
+    <div class="table-wrap">
+      <SalesOrderDesktopTable
+        ref="desktopTable"
+        :items="items"
+        :total="total"
+        :loading="loading"
+        :handlers="listHandlers"
+        :format-date="formatListDate"
+        :flow-summary="flowSummary"
+        :sla-summary="flowSlaSummary"
+        :flow-bucket="filters.flow_bucket"
+        :flow-board-respect-date="flowBoardRespectDate"
+        :flow-sla-loading="flowSlaLoading"
+        :order-list-col-visible="orderListColVisible"
+        v-model:orders-virtual-table="ordersVirtualTable"
+        v-model:order-table-design-mode="orderTableDesignMode"
+        :customer-list-name-mode="customerListNameMode"
+        :order-list-field-definitions="orderListFieldDefinitions"
+        :show-order-header-design="showOrderHeaderDesign"
+        :show-order-row-selection="showOrderRowSelection"
+        :show-order-list-contract-col="showOrderListContractCol"
+        :show-order-list-qc-col="showOrderListQcCol"
+        :orders-v2-columns="ordersV2Columns"
+        :orders-v2-row-event-handlers="ordersV2RowEventHandlers"
+        :list-empty-description="listEmptyDescription"
+        :list-empty-is-filtered="listEmptyIsFiltered"
+        :last-list-synced-label="lastListSyncedLabel"
+        @flow-board-select="onFlowBoardSelect"
+        @update:flow-board-respect-date="onFlowBoardRespectDateChange"
+        @refresh="refreshListManual"
+        @virtual-table-change="onOrdersVirtualTableChange"
+        @design-mode-change="onOrderTableDesignModeChange"
+        @reset-filters="resetFilters"
+        @open-create="openCreate"
+        @download-template="downloadTpl"
+        @selection-change="onOrdersSelectionChange"
+        @row-dblclick="onOrderRowDblClick"
+      />
+
+      <SalesOrderMobileList
+        :items="items"
+        :loading="loading"
+        :handlers="listHandlers"
+        :flow-summary="flowSummary"
+        :sla-summary="flowSlaSummary"
+        :flow-bucket="filters.flow_bucket"
+        :flow-board-respect-date="flowBoardRespectDate"
+        :flow-sla-loading="flowSlaLoading"
+        :show-order-row-selection="showOrderRowSelection"
+        :v2-selected-ids="v2SelectedIds"
+        :selected-count="effectiveSelected.length"
+        :mobile-page-all-selected="mobilePageAllSelected"
+        :mobile-page-indeterminate="mobilePageIndeterminate"
+        :focus-order-id="focusOrderId"
+        :mobile-preview-fields="mobilePreviewFields"
+        :order-list-col-visible="orderListColVisible"
+        :list-empty-description="listEmptyDescription"
+        :list-empty-is-filtered="listEmptyIsFiltered"
+        :last-list-synced-label="lastListSyncedLabel"
+        :is-order-highlighted="isOrderHighlighted"
+        @refresh="refreshListManual"
+        @flow-board-select="onFlowBoardSelect"
+        @update:flow-board-respect-date="onFlowBoardRespectDateChange"
+        @mobile-page-select-all="onMobilePageSelectAll"
+        @row-dblclick="onOrderRowDblClick"
+        @v2-row-pick="onV2RowPick"
+        @reset-filters="resetFilters"
+        @open-create="openCreate"
+        @download-template="downloadTpl"
+      />
+
+      <div class="pager">
+        <el-select v-model="pageSize" class="w100" @change="load">
+          <el-option :value="10" label="10 条/页" />
+          <el-option :value="20" label="20 条/页" />
+          <el-option :value="50" label="50 条/页" />
+          <el-option :value="100" label="100 条/页" />
+          <el-option :value="200" label="200 条/页" />
+          <el-option :value="500" label="500 条/页" />
+        </el-select>
+        <el-pagination
+          layout="prev, pager, next, total"
+          :total="total"
+          :page-size="pageSize"
+          :current-page="page"
+          @current-change="(p) => { page = p; load(); }"
+        />
+      </div>
+
+      <SalesOrderBatchBar
+        v-bind="batchActionProps"
+        :selected-rows="effectiveSelected"
+        @clear-selection="clearAllOrderSelection"
+        @batch-submit="batchSubmitReview"
+        @batch-withdraw="batchWithdrawReview"
+        @open-finance-batch="openFinanceBatch"
+        @open-qc-batch="openQcReviewBatch"
+        @open-ship-batch="openShipBatch"
+        @batch-delete="batchDeleteOrders"
+        @open-contract-gen="openContractGen"
+      />
+    </div>
+
+    <SalesOrderFormDialog
+      v-model="formDialogVisible"
+      :edit-row="formDialogEditRow"
+      :field-definitions="fieldDefinitions"
+      @success="onFormDialogSuccess"
+    />
+
+    <SalesOrderLogsDialog
+      v-model:visible="logsDialogVisible"
+      :mode="logsDialogMode"
+      :contract-rows="logsDialogContractRows"
+      :status-logs="logsDialogStatusLogs"
+      :edit-logs="logsDialogEditLogs"
+      :field-definitions="fieldDefinitions"
+    />
+
+    <SalesOrderReviewDialog
+      v-model:visible="reviewDialogVisible"
+      :kind="reviewDialogKind"
+      :rows="reviewDialogRows"
+      @success="onReviewSuccess"
+    />
+
+    <SalesOrderShipDialog
+      v-model:visible="shipDialogVisible"
+      :row="shipDialogRow"
+      :batch-list="shipDialogBatchList"
+      @success="onShipSuccess"
+    />
+
+    <SalesOrderContractGenDialog
+      v-model:visible="genDialogVisible"
+      :order-ids="genDialogOrderIds"
+      @success="onGenSuccess"
+    />
+
+    <SalesOrderBindContractDialog
+      v-model:visible="bindContractDialogVisible"
+      :order-id="bindContractDialogOrderId"
+      :customer-name="bindContractDialogCustomerName"
+      :customer-id="bindContractDialogCustomerId"
+      @success="onBindContractSuccess"
+    />
+
+    <SalesOrderContractPreviewDialog
+      v-model="contractPreviewDialogVisible"
+      :contract-id="contractPreviewDialogContractId"
+      :field-definitions="fieldDefinitions"
+    />
+
+    <SalesOrderFieldManageDialog
+      v-model:visible="fieldManageDialogVisible"
+      :schema-version="fieldSchemaVersion"
+      @changed="onFieldManageChanged"
+    />
+
+    <SalesOrderQcBindDialog
+      v-model:visible="qcBindDialogVisible"
+      :order-id="qcBindDialogOrderId"
+      @success="onQcBindSuccess"
+    />
+
+    <SalesOrderMessagesDrawer
+      ref="messagesDrawerRef"
+      v-model:visible="messagesDrawerVisible"
+      :show-messages="showMessages"
+      @unread-changed="onUnreadChanged"
+    />
+
+    <SalesOrderImportDupDialog
+      v-model:visible="importDupDialogVisible"
+      :summary="importDupDialogSummary"
+      :rows="importDupDialogRows"
+    />
+
+    <SalesOrderImportErrorsDialog
+      v-model:visible="importErrorsDialogVisible"
+      :rows="importErrorsDialogRows"
+    />
+  </div>
+</template>

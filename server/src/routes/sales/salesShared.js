@@ -1,5 +1,6 @@
-import QRCode from 'qrcode';
 import { hasPermission } from '../../lib/permissions.js';
+import { resolveQrcodeUid } from '../../lib/qrcodeUid.js';
+import { resolveConfiguredPublicBaseUrl } from '../../lib/publicBaseUrl.js';
 import {
   MAPS_TO_KEYS,
   normalizeOrderDateInput,
@@ -81,8 +82,7 @@ export function coerceImportCell(v, fieldType) {
 }
 
 export function publicBaseUrl() {
-  const b = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-  return b || '';
+  return resolveConfiguredPublicBaseUrl() || '';
 }
 
 export function isSuper(req) {
@@ -529,7 +529,7 @@ export async function loadQcMap(pool, orderRows) {
   const [rows] = await pool.query(
     `SELECT LOWER(TRIM(r.product_name)) AS pk_model, LOWER(TRIM(r.batch_no)) AS pk_batch,
             r.customer_id AS pk_customer_id,
-            MIN(q.id) AS qrcode_id, MIN(q.token) AS token
+            MIN(q.id) AS qrcode_id, MIN(q.token) AS token, MIN(q.qrcode_uid) AS qrcode_uid
      FROM reports r
      INNER JOIN qrcode_reports qr ON qr.report_id = r.id
      INNER JOIN qrcodes q ON q.id = qr.qrcode_id
@@ -542,7 +542,11 @@ export async function loadQcMap(pool, orderRows) {
   for (const r of rows) {
     const cid =
       r.pk_customer_id != null && Number(r.pk_customer_id) > 0 ? String(Number(r.pk_customer_id)) : '';
-    map.set(`${cid}\x00${r.pk_model}\x00${r.pk_batch}`, { qrcodeId: r.qrcode_id, token: r.token });
+    map.set(`${cid}\x00${r.pk_model}\x00${r.pk_batch}`, {
+      qrcodeId: r.qrcode_id,
+      token: r.token,
+      qrcodeUid: r.qrcode_uid
+    });
   }
   return map;
 }
@@ -553,10 +557,17 @@ export async function enrichOrdersQc(pool, rows, qcMap) {
     ...new Set(rows.map((r) => Number(r.qc_qrcode_id)).filter((n) => Number.isFinite(n) && n > 0))
   ];
   const tokenByQrId = new Map();
+  const uidByQrId = new Map();
   if (manualIds.length) {
     const ph = manualIds.map(() => '?').join(',');
-    const [qrs] = await pool.query(`SELECT id, token FROM qrcodes WHERE id IN (${ph})`, manualIds);
-    for (const q of qrs) tokenByQrId.set(Number(q.id), q.token);
+    const [qrs] = await pool.query(
+      `SELECT id, token, qrcode_uid AS qrcodeUid FROM qrcodes WHERE id IN (${ph})`,
+      manualIds
+    );
+    for (const q of qrs) {
+      tokenByQrId.set(Number(q.id), q.token);
+      uidByQrId.set(Number(q.id), q.qrcodeUid);
+    }
   }
   const base = publicBaseUrl();
   const baseRows = rows.map((o) => {
@@ -564,8 +575,10 @@ export async function enrichOrdersQc(pool, rows, qcMap) {
     let token = null;
     let qcBoundManual = false;
 
+    let qrcodeUid = null;
     if (qrcodeId) {
       token = tokenByQrId.get(qrcodeId) || null;
+      qrcodeUid = uidByQrId.get(qrcodeId) || null;
       qcBoundManual = true;
     } else {
       let qc = null;
@@ -579,13 +592,14 @@ export async function enrichOrdersQc(pool, rows, qcMap) {
       if (qc?.token) {
         qrcodeId = Number(qc.qrcodeId);
         token = qc.token;
+        qrcodeUid = qc.qrcodeUid || null;
       }
     }
 
     let qcReportLabel = '无可用报告';
     let qcPublicUrl = null;
     if (token) {
-      qcReportLabel = `二维码#${qrcodeId}`;
+      qcReportLabel = resolveQrcodeUid({ qrcodeUid }) || `二维码#${qrcodeId}`;
       qcPublicUrl = base
         ? `${base}/api/public/qr/${encodeURIComponent(token)}`
         : `/api/public/qr/${encodeURIComponent(token)}`;
@@ -600,18 +614,13 @@ export async function enrichOrdersQc(pool, rows, qcMap) {
       qc_token: token,
       qc_public_url: qcPublicUrl,
       qc_report_label: qcReportLabel,
+      qc_qrcode_uid: token ? resolveQrcodeUid({ qrcodeUid }) : null,
       qc_bound_manual: qcBoundManual
     };
   });
 
-  const thumbs = await Promise.all(
-    baseRows.map((o) =>
-      o.qc_public_url
-        ? QRCode.toDataURL(o.qc_public_url, { margin: 1, width: 72, errorCorrectionLevel: 'M' })
-        : Promise.resolve(null)
-    )
-  );
-  return baseRows.map((o, i) => ({ ...o, qc_thumb_data_url: thumbs[i] }));
+  // 列表缩略图改由前端按 qc_public_url 生成，避免每行服务端 QRCode.toDataURL
+  return baseRows.map((o) => ({ ...o, qc_thumb_data_url: null }));
 }
 
 export function canSeeOrderListUnitPrice(req) {

@@ -1,5 +1,5 @@
 <template>
-  <div class="qc-yearbooks-page">
+  <div class="qc-yearbooks-page ref-list-page">
     <el-alert
       v-if="yearsLoadError"
       type="error"
@@ -105,16 +105,17 @@
             </div>
           </div>
         </template>
+        <div class="desktop-table-wrap">
         <el-table
           ref="fpTableRef"
           row-key="id"
+          class="desktop-table table-fp"
+          :class="{ 'table-fp--editable': canMutate }"
           :data="fpItems"
           v-loading="fpLoading"
           border
           stripe
           highlight-current-row
-          class="table-fp"
-          :class="{ 'table-fp--editable': canMutate }"
           @selection-change="onFpBatchSelectionChange"
           @row-dblclick="onFpRowDblClick"
         >
@@ -156,6 +157,59 @@
           </el-empty>
         </template>
       </el-table>
+      </div>
+
+      <div class="mobile-list" v-loading="fpLoading">
+        <div
+          v-for="row in fpItems"
+          :key="'m-' + row.id"
+          class="mobile-card"
+          @click="canMutate && onFpRowDblClick(row)"
+        >
+          <div class="mobile-head">
+            <div class="mobile-head-main">
+              <div>
+                <strong>{{ row.product_model || '—' }}</strong>
+                <span class="name-sub">{{ row.product_batch_no || '—' }}</span>
+              </div>
+            </div>
+            <el-tag
+              v-if="row.inspection_conclusion"
+              :type="fpConclusionTagType(row.inspection_conclusion)"
+              size="small"
+              effect="light"
+            >
+              {{ row.inspection_conclusion }}
+            </el-tag>
+          </div>
+          <div v-if="fpShowInspectionId && row.inspection_id" class="mobile-line">
+            <span>检验ID</span><span class="mobile-val">{{ row.inspection_id }}</span>
+          </div>
+          <div class="mobile-line"><span>桶数</span><span>{{ row.barrel_count ?? '—' }}</span></div>
+          <div class="mobile-line"><span>检验批量</span><span>{{ row.inspection_batch_kg ?? '—' }} Kg</span></div>
+          <div class="mobile-line"><span>外观</span><span>{{ row.appearance || '—' }}</span></div>
+          <div class="mobile-line"><span>色度</span><span>{{ row.color_fe_co || '—' }}</span></div>
+          <div v-if="canMutate" class="mobile-actions" @click.stop>
+            <el-button size="small" type="primary" :icon="Edit" @click="openFpDialog(row)">编辑</el-button>
+            <el-button size="small" type="danger" plain :icon="Delete" @click="onDeleteFpRow(row)">删除</el-button>
+          </div>
+        </div>
+        <el-empty v-if="!fpLoading && !fpItems.length" :image-size="72" :description="fpEmptyDescription" />
+        <div v-if="fpTotal > 0" class="mobile-pager">
+          <el-pagination
+            background
+            layout="total, prev, pager, next"
+            :total="fpTotal"
+            :page-size="fpPageSize"
+            :current-page="fpPage"
+            :page-sizes="[20, 50, 100]"
+            small
+            @current-change="onFpPageChange"
+            @size-change="onFpPageSizeChange"
+          />
+        </div>
+      </div>
+
       <transition name="qc-batch-bar-fade">
         <div v-if="fpBatchSelectedRows.length" class="qc-batch-bar">
           <div class="qc-batch-bar__left">
@@ -189,7 +243,7 @@
           </div>
         </div>
       </transition>
-      <div class="pager-wrap">
+      <div class="pager-wrap desktop-pagination">
         <el-pagination
           background
           layout="total, prev, pager, next, sizes"
@@ -1654,6 +1708,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+@import '../styles/refListPage.css';
+
 .qc-yearbooks-page {
   margin: 0 12px 24px;
   max-width: 1680px;
@@ -2099,6 +2155,62 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   margin-left: auto;
+}
+
+@media (max-width: 992px) {
+  .qc-yearbooks-page {
+    margin: 0 8px 16px;
+  }
+  .qc-yearbooks-page .panel-year-inner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .qc-yearbooks-page .year-row-left,
+  .qc-yearbooks-page .year-row-right {
+    width: 100%;
+    margin-left: 0;
+  }
+  .qc-yearbooks-page .year-row-right {
+    flex-wrap: wrap;
+  }
+  .qc-yearbooks-page .year-row-right .el-button {
+    flex: 1 1 calc(50% - 4px);
+  }
+  .qc-yearbooks-page .year-select {
+    width: 100%;
+  }
+  .qc-yearbooks-page .table-card-header,
+  .qc-yearbooks-page .table-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .qc-yearbooks-page .table-toolbar-filter,
+  .qc-yearbooks-page .table-toolbar-actions {
+    width: 100%;
+  }
+  .qc-yearbooks-page .table-toolbar-filter .fp-search {
+    width: 100%;
+  }
+  .qc-yearbooks-page .table-toolbar-actions .el-button {
+    flex: 1 1 calc(50% - 4px);
+  }
+  .qc-yearbooks-page .desktop-table-wrap,
+  .qc-yearbooks-page .desktop-pagination {
+    display: none !important;
+  }
+  .qc-yearbooks-page .mobile-list {
+    display: block;
+  }
+  .qc-yearbooks-page .qc-batch-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .qc-yearbooks-page .qc-batch-bar__actions {
+    justify-content: stretch;
+  }
+  .qc-yearbooks-page .qc-batch-bar__actions .el-button {
+    flex: 1 1 calc(50% - 4px);
+  }
 }
 
 @media (max-width: 768px) {

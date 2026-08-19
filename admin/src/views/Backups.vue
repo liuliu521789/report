@@ -1,89 +1,202 @@
 <template>
-  <el-card class="backup-page" shadow="always">
-    <div class="toolbar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div><strong>备份管理</strong></div>
-      <div style="display:flex;gap:8px">
-        <el-button type="warning" plain :loading="rotating" @click="onRotateEncryption">重加密历史备份</el-button>
-        <el-button type="info" plain :loading="verifying" @click="onVerifyLatestBackup">校验最新备份</el-button>
-        <el-button type="primary" :loading="creating" @click="onBackup">一键备份</el-button>
+  <div class="ref-list-page backup-page">
+    <div class="page-head">
+      <div class="page-head__filters">
+        <span class="type-pill is-active">
+          备份包
+          <span class="type-pill__count">{{ backups.length }}</span>
+        </span>
+        <span class="type-pill">
+          最近任务
+          <span class="type-pill__count">{{ jobs.length }}</span>
+        </span>
+      </div>
+      <div class="page-head__actions">
+        <el-button :icon="Refresh" :loading="loading" circle @click="refreshAll" />
+        <el-button type="warning" plain :loading="verifying" @click="onVerifyLatestBackup">校验最新</el-button>
+        <el-button type="info" plain :loading="rotating" @click="onRotateEncryption">重加密</el-button>
+        <el-button type="primary" class="btn-create" :icon="Download" :loading="creating" @click="onBackup">
+          一键备份
+        </el-button>
       </div>
     </div>
-    <el-table :data="backups" border style="width: 100%" v-loading="loading">
-      <el-table-column prop="id" label="日期（ID）" width="180" />
-      <el-table-column label="时间" min-width="180">
-        <template #default="{ row }">{{ formatDate(row.date) }}</template>
-      </el-table-column>
-      <el-table-column label="大小" width="140">
-        <template #default="{ row }">{{ formatSize(row.size) }}</template>
-      </el-table-column>
-      <el-table-column prop="dayDir" label="路径" show-overflow-tooltip />
-      <el-table-column label="操作" width="260">
-        <template #default="{ row }">
-          <el-button size="mini" :loading="actionLoadingId === row.id && actionType === 'download'" @click="onDownload(row)" type="primary">下载</el-button>
-          <el-button size="mini" :loading="actionLoadingId === row.id && actionType === 'restore'" @click="onRestore(row)" type="success">恢复</el-button>
-          <el-button size="mini" :loading="actionLoadingId === row.id && actionType === 'delete'" @click="onDelete(row)" type="danger">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-    <div style="margin-top: 20px">
-      <div style="font-weight: 600; margin-bottom: 8px">最近任务</div>
-      <el-table :data="jobs" border style="width: 100%" size="mini">
-        <el-table-column prop="id" label="任务ID" width="90" />
-        <el-table-column prop="jobType" label="类型" width="90" />
-        <el-table-column prop="triggerType" label="触发" width="90" />
-        <el-table-column prop="status" label="状态" width="90" />
-        <el-table-column label="开始时间" min-width="160">
-          <template #default="{ row }">{{ formatDate(row.startedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="耗时" width="100">
-          <template #default="{ row }">{{ formatDuration(row.durationMs) }}</template>
-        </el-table-column>
-        <el-table-column prop="errorMessage" label="错误信息" min-width="180" show-overflow-tooltip />
-      </el-table>
+
+    <div class="stack-panels">
+      <div class="content-panel">
+        <div class="sub-panel-head">
+          <h4 class="sub-panel-title">备份包列表</h4>
+        </div>
+        <div class="table-scroll">
+          <el-table v-loading="loading" :data="backups" class="desktop-table ref-table" row-key="id">
+            <el-table-column label="备份" min-width="200">
+              <template #default="{ row }">
+                <div class="name-cell">
+                  <span class="name-icon name-icon--lock">
+                    <el-icon><FolderOpened /></el-icon>
+                  </span>
+                  <div class="name-info">
+                    <span class="name-title">{{ row.id }}</span>
+                    <span class="name-sub">{{ formatDate(row.date) }}</span>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="大小" width="100" align="center">
+              <template #default="{ row }">
+                <span class="count-tag">{{ formatSize(row.size) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="dayDir" label="路径" min-width="180" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span class="cell-muted">{{ row.dayDir || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="64" fixed="right" align="center">
+              <template #default="{ row }">
+                <el-dropdown trigger="click" @command="(c) => onRowAction(c, row)">
+                  <el-button link class="more-btn" @click.stop>
+                    <el-icon :size="18"><MoreFilled /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="download" :icon="Download">下载</el-dropdown-item>
+                      <el-dropdown-item command="restore" :icon="RefreshRight">恢复</el-dropdown-item>
+                      <el-dropdown-item command="delete" divided>
+                        <span class="danger-text">删除</span>
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <el-empty description="暂无备份包" :image-size="88" />
+            </template>
+          </el-table>
+        </div>
+        <div v-if="backups.length" class="table-footer">
+          <span>共 {{ backups.length }} 个备份包</span>
+        </div>
+      </div>
+
+      <div class="content-panel">
+        <div class="sub-panel-head">
+          <h4 class="sub-panel-title">最近任务</h4>
+        </div>
+        <div class="table-scroll">
+          <el-table :data="jobs" class="desktop-table ref-table ref-table--compact" row-key="id">
+            <el-table-column prop="id" label="任务 ID" width="88" />
+            <el-table-column prop="jobType" label="类型" width="88">
+              <template #default="{ row }">
+                <span class="role-tag">{{ row.jobType || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="triggerType" label="触发" width="88" />
+            <el-table-column label="状态" width="96" align="center">
+              <template #default="{ row }">
+                <span :class="['result-tag', jobStatusClass(row.status)]">{{ row.status || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="开始时间" min-width="168">
+              <template #default="{ row }">
+                <span class="cell-muted">{{ formatDate(row.startedAt) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="耗时" width="96" align="center">
+              <template #default="{ row }">{{ formatDuration(row.durationMs) }}</template>
+            </el-table-column>
+            <el-table-column prop="errorMessage" label="错误信息" min-width="180" show-overflow-tooltip />
+            <template #empty>
+              <el-empty description="暂无任务记录" :image-size="72" />
+            </template>
+          </el-table>
+        </div>
+      </div>
     </div>
-  </el-card>
-  </template>
+
+    <div class="mobile-list" v-loading="loading">
+      <div v-for="row in backups" :key="'m-' + row.id" class="mobile-card">
+        <div class="mobile-head">
+          <div class="mobile-head-main">
+            <span class="name-icon name-icon--lock name-icon--sm">
+              <el-icon><FolderOpened /></el-icon>
+            </span>
+            <div>
+              <strong>{{ row.id }}</strong>
+              <span class="name-sub">{{ formatDate(row.date) }}</span>
+            </div>
+          </div>
+          <span class="count-tag">{{ formatSize(row.size) }}</span>
+        </div>
+        <div class="mobile-line"><span>路径</span><span class="mobile-val">{{ row.dayDir || '—' }}</span></div>
+        <div class="mobile-actions">
+          <el-button size="small" :loading="actionLoadingId === row.id && actionType === 'download'" @click="onDownload(row)">
+            下载
+          </el-button>
+          <el-button size="small" type="success" plain :loading="actionLoadingId === row.id && actionType === 'restore'" @click="onRestore(row)">
+            恢复
+          </el-button>
+          <el-button size="small" type="danger" plain :loading="actionLoadingId === row.id && actionType === 'delete'" @click="onDelete(row)">
+            删除
+          </el-button>
+        </div>
+      </div>
+      <el-empty v-if="!backups.length && !loading" description="暂无备份包" />
+    </div>
+  </div>
+</template>
 
 <script>
+import { Download, FolderOpened, MoreFilled, Refresh, RefreshRight } from '@element-plus/icons-vue';
 import {
-  getBackups,
-  getBackupJobs,
-  runBackup,
-  restoreBackup,
   deleteBackup,
   downloadBackup,
+  getBackupJobs,
+  getBackups,
+  restoreBackup,
   rotateBackupEncryption,
+  runBackup,
   verifyBackupRecoverability
 } from '../api/backup.js';
 import { startDownload } from '../composables/useDownloadProgress.js';
+
 export default {
   name: 'Backups',
+  components: { FolderOpened },
   data() {
     return {
+      Download,
+      Refresh,
+      RefreshRight,
+      MoreFilled,
       backups: [],
+      jobs: [],
       loading: false,
       creating: false,
       rotating: false,
       verifying: false,
       actionLoadingId: '',
-      actionType: '',
-      jobs: []
+      actionType: ''
     };
   },
   created() {
-    this.fetchBackups();
-    this.fetchJobs();
+    this.refreshAll();
   },
   methods: {
-    async fetchBackups() {
+    async refreshAll() {
       this.loading = true;
       try {
-        const list = await getBackups();
-        this.backups = list;
-      } catch (e) {
-        console.error(e);
+        await Promise.all([this.fetchBackups(), this.fetchJobs()]);
       } finally {
         this.loading = false;
+      }
+    },
+    async fetchBackups() {
+      try {
+        this.backups = await getBackups();
+      } catch (e) {
+        console.error(e);
+        this.backups = [];
       }
     },
     async fetchJobs() {
@@ -91,10 +204,17 @@ export default {
         this.jobs = await getBackupJobs();
       } catch (e) {
         console.error(e);
+        this.jobs = [];
       }
     },
+    jobStatusClass(status) {
+      const s = String(status || '').toLowerCase();
+      if (s === 'success' || s === 'ok' || s === 'completed') return 'is-ok';
+      if (s === 'failed' || s === 'error') return 'is-fail';
+      return 'is-neutral';
+    },
     formatDate(value) {
-      if (!value) return '-';
+      if (!value) return '—';
       const dt = new Date(value);
       if (Number.isNaN(dt.getTime())) return String(value);
       return dt.toLocaleString();
@@ -113,17 +233,21 @@ export default {
     },
     formatDuration(ms) {
       const n = Number(ms || 0);
-      if (!Number.isFinite(n) || n <= 0) return '-';
+      if (!Number.isFinite(n) || n <= 0) return '—';
       if (n < 1000) return `${n} ms`;
       return `${(n / 1000).toFixed(2)} s`;
+    },
+    onRowAction(command, row) {
+      if (command === 'download') return this.onDownload(row);
+      if (command === 'restore') return this.onRestore(row);
+      if (command === 'delete') return this.onDelete(row);
     },
     async onBackup() {
       this.creating = true;
       try {
         await runBackup();
         this.$message.success('备份完成');
-        await this.fetchBackups();
-        await this.fetchJobs();
+        await this.refreshAll();
       } catch (e) {
         this.$message.error(e?.message || '备份失败');
       } finally {
@@ -184,8 +308,7 @@ export default {
         this.actionType = 'restore';
         await restoreBackup(row.id);
         this.$message.success('恢复完成');
-        await this.fetchBackups();
-        await this.fetchJobs();
+        await this.refreshAll();
       } catch (e) {
         if (e !== 'cancel') this.$message.error(e?.message || '恢复失败');
       } finally {
@@ -200,8 +323,7 @@ export default {
         this.actionType = 'delete';
         await deleteBackup(row.id);
         this.$message.success('删除成功');
-        await this.fetchBackups();
-        await this.fetchJobs();
+        await this.refreshAll();
       } catch (e) {
         if (e !== 'cancel') this.$message.error(e?.message || '删除失败');
       } finally {
@@ -214,5 +336,9 @@ export default {
 </script>
 
 <style scoped>
-.backup-page { padding: 16px; }
+@import '../styles/refListPage.css';
+
+.ref-table--compact td.el-table__cell {
+  padding: 10px 0;
+}
 </style>

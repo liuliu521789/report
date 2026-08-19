@@ -8,6 +8,7 @@ import {
   createUserUseCase,
   forceLogoutUserUseCase,
   resetUserPasswordUseCase,
+  resetUserTotpUseCase,
   softDeleteUserUseCase,
   updateUserUseCase
 } from '../services/userService.js';
@@ -29,7 +30,7 @@ const createSchema = z.object({
   username: z.string().min(1).max(64).optional(),
   loginId: z.string().min(1).max(64).optional(),
   realName: z.string().min(1).max(64).optional(),
-  password: z.string().min(6).max(128),
+  password: z.string().min(6).max(128).optional(),
   accountType: z.enum(ACCOUNT_TYPES),
   employeeCategoryId: z.number().int().positive().nullable().optional(),
   departmentId: z.union([z.number().int().positive(), z.null()]).optional(),
@@ -53,6 +54,7 @@ const updateSchema = z
     permissions: z.any().optional().nullable(),
     isActive: z.boolean().optional(),
     password: z.string().min(6).max(128).optional(),
+    forceChangePassword: z.boolean().optional(),
     requireTwoFactor: z.boolean().optional()
   })
   .refine(
@@ -248,6 +250,22 @@ router.post(
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
     try {
       await forceLogoutUserUseCase(req, id);
+      res.json({ ok: true });
+    } catch (e) {
+      const handled = handleBizError(e, res);
+      if (handled) return;
+      throw e;
+    }
+  })
+);
+
+router.post(
+  '/:id/reset-totp',
+  asyncRoute(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
+    try {
+      await resetUserTotpUseCase(req, id);
       res.json({ ok: true });
     } catch (e) {
       const handled = handleBizError(e, res);

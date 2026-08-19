@@ -1,5 +1,5 @@
 /**
- * 与 admin/src/utils/contractTemplateDefaults.js 中 RECOMMENDED_TPL_BODY 保持一致：
+ * 推荐版合同正文（服务端唯一来源）：
  * 生成合同时「从空白模板创建」用此正文，均为 {{占位符}}，无写死的客户名称。
  */
 export const RECOMMENDED_CONTRACT_BODY_HTML = `<div style="width:100%;margin:0 auto;color:#000;font-family:FangSong_GB2312,仿宋_GB2312,仿宋,FangSong;font-size:16px;line-height:1.5">

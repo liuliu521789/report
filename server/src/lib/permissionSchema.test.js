@@ -34,6 +34,20 @@ describe('permissionSchema', () => {
     }
   });
 
+  it('管理层 alias 与 manager 默认权限一致', () => {
+    const manager = defaultPermissionsForRole('manager');
+    for (const alias of [
+      'general_manager',
+      'deputy_general_manager',
+      'director',
+      'president',
+      'supervisor',
+      'department_head'
+    ]) {
+      expect(defaultPermissionsForRole(alias)).toEqual(manager);
+    }
+  });
+
   it('listPermissionSchema 仅暴露 key/label，不泄露默认值', () => {
     const items = listPermissionSchema();
     expect(items.length).toBeGreaterThan(0);

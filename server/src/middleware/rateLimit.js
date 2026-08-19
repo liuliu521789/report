@@ -32,7 +32,7 @@ export function loginIpLimiter() {
   });
 }
 
-/** 单 (IP + 输入用户名) 维度，防撞库 */
+/** 单 (IP + 输入用户编号) 维度，防撞库 */
 export function loginUsernameLimiter() {
   if (DISABLE_RATE_LIMIT) return noop();
   return rateLimit({

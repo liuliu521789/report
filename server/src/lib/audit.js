@@ -108,3 +108,26 @@ export async function purgeExpiredErrorLogs(pool) {
   const days = settings.errorLogRetentionDays || 180;
   await p.query(`DELETE FROM error_logs WHERE created_at < DATE_SUB(NOW(3), INTERVAL ? DAY)`, [days]);
 }
+
+export async function purgeExpiredLoginLogs(pool) {
+  const p = pool || getPool();
+  const settings = await getSecuritySettings(p);
+  const days = settings.loginLogRetentionDays || 180;
+  await p.query(`DELETE FROM login_logs WHERE created_at < DATE_SUB(NOW(3), INTERVAL ? DAY)`, [days]);
+}
+
+export async function purgeExpiredOperationLogs(pool) {
+  const p = pool || getPool();
+  const settings = await getSecuritySettings(p);
+  const days = settings.operationLogRetentionDays || 180;
+  await p.query(`DELETE FROM operation_logs WHERE created_at < DATE_SUB(NOW(3), INTERVAL ? DAY)`, [days]);
+}
+
+/** 清理超出保留期的全部审计日志（错误 / 登录 / 操作） */
+export async function purgeExpiredAuditLogs(pool) {
+  await Promise.all([
+    purgeExpiredErrorLogs(pool),
+    purgeExpiredLoginLogs(pool),
+    purgeExpiredOperationLogs(pool)
+  ]);
+}

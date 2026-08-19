@@ -134,6 +134,9 @@ async function generateAutoLoginId(accountType, employeeCategoryId) {
 }
 
 /** 创建账号（参数已经 zod 校验过） */
+/** 新建账号未指定密码时的默认初始密码 */
+export const DEFAULT_INITIAL_PASSWORD = '88888888';
+
 export async function createUserUseCase(req, payload) {
   const {
     username,
@@ -161,10 +164,14 @@ export async function createUserUseCase(req, payload) {
 
   const pool = getPool();
   const settings = await getSecuritySettings(pool);
-  const pv = validatePasswordPlain(password, settings);
+  const plainPassword =
+    password != null && String(password).trim() !== ''
+      ? String(password)
+      : DEFAULT_INITIAL_PASSWORD;
+  const pv = validatePasswordPlain(plainPassword, settings);
   if (!pv.ok) throw new BizError(pv.code, pv.message);
 
-  const passwordHash = await hashPassword(password);
+  const passwordHash = await hashPassword(plainPassword);
 
   let permissionsJson = null;
   if (isPermissionedStaffType(accountType)) {
@@ -209,7 +216,7 @@ export async function createUserUseCase(req, payload) {
           createdLoginId = '';
           continue;
         }
-        throw new BizError('USERNAME_EXISTS', '用户名已存在', 409);
+        throw new BizError('USERNAME_EXISTS', '用户编号已存在', 409);
       }
       throw e;
     }
@@ -236,7 +243,7 @@ export async function createUserUseCase(req, payload) {
 }
 
 function diffUser(before, intended) {
-  const fields = ['username', 'realName', 'phone', 'accountType', 'employeeCategoryId', 'departmentId', 'wecomUserId', 'isActive', 'requireTwoFactor'];
+  const fields = ['username', 'realName', 'phone', 'accountType', 'employeeCategoryId', 'departmentId', 'wecomUserId', 'isActive', 'forceChangePassword', 'requireTwoFactor'];
   const before_ = {};
   const after_ = {};
   for (const f of fields) {
@@ -327,12 +334,14 @@ export async function updateUserUseCase(req, id, payload) {
     params.push(payload.isActive ? 1 : 0);
     if (!payload.isActive) invalidateSession = true;
   }
-  if (payload.requireTwoFactor !== undefined && payload.accountType !== 'employee' && payload.accountType !== 'manager') {
-    /** super_admin 强制 TOTP 开关 */
-    if (nextType === 'super_admin') {
-      sets.push('require_two_factor = ?');
-      params.push(payload.requireTwoFactor ? 1 : 0);
-    }
+  if (payload.forceChangePassword !== undefined) {
+    sets.push('force_change_password = ?');
+    params.push(payload.forceChangePassword ? 1 : 0);
+    if (payload.forceChangePassword) invalidateSession = true;
+  }
+  if (payload.requireTwoFactor !== undefined) {
+    sets.push('require_two_factor = ?');
+    params.push(payload.requireTwoFactor ? 1 : 0);
   }
 
   if (payload.permissions !== undefined) {
@@ -369,7 +378,7 @@ export async function updateUserUseCase(req, id, payload) {
         if (msg.includes('uk_users_phone')) {
           throw new BizError('PHONE_DUPLICATE', '手机号已被其他账号使用', 409);
         }
-        throw new BizError('USERNAME_EXISTS', '用户名已存在', 409);
+        throw new BizError('USERNAME_EXISTS', '用户编号已存在', 409);
       }
       throw e;
     }
@@ -385,6 +394,7 @@ export async function updateUserUseCase(req, id, payload) {
     departmentId: payload.departmentId,
     wecomUserId: payload.wecomUserId == null ? null : String(payload.wecomUserId).trim() || null,
     isActive: payload.isActive,
+    forceChangePassword: payload.forceChangePassword,
     requireTwoFactor: payload.requireTwoFactor
   };
   const detail = {
@@ -454,6 +464,27 @@ export async function forceLogoutUserUseCase(req, id) {
   await logOperationFromReq(req, {
     module: '员工账号',
     action: '强制下线',
+    detail: { userId: id, username: before.username },
+    success: true
+  });
+}
+
+/** 解绑 2FA（清除 TOTP 密钥，下次登录须重新绑定） */
+export async function resetUserTotpUseCase(req, id) {
+  const before = await findUserDetail(id);
+  if (!before) throw new BizError('NOT_FOUND', '账号不存在', 404);
+  if (!before.totpEnabledAt) {
+    throw new BizError('TOTP_NOT_BOUND', '该账号尚未绑定双因素认证', 400);
+  }
+  const pool = getPool();
+  await pool.query(
+    `UPDATE users SET totp_secret = NULL, totp_enabled_at = NULL, token_version = token_version + 1 WHERE id = ?`,
+    [id]
+  );
+  invalidateUserGuard(id);
+  await logOperationFromReq(req, {
+    module: '员工账号',
+    action: '解绑2FA',
     detail: { userId: id, username: before.username },
     success: true
   });

@@ -107,6 +107,42 @@ export function emptyPermissionShape() {
   };
 }
 
+/** 与后端 KNOWN_ROLE_CODES 一致，有系统推荐默认权限的内置岗位 */
+export const BUILTIN_ROLE_CODES = [
+  'qc',
+  'cs',
+  'chairman',
+  'manager',
+  'general_manager',
+  'deputy_general_manager',
+  'director',
+  'president',
+  'supervisor',
+  'department_head',
+  'sales',
+  'documentary',
+  'finance',
+  'warehouse',
+  'sales_admin'
+];
+
+/** 统计已开启的权限项数量（不含 fieldEdit 子项单独计数，按布尔开关计） */
+export function countEnabledPermissions(perms) {
+  let n = 0;
+  const walk = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'fieldEdit') {
+        walk(v);
+        continue;
+      }
+      if (typeof v === 'boolean' && v) n += 1;
+    }
+  };
+  walk(perms);
+  return n;
+}
+
 export function mergeIntoShape(shape, partial) {
   const out = JSON.parse(JSON.stringify(shape));
   if (!partial || typeof partial !== 'object') return out;

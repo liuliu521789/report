@@ -106,6 +106,13 @@ router.put('/order-flow', async (req, res, next) => {
     const pool = getPool();
     try {
       const saved = await saveOrderFlowDefinition(pool, body);
+      try {
+        const { healOrphanPendingQcBatch } = await import('../../lib/salesOrderFlowRuntime.js');
+        await healOrphanPendingQcBatch(pool);
+      } catch (healErr) {
+        // eslint-disable-next-line no-console
+        console.warn('[order-flow] heal orphan pending_qc failed:', healErr?.message || healErr);
+      }
       await logOperationFromReq(req, {
         module: '销售订单',
         action: '保存订单审核流程配置',

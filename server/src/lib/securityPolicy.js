@@ -8,6 +8,8 @@ export const DEFAULT_SECURITY_SETTINGS = {
   loginLockMinutes: 60,
   confirmSensitiveOperations: true,
   errorLogRetentionDays: 180,
+  loginLogRetentionDays: 180,
+  operationLogRetentionDays: 180,
   /** 全局开关：要求所有超级管理员强制开启 TOTP（员工/管理仍走员工类别 require_two_factor） */
   enforceTwoFactorForSuperAdmin: false
 };
@@ -38,6 +40,12 @@ export function mergeSettings(raw) {
   }
   if (typeof raw.errorLogRetentionDays === 'number' && raw.errorLogRetentionDays >= 30 && raw.errorLogRetentionDays <= 3650) {
     base.errorLogRetentionDays = raw.errorLogRetentionDays;
+  }
+  if (typeof raw.loginLogRetentionDays === 'number' && raw.loginLogRetentionDays >= 30 && raw.loginLogRetentionDays <= 3650) {
+    base.loginLogRetentionDays = raw.loginLogRetentionDays;
+  }
+  if (typeof raw.operationLogRetentionDays === 'number' && raw.operationLogRetentionDays >= 30 && raw.operationLogRetentionDays <= 3650) {
+    base.operationLogRetentionDays = raw.operationLogRetentionDays;
   }
   if (typeof raw.enforceTwoFactorForSuperAdmin === 'boolean') {
     base.enforceTwoFactorForSuperAdmin = raw.enforceTwoFactorForSuperAdmin;

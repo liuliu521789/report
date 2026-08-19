@@ -1,5 +1,5 @@
 <template>
-  <div class="internal-models">
+  <div class="internal-models ref-list-page legacy-list-page">
     <div class="page-header">
       <h2>内部型号管理</h2>
       <div class="toolbar">
@@ -87,8 +87,10 @@
       description="表格说明：支持「品名」「内部编码」「客户型号」三列；按表头自动识别。英文代码写入内部编码，客户型号写入客户型号列，品名写入品名列。支持一格多编码（如 BP301P/NL301P），会在同一条记录中单行展示。"
     />
 
+    <div class="desktop-table-wrap">
     <el-table
       v-loading="loading"
+      class="desktop-table"
       :data="modelList"
       border
       stripe
@@ -141,10 +143,62 @@
         </template>
       </el-table-column>
     </el-table>
+    </div>
 
-    <el-empty v-if="!loading && !modelList.length" description="暂无内部型号数据" />
+    <el-empty v-if="!loading && !modelList.length" class="legacy-desktop-empty" description="暂无内部型号数据" />
 
-    <div class="pagination-bar">
+    <div class="mobile-list" v-loading="loading">
+      <div
+        v-for="row in modelList"
+        :key="'m-' + row.id"
+        class="mobile-card"
+        @click="handleRowDblClick(row)"
+      >
+        <div class="mobile-head">
+          <div class="mobile-head-main">
+            <div>
+              <strong>{{ row.internal_code || '—' }}</strong>
+              <span class="name-sub">{{ row.name || '—' }}</span>
+            </div>
+          </div>
+          <el-tag :type="row.is_active ? 'success' : 'info'" size="small" effect="plain">
+            {{ row.is_active ? '启用' : '停用' }}
+          </el-tag>
+        </div>
+        <div class="mobile-line"><span>品名</span><span class="mobile-val">{{ row.product_name || '—' }}</span></div>
+        <div class="mobile-line"><span>更新</span><span>{{ formatDateTime(row.updated_at) }}</span></div>
+        <div class="mobile-line mobile-line--switch" @click.stop>
+          <span>状态</span>
+          <el-switch
+            v-model="row.is_active"
+            :active-value="1"
+            :inactive-value="0"
+            :disabled="!hasEditPerm"
+            size="small"
+            @change="(val) => toggleStatus(row.id, val)"
+          />
+        </div>
+        <div v-if="hasEditPerm" class="mobile-actions" @click.stop>
+          <el-button size="small" type="primary" @click="openEditDialog(row)">编辑</el-button>
+          <el-button size="small" type="danger" plain @click="deleteSingle(row)">删除</el-button>
+        </div>
+      </div>
+      <el-empty v-if="!loading && !modelList.length" description="暂无内部型号数据" />
+      <div v-if="total > 0" class="mobile-pager">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-sizes="[10, 20, 50]"
+          :page-size="pageSize"
+          :total="total"
+          layout="total, prev, pager, next"
+          small
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
+    </div>
+
+    <div class="pagination-bar desktop-pagination">
       <el-pagination
         v-model:current-page="currentPage"
         :page-sizes="[10, 20, 50, 100]"
@@ -576,6 +630,8 @@ export default {
 </script>
 
 <style scoped>
+@import '../styles/refListPage.css';
+
 .internal-models {
   padding: 20px;
 }

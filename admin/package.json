@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite --port 3000",
     "build": "vite build",
@@ -20,9 +23,12 @@
     "element-plus": "^2.8.8",
     "hot-formula-parser": "^4.0.0",
     "jsqr": "^1.4.0",
+    "ldrs": "^1.1.9",
     "mammoth": "^1.8.0",
+    "motion-v": "^2.3.0",
     "pdfjs-dist": "^4.10.38",
     "pinia": "^2.3.0",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },

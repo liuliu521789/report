@@ -31,7 +31,15 @@ export default defineConfig(({ mode }) => {
     );
   }
   return {
-    plugins: [vue()],
+    plugins: [
+      vue({
+        template: {
+          compilerOptions: {
+            isCustomElement: (tag) => tag.startsWith('l-')
+          }
+        }
+      })
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src')
@@ -40,6 +48,7 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       port: adminPort,
+      strictPort: true,
       proxy: {
         '/api': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
         '/qc-yearbooks': { target, changeOrigin: true, timeout: 0, proxyTimeout: 0 },

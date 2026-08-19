@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import { nanoid } from 'nanoid';
 
 import { getPool } from '../db/pool.js';
+import { attachQrcodeUid, allocateNextQrcodeUid, normalizeQrcodeUidSearch } from '../lib/qrcodeUid.js';
 import { resolvePublicBaseUrl } from '../lib/publicBaseUrl.js';
 import { requireAuth, requireAnyPermission, requirePermission } from '../middleware/auth.js';
 
@@ -53,9 +54,11 @@ router.post('/', requirePermission('qrcodes', 'create'), async (req, res) => {
   try {
     await conn.beginTransaction();
 
+    const qrcodeUid = await allocateNextQrcodeUid(conn);
+
     const [qrRes] = await conn.query(
-      'INSERT INTO qrcodes (token, created_by) VALUES (?, ?)',
-      [token, req.user.userId]
+      'INSERT INTO qrcodes (token, qrcode_uid, created_by) VALUES (?, ?, ?)',
+      [token, qrcodeUid, req.user.userId]
     );
     const qrcodeId = qrRes.insertId;
 
@@ -83,7 +86,16 @@ router.post('/', requirePermission('qrcodes', 'create'), async (req, res) => {
     const base = resolvePublicBaseUrl(req);
     const scanUrl = `${base}/api/public/qr/${token}`;
     const dataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 280 });
-    res.status(201).json({ id: qrcodeId, qrcodeId, token, scanUrl, qrDataUrl: dataUrl });
+    res.status(201).json(
+      attachQrcodeUid({
+        id: qrcodeId,
+        qrcodeId,
+        qrcodeUid,
+        token,
+        scanUrl,
+        qrDataUrl: dataUrl
+      })
+    );
   } catch (e) {
     await conn.rollback();
     throw e;
@@ -102,16 +114,38 @@ router.get('/', requirePermission('qrcodes', 'list'), async (req, res) => {
   const where = [];
   const params = [];
   if (q) {
-    where.push(
+    const like = `%${q}%`;
+    const exactUid = normalizeQrcodeUidSearch(q);
+    const idNum = /^\d+$/.test(q) ? Number(q) : null;
+    const matchParts = ['qrc.token LIKE ?', 'qrc.qrcode_uid LIKE ?'];
+    const matchParams = [like, like];
+    if (exactUid) {
+      matchParts.push('qrc.qrcode_uid = ?');
+      matchParams.push(exactUid);
+    }
+    if (idNum != null) {
+      matchParts.push('qrc.id = ?');
+      matchParams.push(idNum);
+    }
+    matchParts.push(
       `EXISTS (
         SELECT 1
         FROM qrcode_reports qr
         JOIN reports r ON r.id = qr.report_id
+        LEFT JOIN sales_customers c ON c.id = r.customer_id
         WHERE qr.qrcode_id = qrc.id
-          AND (r.product_name LIKE ? OR r.batch_no LIKE ?)
+          AND (
+            r.product_name LIKE ?
+            OR r.batch_no LIKE ?
+            OR r.report_uid LIKE ?
+            OR c.customer_name LIKE ?
+            OR c.contact_name LIKE ?
+          )
       )`
     );
-    params.push(`%${q}%`, `%${q}%`);
+    matchParams.push(like, like, like, like, like);
+    where.push(`(${matchParts.join(' OR ')})`);
+    params.push(...matchParams);
   }
   const sqlWhere = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -123,7 +157,7 @@ router.get('/', requirePermission('qrcodes', 'list'), async (req, res) => {
   );
   const total = Number(countRows?.[0]?.total || 0);
   const [baseRows] = await pool.query(
-    `SELECT qrc.id, qrc.token, qrc.created_at AS createdAt
+    `SELECT qrc.id, qrc.token, qrc.qrcode_uid AS qrcodeUid, qrc.created_at AS createdAt
      FROM qrcodes qrc
      ${sqlWhere}
      ORDER BY qrc.id DESC
@@ -134,10 +168,13 @@ router.get('/', requirePermission('qrcodes', 'list'), async (req, res) => {
 
   const ids = baseRows.map((r) => r.id);
   const [rows] = await pool.query(
-    `SELECT q.id, q.token, q.created_at AS createdAt, r.product_name AS productName, r.batch_no AS batchNo
+    `SELECT q.id, q.token, q.qrcode_uid AS qrcodeUid, q.created_at AS createdAt,
+            r.product_name AS productName, r.batch_no AS batchNo,
+            c.customer_name AS customerName, c.contact_name AS customerContact
      FROM qrcodes q
      LEFT JOIN qrcode_reports qr ON qr.qrcode_id = q.id
      LEFT JOIN reports r ON r.id = qr.report_id
+     LEFT JOIN sales_customers c ON c.id = r.customer_id
      WHERE q.id IN (${ids.map(() => '?').join(',')})
      ORDER BY q.id DESC, r.id DESC`,
     ids
@@ -149,10 +186,13 @@ router.get('/', requirePermission('qrcodes', 'list'), async (req, res) => {
       byId.set(row.id, {
         id: row.id,
         qrcodeId: row.id,
+        qrcodeUid: row.qrcodeUid || '',
         token: row.token,
         createdAt: row.createdAt,
         reportCount: 0,
-        reportTags: []
+        reportTags: [],
+        customerTags: [],
+        _customerKeys: new Set()
       });
     }
     const item = byId.get(row.id);
@@ -160,22 +200,42 @@ router.get('/', requirePermission('qrcodes', 'list'), async (req, res) => {
       item.reportCount += 1;
       item.reportTags.push({
         productName: row.productName || '',
-        batchNo: row.batchNo || ''
+        batchNo: row.batchNo || '',
+        customerName: row.customerName || '',
+        customerContact: row.customerContact || ''
       });
+    }
+    if (row.customerName || row.customerContact) {
+      const customerKey = `${row.customerName || ''}\0${row.customerContact || ''}`;
+      if (!item._customerKeys.has(customerKey)) {
+        item._customerKeys.add(customerKey);
+        item.customerTags.push({
+          customerName: row.customerName || '',
+          customerContact: row.customerContact || ''
+        });
+      }
     }
   }
 
   const items = baseRows.map((r) => byId.get(r.id) || {
     id: r.id,
     qrcodeId: r.id,
+    qrcodeUid: r.qrcodeUid || '',
     token: r.token,
     createdAt: r.createdAt,
     reportCount: 0,
-    reportTags: []
+    reportTags: [],
+    customerTags: []
   });
   for (const item of items) {
+    delete item._customerKeys;
+    attachQrcodeUid(item);
     const scanUrl = `${base}/api/public/qr/${item.token}`;
-    item.qrThumbDataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 72 });
+    try {
+      item.qrThumbDataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 72 });
+    } catch {
+      item.qrThumbDataUrl = '';
+    }
   }
   res.json({ items, total, limit, offset });
 });
@@ -186,22 +246,27 @@ router.get('/:id', requirePermission('qrcodes', 'viewDetail'), async (req, res) 
 
   const pool = getPool();
   const [qrRows] = await pool.query(
-    'SELECT id, token, created_at AS createdAt FROM qrcodes WHERE id=? LIMIT 1',
+    'SELECT id, token, qrcode_uid AS qrcodeUid, created_at AS createdAt FROM qrcodes WHERE id=? LIMIT 1',
     [id]
   );
   const qrcode = qrRows?.[0];
   if (!qrcode) return res.status(404).json({ error: 'NOT_FOUND' });
 
   const [rRows] = await pool.query(
-    `SELECT r.id, r.report_uid AS reportUid, r.report_no AS reportNo, r.batch_no AS batchNo, r.product_name AS productName, r.conclusion, r.status
+    `SELECT r.id, r.report_uid AS reportUid, r.report_no AS reportNo, r.batch_no AS batchNo,
+            r.product_name AS productName, r.conclusion, r.status,
+            c.customer_name AS customerName, c.contact_name AS customerContact
      FROM qrcode_reports qr
      JOIN reports r ON r.id = qr.report_id
+     LEFT JOIN sales_customers c ON c.id = r.customer_id
      WHERE qr.qrcode_id = ?
      ORDER BY r.id DESC`,
     [id]
   );
 
-  res.json({ qrcode: { ...qrcode, qrcodeId: qrcode.id, reports: rRows } });
+  res.json({
+    qrcode: attachQrcodeUid({ ...qrcode, qrcodeId: qrcode.id, reports: rRows })
+  });
 });
 
 // Get QR image for existing qrcode id (regenerate dataURL)
@@ -210,14 +275,22 @@ router.get('/:id/qr', requirePermission('qrcodes', 'viewDetail'), async (req, re
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'BAD_REQUEST' });
 
   const pool = getPool();
-  const [qrRows] = await pool.query('SELECT id, token FROM qrcodes WHERE id=? LIMIT 1', [id]);
+  const [qrRows] = await pool.query('SELECT id, token, qrcode_uid AS qrcodeUid FROM qrcodes WHERE id=? LIMIT 1', [id]);
   const qrcode = qrRows?.[0];
   if (!qrcode) return res.status(404).json({ error: 'NOT_FOUND' });
 
   const base = resolvePublicBaseUrl(req);
   const scanUrl = `${base}/api/public/qr/${qrcode.token}`;
   const dataUrl = await QRCode.toDataURL(scanUrl, { margin: 1, width: 280 });
-  res.json({ id: qrcode.id, qrcodeId: qrcode.id, token: qrcode.token, scanUrl, qrDataUrl: dataUrl });
+  res.json(
+    attachQrcodeUid({
+      id: qrcode.id,
+      qrcodeId: qrcode.id,
+      token: qrcode.token,
+      scanUrl,
+      qrDataUrl: dataUrl
+    })
+  );
 });
 
 router.delete('/', requireAnyPermission('qrcodes', ['delete', 'create']), async (req, res) => {

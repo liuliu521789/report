@@ -458,6 +458,15 @@ export default {
 }
 
 @media (max-width: 992px) {
+  .company-page {
+    padding: 0 4px;
+  }
+
+  .page-header-card :deep(.el-card__body),
+  .section-card :deep(.el-card__body) {
+    padding: 12px;
+  }
+
   .page-head {
     flex-direction: column;
   }

@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { getPool } from '../db/pool.js';
 import { requireAuth, requirePermission, requireSuperAdmin } from '../middleware/auth.js';
-import { logOperationFromReq, purgeExpiredErrorLogs } from '../lib/audit.js';
+import { logOperationFromReq, purgeExpiredErrorLogs, purgeExpiredLoginLogs, purgeExpiredOperationLogs } from '../lib/audit.js';
 
 export const router = Router();
 const bulkIdsSchema = z.object({
@@ -62,6 +62,7 @@ router.get(
     return requirePermission('audit', 'viewLogin')(req, res, next);
   },
   async (req, res) => {
+    await purgeExpiredLoginLogs();
     const username = String(req.query.username || '').trim();
     const success = req.query.success;
     const from = String(req.query.from || '').trim();
@@ -168,11 +169,13 @@ router.get(
     return requirePermission('audit', 'viewOperations')(req, res, next);
   },
   async (req, res) => {
+    await purgeExpiredOperationLogs();
     const username = String(req.query.username || '').trim();
     const userId = req.query.userId != null && req.query.userId !== '' ? Number(req.query.userId) : null;
     const module = String(req.query.module || '').trim();
     const from = String(req.query.from || '').trim();
     const to = String(req.query.to || '').trim();
+    const success = req.query.success;
     const limit = Math.min(Number(req.query.limit || 50), 200);
     const offset = Math.max(Number(req.query.offset || 0), 0);
 
@@ -198,6 +201,10 @@ router.get(
     if (to) {
       where.push('l.created_at <= ?');
       params.push(to);
+    }
+    if (success === '1' || success === '0') {
+      where.push('l.success = ?');
+      params.push(success === '1' ? 1 : 0);
     }
     const sqlWhere = `WHERE ${where.join(' AND ')}`;
     const [rows] = await pool.query(

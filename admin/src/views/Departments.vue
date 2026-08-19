@@ -1,42 +1,147 @@
 <template>
-  <div class="dept-page">
-    <div class="toolbar">
-      <el-button type="primary" @click="openCreate" icon=Plus>新增部门</el-button>
-      <span class="hint"
-        >多级组织架构；删除前请先移除子部门，并将成员调离本部门（员工账号中修改所属部门）。</span
-      >
+  <div class="ref-list-page dept-page">
+    <div class="page-head">
+      <div class="page-head__filters">
+        <button
+          v-for="pill in filterPills"
+          :key="pill.key || 'all'"
+          type="button"
+          class="type-pill"
+          :class="{ 'is-active': activePill === pill.key }"
+          @click="setPillFilter(pill.key)"
+        >
+          {{ pill.label }}
+          <span class="type-pill__count">{{ pill.count }}</span>
+        </button>
+      </div>
+      <div class="page-head__actions">
+        <el-button :icon="Refresh" :loading="loading" circle @click="load" />
+        <el-button type="primary" class="btn-create" :icon="Plus" @click="openCreate">新增部门</el-button>
+      </div>
     </div>
 
-    <el-table v-loading="loading" :data="items" border class="desktop-table">
-      <el-table-column prop="id" label="ID" width="72" />
-      <el-table-column label="部门" min-width="200">
-        <template #default="{ row }">{{ deptPathLabel(row.id) }}</template>
-      </el-table-column>
-      <el-table-column label="直属上级" width="160">
-        <template #default="{ row }">{{ parentName(row.parentId) }}</template>
-      </el-table-column>
-      <el-table-column prop="memberCount" label="人数" width="80" />
-      <el-table-column prop="sortOrder" label="排序" width="80" />
-      <el-table-column label="操作" width="140" fixed="right">
-        <template #default="{ row }">
-          <el-button link @click="openEdit(row)" icon=Edit>编辑</el-button>
-          <el-button link type="danger" @click="onDelete(row)" icon=Delete>删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-    <div class="mobile-list" v-loading="loading">
-      <div v-for="row in items" :key="'m-' + row.id" class="mobile-card">
-        <div class="mobile-head">
-          <strong>{{ deptPathLabel(row.id) }}</strong>
+    <div class="content-panel">
+      <div class="filter-bar">
+        <div class="filter-bar__left">
+          <span class="filter-hint">多级组织架构；删除前请先移除子部门，并将成员调离本部门。</span>
         </div>
-        <div class="mobile-line"><span>ID</span><span>{{ row.id }}</span></div>
-        <div class="mobile-line"><span>人数</span><span>{{ row.memberCount }}</span></div>
-        <div class="mobile-actions">
-          <el-button size="small" @click="openEdit(row)" icon=Edit>编辑</el-button>
-          <el-button size="small" type="danger" @click="onDelete(row)" icon=Delete>删除</el-button>
+        <div class="filter-bar__right">
+          <div class="search-box">
+            <el-input
+              v-model="keyword"
+              placeholder="搜索部门名称"
+              clearable
+              class="search-input"
+              @keyup.enter="applySearch"
+              @clear="applySearch"
+            />
+            <el-button type="primary" class="search-btn" :icon="Search" @click="applySearch">搜索</el-button>
+          </div>
         </div>
       </div>
-      <el-empty v-if="!items.length && !loading" description="暂无部门" />
+
+      <div v-if="keyword.trim()" class="filter-tags">
+        <el-tag closable size="small" effect="plain" @close="clearSearch">
+          关键词「{{ keyword.trim() }}」
+        </el-tag>
+        <el-button link type="primary" size="small" @click="clearSearch">清空</el-button>
+      </div>
+
+      <div class="table-scroll">
+        <el-table
+          v-loading="loading"
+          :data="displayItems"
+          class="desktop-table ref-table"
+          row-key="id"
+          @row-dblclick="openEdit"
+        >
+          <el-table-column label="部门" min-width="240" show-overflow-tooltip>
+            <template #default="{ row }">
+              <div class="name-cell">
+                <span class="name-icon name-icon--dept">
+                  <el-icon><OfficeBuilding /></el-icon>
+                </span>
+                <div class="name-info">
+                  <span class="name-title">{{ row.nameZh }}</span>
+                  <span v-if="row.parentId != null" class="name-sub">{{ deptPathLabel(row.id) }}</span>
+                  <span v-else class="name-sub">顶级部门</span>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="完整路径" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">{{ deptPathLabel(row.id) }}</template>
+          </el-table-column>
+          <el-table-column label="直属上级" width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="cell-muted">{{ parentName(row.parentId) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="人数" width="88" align="center">
+            <template #default="{ row }">
+              <span :class="['count-tag', { 'is-active': Number(row.memberCount) > 0 }]">
+                {{ row.memberCount ?? 0 }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="sortOrder" label="排序" width="80" align="center" />
+          <el-table-column label="操作" width="64" fixed="right" align="center">
+            <template #default="{ row }">
+              <el-dropdown trigger="click" @command="(c) => onRowAction(c, row)">
+                <el-button link class="more-btn" @click.stop>
+                  <el-icon :size="18"><MoreFilled /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="edit" :icon="Edit">编辑</el-dropdown-item>
+                    <el-dropdown-item command="delete" divided>
+                      <span class="danger-text">删除部门</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
+          </el-table-column>
+          <template #empty>
+            <el-empty :description="emptyText" :image-size="88">
+              <el-button v-if="hasFilter" @click="resetFilters">恢复默认</el-button>
+              <el-button type="primary" :icon="Plus" @click="openCreate">新增部门</el-button>
+            </el-empty>
+          </template>
+        </el-table>
+      </div>
+
+      <div v-if="displayItems.length" class="table-footer">
+        <span>共 {{ displayItems.length }} 个部门</span>
+      </div>
+    </div>
+
+    <div class="mobile-list" v-loading="loading">
+      <div v-for="row in displayItems" :key="'m-' + row.id" class="mobile-card" @click="openEdit(row)">
+        <div class="mobile-head">
+          <div class="mobile-head-main">
+            <span class="name-icon name-icon--dept name-icon--sm">
+              <el-icon><OfficeBuilding /></el-icon>
+            </span>
+            <div>
+              <strong>{{ deptPathLabel(row.id) }}</strong>
+              <span class="name-sub">{{ parentName(row.parentId) }}</span>
+            </div>
+          </div>
+          <span :class="['count-tag', { 'is-active': Number(row.memberCount) > 0 }]">
+            {{ row.memberCount ?? 0 }} 人
+          </span>
+        </div>
+        <div class="mobile-line"><span>排序</span><span>{{ row.sortOrder }}</span></div>
+        <div class="mobile-actions" @click.stop>
+          <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+          <el-button size="small" type="danger" plain @click="onDelete(row)">删除</el-button>
+        </div>
+      </div>
+      <el-empty v-if="!displayItems.length && !loading" :description="emptyText">
+        <el-button v-if="hasFilter" @click="resetFilters">清空筛选</el-button>
+        <el-button type="primary" :icon="Plus" @click="openCreate">新增部门</el-button>
+      </el-empty>
     </div>
 
     <el-dialog :title="dialogMode === 'create' ? '新增部门' : '编辑部门'" v-model="dialog" width="520px" @close="resetForm">
@@ -54,22 +159,53 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false" icon=Close>取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submit" icon=Check>保存</el-button>
+        <el-button @click="dialog = false" :icon="Close">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submit" :icon="Check">保存</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script>
+import {
+  Check,
+  Close,
+  Edit,
+  MoreFilled,
+  OfficeBuilding,
+  Plus,
+  Refresh,
+  Search
+} from '@element-plus/icons-vue';
 import { createDepartment, deleteDepartment, listDepartmentsFlat, updateDepartment } from '../api';
 
 export default {
   name: 'Departments',
+  components: {
+    Check,
+    Close,
+    Edit,
+    MoreFilled,
+    OfficeBuilding,
+    Plus,
+    Refresh,
+    Search
+  },
   data() {
     return {
+      Plus,
+      Refresh,
+      Search,
+      Edit,
+      Close,
+      Check,
+      MoreFilled,
+      OfficeBuilding,
       loading: false,
       items: [],
+      keyword: '',
+      searchKeyword: '',
+      activePill: '',
       dialog: false,
       dialogMode: 'create',
       saving: false,
@@ -90,6 +226,24 @@ export default {
       for (const r of this.items) m[r.id] = r;
       return m;
     },
+    rootCount() {
+      return this.items.filter((r) => r.parentId == null).length;
+    },
+    filterPills() {
+      return [
+        { key: '', label: '全部', count: this.items.length },
+        { key: 'root', label: '顶级', count: this.rootCount }
+      ];
+    },
+    displayItems() {
+      let list = this.items;
+      if (this.activePill === 'root') {
+        list = list.filter((r) => r.parentId == null);
+      }
+      const kw = this.searchKeyword.trim().toLowerCase();
+      if (!kw) return list;
+      return list.filter((r) => this.deptPathLabel(r.id).toLowerCase().includes(kw));
+    },
     parentOptions() {
       if (this.dialogMode !== 'edit' || !this.editingId) return this.items;
       const ex = new Set([this.editingId]);
@@ -103,6 +257,12 @@ export default {
       };
       addDesc(this.editingId);
       return this.items.filter((r) => !ex.has(r.id));
+    },
+    hasFilter() {
+      return !!this.searchKeyword.trim() || this.activePill !== '';
+    },
+    emptyText() {
+      return this.hasFilter ? '没有符合条件的部门' : '暂无部门';
     }
   },
   mounted() {
@@ -124,6 +284,25 @@ export default {
     parentName(parentId) {
       if (parentId == null) return '—';
       return this.deptPathLabel(parentId);
+    },
+    setPillFilter(key) {
+      this.activePill = key;
+    },
+    applySearch() {
+      this.searchKeyword = this.keyword;
+    },
+    clearSearch() {
+      this.keyword = '';
+      this.searchKeyword = '';
+    },
+    resetFilters() {
+      this.keyword = '';
+      this.searchKeyword = '';
+      this.activePill = '';
+    },
+    onRowAction(command, row) {
+      if (command === 'edit') return this.openEdit(row);
+      if (command === 'delete') return this.onDelete(row);
     },
     async load() {
       this.loading = true;
@@ -214,50 +393,9 @@ export default {
 </script>
 
 <style scoped>
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-.hint {
-  font-size: 12px;
-  color: #64748b;
-}
-.mobile-list {
-  display: none;
-}
-.mobile-card {
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 10px;
-  background: #fff;
-  margin-bottom: 8px;
-}
-.mobile-head {
-  margin-bottom: 8px;
-}
-.mobile-line {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 3px 0;
-  font-size: 13px;
-  color: #475569;
-}
-.mobile-actions {
-  margin-top: 10px;
-  display: flex;
-  gap: 8px;
-}
+@import '../styles/refListPage.css';
+
 @media (max-width: 992px) {
-  .desktop-table {
-    display: none;
-  }
-  .mobile-list {
-    display: block;
-  }
   .dept-form :deep(.el-form-item__label) {
     width: 100% !important;
     text-align: left;
@@ -266,11 +404,5 @@ export default {
   .dept-form :deep(.el-form-item__content) {
     margin-left: 0 !important;
   }
-}
-:deep(.el-table__row) {
-  cursor: pointer;
-}
-:deep(.el-table__row:hover) {
-  background-color: #f5f7fa;
 }
 </style>

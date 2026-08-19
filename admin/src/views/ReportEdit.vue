@@ -376,6 +376,17 @@
             >
               移除检验依据列
             </el-button>
+            <div class="inspection-result-format">
+              <span class="inspection-result-format__label">检测值格式</span>
+              <el-radio-group
+                :model-value="inspectionResultFormat"
+                size="small"
+                @change="onInspectionResultFormatChange"
+              >
+                <el-radio-button value="decimal2">保留两位小数</el-radio-button>
+                <el-radio-button value="integer">取整数</el-radio-button>
+              </el-radio-group>
+            </div>
           </div>
 
           <datalist id="report-unit-options">
@@ -498,6 +509,7 @@
                   :title="tableCell(tr, 'result').zh"
                   :readonly="!fieldEditable('inspection_table')"
                   @input="onTableDataCellInput(tr, { key: 'result' }, $event)"
+                  @blur="onResultCellBlur(tr)"
                   @keydown="onTableCellKeydown($event, ri, 'result')"
                 />
               </td>
@@ -897,6 +909,12 @@ import {
 } from '../utils/inspectionItemSuggestions';
 import { REPORT_PREFILL_FROM_ORDER_KEY } from '../utils/orderReportPrefill';
 import { applyQcYearbookFieldsToFormFields } from '../utils/qcYearbookReportPrefill';
+import {
+  applyResultFormatToTable,
+  formatInspectionResultCell,
+  normalizeResultFormat,
+  syncResultRawFromDisplay
+} from '../utils/inspectionResultFormat';
 import { normalizeProductNameCase } from '../utils/productNameInput';
 
 const TABLE_KEY = 'inspection_table';
@@ -1104,6 +1122,9 @@ export default {
     customerFromOrderLocked() {
       const fromOrder = Number(this.$route?.query?.fromOrder);
       return Number.isFinite(fromOrder) && fromOrder > 0;
+    },
+    inspectionResultFormat() {
+      return normalizeResultFormat(this.inspectionTable?.fieldValue?.resultFormat);
     }
   },
   watch: {
@@ -1147,6 +1168,7 @@ export default {
         }))
       };
       this.ensurePaperShape(report);
+      this.syncInspectionResultDisplay();
       this.syncCustomerOptionFromForm();
       await this.loadAppliedSeals();
       await this.loadTemplateInfo();
@@ -1362,8 +1384,20 @@ export default {
         if (!f.fieldValue || typeof f.fieldValue !== 'object') {
           f.fieldValue = { zh: '', en: '' };
         }
-        if (val.zh) f.fieldValue.zh = val.zh;
-        if (val.en) f.fieldValue.en = val.en;
+        f.fieldValue.zh = String(val?.zh ?? '').trim();
+        f.fieldValue.en = String(val?.en ?? '').trim();
+      }
+    },
+    clearReportConclusionAndRemarks() {
+      for (const key of ['test_conclusion', 'remarks']) {
+        const f = this.form.fields.find((x) => x.fieldKey === key);
+        if (!f) continue;
+        if (!f.fieldValue || typeof f.fieldValue !== 'object') {
+          f.fieldValue = { zh: '', en: '' };
+          continue;
+        }
+        f.fieldValue.zh = '';
+        f.fieldValue.en = '';
       }
     },
     async applyInspectionTableByProductName(productName, { silent = false, fromOrderId = null } = {}) {
@@ -1382,6 +1416,7 @@ export default {
         const preserved = this.capturePrefillHeaderFields();
         await this.applyTemplateById(hint.id, { skipConfirm: true, silent: silent });
         this.restorePrefillHeaderFields(preserved);
+        this.clearReportConclusionAndRemarks();
 
         if (!silent) {
           this.$message.success(`已按产品「${name}」联想模板「${hint.name}」检验项目`);
@@ -1461,8 +1496,7 @@ export default {
       }
       if (qc?.found && qc.fields) {
         const { inspectionApplied } = applyQcYearbookFieldsToFormFields(this.form.fields, qc.fields);
-        qcApplied =
-          inspectionApplied > 0 || !!(qc.fields.test_conclusion?.zh || qc.fields.batch_weight?.zh);
+        qcApplied = inspectionApplied > 0;
       }
 
       this.lastReportAutoFillKey = lookupKey;
@@ -1666,7 +1700,8 @@ export default {
           if (!r.basis) this.$set(r, 'basis', { zh: '', en: '' });
         });
       }
-      return { columnLabels, rows, hasBasisColumn: columnLabels.length >= 5 };
+      const resultFormat = normalizeResultFormat(parsed?.resultFormat);
+      return { columnLabels, rows, hasBasisColumn: columnLabels.length >= 5, resultFormat };
     },
     rowsFromLegacyArray(arr, columnLabels) {
       const toBi = (val) => {
@@ -2163,6 +2198,32 @@ export default {
       this.syncTableCellEn(this.tableCell(row, col.key));
       this.autoResizeTableCell(e?.target);
     },
+    onInspectionResultFormatChange(format) {
+      const t = this.inspectionTable;
+      if (!t?.fieldValue) return;
+      const mode = normalizeResultFormat(format);
+      const { tableValue } = applyResultFormatToTable(t.fieldValue, mode);
+      t.fieldValue = tableValue;
+    },
+    syncInspectionResultDisplay() {
+      const t = this.inspectionTable;
+      if (!t?.fieldValue) return;
+      const mode = normalizeResultFormat(t.fieldValue.resultFormat);
+      const { tableValue } = applyResultFormatToTable(t.fieldValue, mode);
+      t.fieldValue = tableValue;
+    },
+    onResultCellBlur(row) {
+      const cell = this.tableCell(row, 'result');
+      if (!cell) return;
+      syncResultRawFromDisplay(cell, this.inspectionResultFormat);
+      const formatted = formatInspectionResultCell(cell, this.inspectionResultFormat);
+      cell.zh = formatted.zh;
+      cell.en = formatted.en;
+      if (formatted.raw != null) cell.raw = formatted.raw;
+      else delete cell.raw;
+      if (formatted.rawEn != null) cell.rawEn = formatted.rawEn;
+      else delete cell.rawEn;
+    },
     onTableCellKeydown(e, rowIndex, colKey) {
       if (!this.fieldEditable('inspection_table')) return;
       if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
@@ -2197,6 +2258,9 @@ export default {
       }
       const tf = this.inspectionTable;
       if (tf) {
+        const mode = normalizeResultFormat(tf.fieldValue?.resultFormat);
+        const { tableValue } = applyResultFormatToTable(tf.fieldValue, mode);
+        tf.fieldValue = tableValue;
         const columnLabels = tf.fieldValue.columnLabels || this.defaultColumnLabels();
         const rows = tf.fieldValue.rows || [];
         for (const row of rows) {
@@ -2207,7 +2271,8 @@ export default {
         tf.fieldValue = {
           columnLabels,
           rows,
-          hasBasisColumn: columnLabels.some((c) => c.key === 'basis')
+          hasBasisColumn: columnLabels.some((c) => c.key === 'basis'),
+          resultFormat: normalizeResultFormat(tf.fieldValue?.resultFormat)
         };
       }
     },
@@ -3341,10 +3406,21 @@ export default {
 }
 .inspection-table-tip {
   flex: 1;
-  min-width: 200px;
+  min-width: 160px;
   font-size: 12px;
   color: #909399;
   line-height: 1.5;
+}
+.inspection-result-format {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.inspection-result-format__label {
+  font-size: 12px;
+  color: #606266;
+  white-space: nowrap;
 }
 .test-table-scroll {
   width: 100%;

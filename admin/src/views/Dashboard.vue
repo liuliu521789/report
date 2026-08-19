@@ -218,45 +218,78 @@
               <el-button type="primary" plain size="small" @click="$router.push('/sales/orders')">订单管理</el-button>
             </div>
           </template>
-          <el-row :gutter="12">
-            <el-col
+          <div class="metric-card-grid metric-card-grid--todo">
+            <div
               v-for="item in salesTodoItems"
               :key="item.key"
-              :xs="12"
-              :sm="8"
-              :md="6"
-              :lg="4"
+              class="todo-metric-card"
+              :class="{ 'is-zero': item.count === 0, [`todo-metric-card--${item.tone}`]: true }"
+              role="button"
+              tabindex="0"
+              @click="goSalesOrders(item)"
+              @keyup.enter="goSalesOrders(item)"
             >
-              <div
-                class="todo-metric-card"
-                :class="{ 'is-zero': item.count === 0, [`todo-metric-card--${item.tone}`]: true }"
-                role="button"
-                tabindex="0"
-                @click="goSalesOrders(item)"
-                @keyup.enter="goSalesOrders(item)"
-              >
-                <div class="todo-metric-head">
-                  <div class="todo-metric-icon">
-                    <el-icon :size="16"><component :is="item.icon" /></el-icon>
-                  </div>
-                  <el-tag :type="item.statusType" size="small" effect="light" round>{{ item.statusLabel }}</el-tag>
+              <div class="todo-metric-head">
+                <div class="todo-metric-icon">
+                  <el-icon :size="16"><component :is="item.icon" /></el-icon>
                 </div>
-                <div class="todo-metric-top">
-                  <span class="todo-metric-count">{{ item.count }}</span>
-                  <span class="todo-metric-unit">单</span>
-                </div>
-                <div class="todo-metric-label">{{ item.label }}</div>
-                <div class="todo-metric-hint">{{ item.hint }}</div>
-                <el-progress
-                  class="todo-metric-progress"
-                  :percentage="item.pct"
-                  :stroke-width="6"
-                  :show-text="false"
-                  :color="item.progressColor"
-                />
+                <el-tag :type="item.statusType" size="small" effect="light" round>{{ item.statusLabel }}</el-tag>
               </div>
-            </el-col>
-          </el-row>
+              <div class="todo-metric-top">
+                <span class="todo-metric-count">{{ item.count }}</span>
+                <span class="todo-metric-unit">单</span>
+              </div>
+              <div class="todo-metric-label">{{ item.label }}</div>
+              <div class="todo-metric-hint">{{ item.hint }}</div>
+              <el-progress
+                class="todo-metric-progress"
+                :percentage="item.pct"
+                :stroke-width="6"
+                :show-text="false"
+                :color="item.progressColor"
+              />
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row v-if="workAlertItems.length" :gutter="16" class="dash-row">
+      <el-col :span="24">
+        <el-card shadow="hover" class="dash-panel alert-panel" v-loading="loading">
+          <template #header>
+            <div class="panel-head panel-head--between">
+              <div>
+                <span class="panel-title">工作提醒</span>
+                <span class="panel-desc">异常数据与超时流程</span>
+              </div>
+            </div>
+          </template>
+          <div class="metric-card-grid metric-card-grid--alert">
+            <div
+              v-for="item in workAlertItems"
+              :key="item.key"
+              class="work-alert-card"
+              :class="`work-alert-card--${item.tone}`"
+              role="button"
+              tabindex="0"
+              @click="goWorkAlert(item)"
+              @keyup.enter="goWorkAlert(item)"
+            >
+              <div class="work-alert-top">
+                <div class="work-alert-icon">
+                  <el-icon :size="16"><component :is="item.icon" /></el-icon>
+                </div>
+                <el-tag :type="item.tagType" size="small" effect="light" round>{{ item.tag }}</el-tag>
+              </div>
+              <div class="work-alert-main">
+                <span class="work-alert-count">{{ item.count }}</span>
+                <span class="work-alert-unit">{{ item.unit }}</span>
+              </div>
+              <div class="work-alert-title">{{ item.title }}</div>
+              <div class="work-alert-hint">{{ item.hint }}</div>
+            </div>
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -406,6 +439,7 @@ import * as echarts from 'echarts';
 import {
   Box,
   ChatDotRound,
+  CircleClose,
   DataAnalysis,
   Document,
   DocumentCopy,
@@ -470,6 +504,7 @@ export default {
     ActivityHeatmap,
     Box,
     ChatDotRound,
+    CircleClose,
     DataAnalysis,
     Document,
     DocumentCopy,
@@ -553,13 +588,7 @@ export default {
       return `${period}，${who}`;
     },
     welcomeSubText() {
-      const caps = this.summary?.capabilities || {};
-      const parts = [];
-      if (caps.reports) parts.push('报告质控');
-      if (caps.salesOrders || caps.salesContracts || caps.salesInvoices) parts.push('销售业务');
-      if (caps.adminMetrics) parts.push('系统管理');
-      if (!parts.length) return '按您的账号权限展示快捷入口与统计';
-      return `当前可用：${parts.join(' · ')}`;
+      return '按您的账号权限展示快捷入口与统计';
     },
     todayLabel() {
       const d = new Date();
@@ -866,6 +895,272 @@ export default {
 
       return sections;
     },
+    workAlertItems() {
+      const items = [];
+      const alerts = this.summary?.alerts || {};
+      const reportAlerts = alerts.reports || {};
+      const overdue = this.summary?.sales?.overdue || {};
+      const notify = alerts.notificationHealth || {};
+      const qrcodes = alerts.qrcodes || {};
+      const qcYearbooks = alerts.qcYearbooks || {};
+      const customerModels = alerts.customerModels || {};
+      const backups = alerts.backups || {};
+
+      const pushCount = (cfg) => {
+        const count = numOrZero(cfg.count);
+        if (count <= 0) return;
+        items.push({ ...cfg, count });
+      };
+
+      if (this.summary?.capabilities?.reports && reportAlerts) {
+        pushCount({
+          key: 'reports-unknown',
+          title: '未知结论报告',
+          count: reportAlerts.unknownActive,
+          unit: '份',
+          tag: '需补齐',
+          tagType: 'warning',
+          tone: 'amber',
+          icon: 'Warning',
+          hint: '建议尽快补录检验结论，避免报告状态长期不确定',
+          path: '/reports'
+        });
+        pushCount({
+          key: 'reports-fail',
+          title: '不合格报告',
+          count: reportAlerts.failActive,
+          unit: '份',
+          tag: '重点关注',
+          tagType: 'danger',
+          tone: 'rose',
+          icon: 'Warning',
+          hint: '可用于质量复盘、客户沟通和异常闭环',
+          path: '/reports'
+        });
+        pushCount({
+          key: 'reports-unbound-qrcode',
+          title: '未绑定二维码报告',
+          count: reportAlerts.unboundQrcodeReports,
+          unit: '份',
+          tag: '待绑定',
+          tagType: 'info',
+          tone: 'blue',
+          icon: 'Link',
+          hint: '绑定后扫码追溯能直接查看对应报告',
+          path: '/qrcodes'
+        });
+        pushCount({
+          key: 'reports-voided',
+          title: '近 7 天作废报告',
+          count: reportAlerts.voided7d,
+          unit: '份',
+          tag: '复核',
+          tagType: 'warning',
+          tone: 'slate',
+          icon: 'Document',
+          hint: '作废量异常时建议回看录入和审核流程',
+          path: '/reports'
+        });
+      }
+
+      if (this.summary?.capabilities?.qcYearbooks && qcYearbooks) {
+        if (qcYearbooks.year && !qcYearbooks.hasCurrentYear) {
+          pushCount({
+            key: 'qc-yearbook-missing-year',
+            title: `${qcYearbooks.year} 年品质台账未建`,
+            count: 1,
+            unit: '项',
+            tag: '待初始化',
+            tagType: 'warning',
+            tone: 'amber',
+            icon: 'DataAnalysis',
+            hint: '建议先创建本年度台账，方便报告预填和检验追溯',
+            path: '/qc-yearbooks'
+          });
+        } else if (qcYearbooks.hasCurrentYear && numOrZero(qcYearbooks.finishedProductRows) === 0) {
+          pushCount({
+            key: 'qc-yearbook-empty-fp',
+            title: '本年成品检验台账为空',
+            count: 1,
+            unit: '项',
+            tag: '待导入',
+            tagType: 'warning',
+            tone: 'amber',
+            icon: 'DataAnalysis',
+            hint: '导入或录入成品检验数据后，报告可复用台账信息',
+            path: '/qc-yearbooks'
+          });
+        }
+        pushCount({
+          key: 'qc-yearbook-abnormal',
+          title: '品质台账异常结论',
+          count: qcYearbooks.abnormalRows,
+          unit: '条',
+          tag: '复核',
+          tagType: 'danger',
+          tone: 'rose',
+          icon: 'DataAnalysis',
+          hint: '建议结合批号和报告结论确认异常是否已闭环',
+          path: '/qc-yearbooks'
+        });
+      }
+
+      if (this.summary?.capabilities?.qrcodes && qrcodes) {
+        pushCount({
+          key: 'qrcode-unbound',
+          title: '空二维码未绑定报告',
+          count: qrcodes.unboundQrcodes,
+          unit: '个',
+          tag: '待清理',
+          tagType: 'warning',
+          tone: 'purple',
+          icon: 'Link',
+          hint: '空码可能来自测试或中断生成，建议绑定报告或删除',
+          path: '/qrcodes'
+        });
+      }
+
+      if (this.summary?.capabilities?.customers && customerModels) {
+        pushCount({
+          key: 'customers-no-model-map',
+          title: '客户缺少型号映射',
+          count: customerModels.customersWithoutModelMapping,
+          unit: '家',
+          tag: '待维护',
+          tagType: 'warning',
+          tone: 'blue',
+          icon: 'User',
+          hint: '维护客户型号对照后，订单录入和报告预填会更准确',
+          path: '/sales/customers'
+        });
+        pushCount({
+          key: 'orders-missing-warehouse-model',
+          title: '本月订单缺仓库型号',
+          count: customerModels.monthOrdersMissingWarehouseModel,
+          unit: '单',
+          tag: '数据缺口',
+          tagType: 'info',
+          tone: 'slate',
+          icon: 'Box',
+          hint: '建议完善型号映射或订单字段，减少后续仓库沟通成本',
+          path: '/sales/orders',
+          query: { tab: 'list' }
+        });
+      }
+
+      if (this.summary?.capabilities?.salesOrders && overdue) {
+        pushCount({
+          key: 'sales-finance-overdue',
+          title: '财务审核超 24 小时',
+          count: overdue.pendingFinance24h,
+          unit: '单',
+          tag: '超时',
+          tagType: 'danger',
+          tone: 'blue',
+          icon: 'Money',
+          hint: '审核延迟会影响后续品管、出库和开票',
+          path: '/sales/orders',
+          query: { flow_bucket: 'pending_finance', tab: 'list' }
+        });
+        pushCount({
+          key: 'sales-qc-overdue',
+          title: '品管审核超 24 小时',
+          count: overdue.pendingQc24h,
+          unit: '单',
+          tag: '超时',
+          tagType: 'warning',
+          tone: 'teal',
+          icon: 'Odometer',
+          hint: '建议优先处理，避免订单卡在检验确认',
+          path: '/sales/orders',
+          query: { flow_bucket: 'pending_qc', tab: 'list' }
+        });
+        pushCount({
+          key: 'sales-ship-overdue',
+          title: '待备货发货超 48 小时',
+          count: overdue.pendingShip48h,
+          unit: '单',
+          tag: '高优先',
+          tagType: 'danger',
+          tone: 'orange',
+          icon: 'ShoppingCart',
+          hint: '已审核订单长期未发货会影响交付进度',
+          path: '/sales/orders',
+          query: { flow_bucket: 'pending_ship', tab: 'list' }
+        });
+        pushCount({
+          key: 'sales-rejected-overdue',
+          title: '驳回后超 48 小时未处理',
+          count: overdue.rejected48h,
+          unit: '单',
+          tag: '需跟进',
+          tagType: 'danger',
+          tone: 'rose',
+          icon: 'Warning',
+          hint: '销售需修改后重新提交，避免订单停滞',
+          path: '/sales/orders',
+          query: { status: 'rejected', tab: 'list' }
+        });
+      }
+
+      if (this.summary?.capabilities?.adminMetrics && backups) {
+        pushCount({
+          key: 'backup-failed',
+          title: '近 7 天备份失败/卡住',
+          count: numOrZero(backups.failed7d) + numOrZero(backups.staleRunning),
+          unit: '次',
+          tag: '需检查',
+          tagType: 'danger',
+          tone: 'rose',
+          icon: 'Warning',
+          hint: '请进入备份与恢复查看失败原因，必要时手动执行备份',
+          path: '/backups'
+        });
+        if (numOrZero(backups.success7d) === 0) {
+          pushCount({
+            key: 'backup-no-recent-success',
+            title: '近 7 天无成功备份',
+            count: 1,
+            unit: '项',
+            tag: '高风险',
+            tagType: 'danger',
+            tone: 'amber',
+            icon: 'Warning',
+            hint: backups.lastSuccessAt ? '最近成功备份已超过 7 天' : '尚未记录成功备份，请尽快执行一次',
+            path: '/backups'
+          });
+        }
+      }
+
+      if (this.summary?.capabilities?.wecom && notify) {
+        pushCount({
+          key: 'wecom-failed',
+          title: '企业微信发送失败',
+          count: numOrZero(notify.failed) + numOrZero(notify.dead),
+          unit: '条',
+          tag: '通知异常',
+          tagType: 'danger',
+          tone: 'rose',
+          icon: 'ChatDotRound',
+          hint: notify.lastFailed?.lastError ? String(notify.lastFailed.lastError).slice(0, 48) : '请检查企业微信配置或通知任务重试状态',
+          path: '/wecom-notifications'
+        });
+        pushCount({
+          key: 'wecom-pending',
+          title: '企业微信待发送',
+          count: notify.pending,
+          unit: '条',
+          tag: '排队中',
+          tagType: 'info',
+          tone: 'slate',
+          icon: 'ChatDotRound',
+          hint: '如长时间未发送，请检查通知任务处理进程',
+          path: '/wecom-notifications'
+        });
+      }
+
+      return items;
+    },
     donutTotal() {
       const d = this.summary?.donut || {};
       return numOrZero(d.validTotal) + numOrZero(d.unknownTotal) + numOrZero(d.voidTotal);
@@ -1004,6 +1299,14 @@ export default {
         return;
       }
       this.$router.push({ path: '/sales/orders', query: { ...(item.query || {}), tab: 'list' } });
+    },
+    goWorkAlert(item) {
+      if (!item?.path) return;
+      if (item.query) {
+        this.$router.push({ path: item.path, query: item.query });
+        return;
+      }
+      this.$router.push(item.path);
     },
     async refreshQuickRoles() {
       if (!isSuperAdmin()) return;
@@ -1330,24 +1633,36 @@ export default {
       this.donutChart.setOption({
         color: ['#22c55e', '#ef4444', '#94a3b8'],
         tooltip: { trigger: 'item', confine: true, formatter: '{b}<br/>{c} 份 · {d}%' },
-        legend: { orient: 'vertical', right: 8, top: 'center', textStyle: { fontSize: 12 } },
+        legend: {
+          orient: 'horizontal',
+          left: 'center',
+          bottom: 4,
+          itemWidth: 10,
+          itemHeight: 10,
+          textStyle: { fontSize: 12 }
+        },
         graphic:
           total > 0
             ? [
                 {
                   type: 'text',
-                  left: '32%',
-                  top: '44%',
+                  left: 'center',
+                  top: '40%',
                   style: { text: String(total), textAlign: 'center', fill: '#0f172a', fontSize: 22, fontWeight: 700 }
                 },
-                { type: 'text', left: '32%', top: '56%', style: { text: '总计', textAlign: 'center', fill: '#64748b', fontSize: 12 } }
+                {
+                  type: 'text',
+                  left: 'center',
+                  top: '52%',
+                  style: { text: '总计', textAlign: 'center', fill: '#64748b', fontSize: 12 }
+                }
               ]
             : [],
         series: [
           {
             type: 'pie',
-            radius: ['48%', '72%'],
-            center: ['38%', '50%'],
+            radius: ['42%', '64%'],
+            center: ['50%', '46%'],
             padAngle: 2,
             itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
             label: { show: false },
@@ -1380,7 +1695,7 @@ export default {
       this.salesFlowChart = echarts.init(el);
       this.salesFlowChart.setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, confine: true },
-        grid: { left: '3%', right: '6%', top: '8%', bottom: '6%', containLabel: true },
+        grid: { left: 12, right: 28, top: 12, bottom: 8, containLabel: true },
         xAxis: {
           type: 'value',
           min: 0,
@@ -1393,7 +1708,7 @@ export default {
           data: names,
           axisLine: { show: false },
           axisTick: { show: false },
-          axisLabel: { color: '#334155', fontSize: 12 }
+          axisLabel: { color: '#334155', fontSize: 12, align: 'right' }
         },
         series: [
           {
@@ -1707,25 +2022,50 @@ export default {
   height: 220px;
 }
 
-/* 销售待办卡片 */
-.todo-metric-card {
+/* 销售待办 / 工作提醒：统一网格与等高卡片 */
+.metric-card-grid {
+  display: grid;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.metric-card-grid--todo {
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+}
+
+.metric-card-grid--alert {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.todo-metric-card,
+.work-alert-card {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 168px;
+  display: flex;
+  flex-direction: column;
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 12px;
-  padding: 12px;
+  padding: 14px;
   background: #fff;
   cursor: pointer;
   transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s;
-  margin-bottom: 4px;
 }
 
-.todo-metric-card:hover {
+.work-alert-card {
+  background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+}
+
+.todo-metric-card:hover,
+.work-alert-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 8px 24px rgba(30, 58, 95, 0.1);
   border-color: rgba(59, 130, 246, 0.25);
 }
 
 .todo-metric-card:focus-visible,
-.quick-link-card:focus-visible {
+.quick-link-card:focus-visible,
+.work-alert-card:focus-visible {
   outline: 2px solid rgba(59, 130, 246, 0.55);
   outline-offset: 2px;
 }
@@ -1734,54 +2074,32 @@ export default {
   opacity: 0.5;
 }
 
-.todo-metric-top {
-  display: flex;
-  align-items: baseline;
-  margin-top: 6px;
-}
-
-.todo-metric-count {
-  font-size: 28px;
-  font-weight: 800;
-  color: #0f172a;
-  line-height: 1;
-}
-
-.todo-metric-unit {
-  margin-left: 4px;
-  font-size: 12px;
-  color: #64748b;
-  font-weight: 600;
-}
-
-.todo-metric-label {
-  margin-top: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #334155;
-}
-
-.todo-metric-hint {
-  margin-top: 6px;
-  min-height: 34px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: #64748b;
-}
-
-.todo-metric-head {
+.todo-metric-head,
+.work-alert-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
 }
 
-.todo-metric-icon {
+.todo-metric-head :deep(.el-tag),
+.work-alert-top :deep(.el-tag) {
+  flex-shrink: 0;
+  max-width: 72%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.todo-metric-icon,
+.work-alert-icon {
   width: 28px;
   height: 28px;
   border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   background: rgba(15, 23, 42, 0.06);
   color: #334155;
 }
@@ -1793,21 +2111,100 @@ export default {
 .todo-metric-card--green .todo-metric-icon { background: rgba(34, 197, 94, 0.16); color: #15803d; }
 .todo-metric-card--purple .todo-metric-icon { background: rgba(139, 92, 246, 0.16); color: #6d28d9; }
 
-.todo-metric-progress {
+.work-alert-card--blue .work-alert-icon { background: rgba(59, 130, 246, 0.14); color: #2563eb; }
+.work-alert-card--teal .work-alert-icon { background: rgba(20, 184, 166, 0.14); color: #0f766e; }
+.work-alert-card--orange .work-alert-icon { background: rgba(249, 115, 22, 0.14); color: #c2410c; }
+.work-alert-card--rose .work-alert-icon { background: rgba(244, 63, 94, 0.14); color: #be123c; }
+.work-alert-card--amber .work-alert-icon { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+.work-alert-card--purple .work-alert-icon { background: rgba(139, 92, 246, 0.14); color: #6d28d9; }
+.work-alert-card--slate .work-alert-icon { background: rgba(100, 116, 139, 0.14); color: #475569; }
+
+.todo-metric-top,
+.work-alert-main {
+  display: flex;
+  align-items: baseline;
+  margin-top: 10px;
+  min-height: 32px;
+}
+
+.todo-metric-count,
+.work-alert-count {
+  font-size: 28px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1;
+}
+
+.todo-metric-unit,
+.work-alert-unit {
+  margin-left: 4px;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.todo-metric-label,
+.work-alert-title {
   margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.todo-metric-hint,
+.work-alert-hint {
+  margin-top: 6px;
+  flex: 1;
+  min-height: 34px;
+  max-height: 34px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #64748b;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.todo-metric-progress {
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+@media (max-width: 768px) {
+  .metric-card-grid--todo {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-card-grid--alert {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .todo-metric-card,
+  .work-alert-card {
+    min-height: 156px;
+  }
 }
 
 /* 快捷入口卡片 */
 .quick-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
+  align-items: stretch;
 }
 
 .quick-link-card {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 12px 14px;
   border-radius: 10px;
   border: 1px solid rgba(15, 23, 42, 0.08);

@@ -12,16 +12,72 @@
 /** @typedef {{ key:string, label:string, defaults?: Record<string, boolean> }} PermissionItem */
 /** @typedef {{ key:string, label:string, items: PermissionItem[] }} PermissionModule */
 
-/** roles：内置类别角色代码（与 employee_categories.code 对齐） */
+/** roles：内置类别角色代码（与 employee_categories.code 对齐；含有默认权限模板） */
 export const KNOWN_ROLE_CODES = [
   'qc',
   'cs',
   'chairman',
+  'manager',
+  'general_manager',
+  'deputy_general_manager',
+  'director',
+  'president',
+  'supervisor',
+  'department_head',
   'sales',
   'documentary',
   'finance',
   'warehouse',
   'sales_admin'
+];
+
+/**
+ * 无独立权限矩阵的管理层角色 → 复用 manager 默认权限。
+ * 写入 defaults 时仍以真实 code 为键；取默认时解析到 alias。
+ */
+export const ROLE_DEFAULT_ALIASES = {
+  general_manager: 'manager',
+  deputy_general_manager: 'manager',
+  director: 'manager',
+  president: 'manager',
+  supervisor: 'manager',
+  department_head: 'manager'
+};
+
+/**
+ * 内置种子但默认权限全关（可在「员工类别」页自行配置）
+ * @type {Array<{ nameZh: string, code: string, sortOrder: number }>}
+ */
+export const EXTRA_BUILTIN_CATEGORY_SEEDS = [
+  { nameZh: '采购', code: 'procurement', sortOrder: 20 },
+  { nameZh: '人事', code: 'hr', sortOrder: 21 },
+  { nameZh: '行政', code: 'admin', sortOrder: 22 },
+  { nameZh: '生产', code: 'production', sortOrder: 23 },
+  { nameZh: '技术', code: 'technical', sortOrder: 24 }
+];
+
+/** 所有系统内置类别 code（不可删 / 不可改 code） */
+export const ALL_BUILTIN_CATEGORY_CODES = [
+  ...KNOWN_ROLE_CODES,
+  ...EXTRA_BUILTIN_CATEGORY_SEEDS.map((s) => s.code)
+];
+
+/**
+ * 有权限模板的内置类别种子（ensureSchema / 迁移用；权限 JSON 由 defaultPermissionsForRole 生成）
+ * @type {Array<{ nameZh: string, code: string, sortOrder: number, requireTwoFactor?: number }>}
+ */
+export const KNOWN_BUILTIN_CATEGORY_SEEDS = [
+  { nameZh: '品管', code: 'qc', sortOrder: 9 },
+  { nameZh: '客服', code: 'cs', sortOrder: 8 },
+  { nameZh: '董事长', code: 'chairman', sortOrder: 0, requireTwoFactor: 1 },
+  { nameZh: '总裁', code: 'president', sortOrder: 6 },
+  { nameZh: '总经理', code: 'general_manager', sortOrder: 1 },
+  { nameZh: '副总经理', code: 'deputy_general_manager', sortOrder: 3 },
+  { nameZh: '总监', code: 'director', sortOrder: 5 },
+  { nameZh: '经理', code: 'manager', sortOrder: 4 },
+  { nameZh: '主管', code: 'supervisor', sortOrder: 7 },
+  { nameZh: '部门负责人', code: 'department_head', sortOrder: 2 },
+  { nameZh: '跟单', code: 'documentary', sortOrder: 14 }
 ];
 
 const ROLE_DEFAULT = (...rolesOn) => {
@@ -37,8 +93,8 @@ export const PERMISSION_MODULES = [
     key: 'reports',
     label: '报告管理',
     items: [
-      { key: 'list', label: '列表查看', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'finance', 'sales_admin') },
-      { key: 'view', label: '详情查看', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'finance', 'sales_admin') },
+      { key: 'list', label: '列表查看', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'manager', 'finance', 'sales_admin') },
+      { key: 'view', label: '详情查看', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'manager', 'finance', 'sales_admin') },
       { key: 'create', label: '新建', defaults: ROLE_DEFAULT('qc') },
       { key: 'edit', label: '编辑', defaults: ROLE_DEFAULT('qc') },
       { key: 'void', label: '作废', defaults: ROLE_DEFAULT('qc') },
@@ -47,9 +103,9 @@ export const PERMISSION_MODULES = [
       { key: 'bulkVoid', label: '批量作废', defaults: ROLE_DEFAULT('qc') },
       { key: 'bulkActivate', label: '批量激活', defaults: ROLE_DEFAULT('qc') },
       { key: 'bulkDelete', label: '批量删除', defaults: ROLE_DEFAULT('qc') },
-      { key: 'previewPrint', label: '预览/打印', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'sales_admin') },
+      { key: 'previewPrint', label: '预览/打印', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'manager', 'sales_admin') },
       { key: 'seals', label: '盖章', defaults: ROLE_DEFAULT('qc') },
-      { key: 'export', label: '导出', defaults: ROLE_DEFAULT('chairman') },
+      { key: 'export', label: '导出', defaults: ROLE_DEFAULT('chairman', 'manager') },
       { key: 'chairmanApprove', label: '董事长审批', defaults: ROLE_DEFAULT('chairman') }
     ]
   },
@@ -57,9 +113,9 @@ export const PERMISSION_MODULES = [
     key: 'qrcodes',
     label: '二维码',
     items: [
-      { key: 'list', label: '列表', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'finance', 'sales_admin') },
+      { key: 'list', label: '列表', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'manager', 'finance', 'sales_admin') },
       { key: 'create', label: '生成', defaults: ROLE_DEFAULT('qc') },
-      { key: 'viewDetail', label: '详情', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'finance', 'sales_admin') },
+      { key: 'viewDetail', label: '详情', defaults: ROLE_DEFAULT('qc', 'cs', 'chairman', 'manager', 'finance', 'sales_admin') },
       { key: 'delete', label: '删除', defaults: ROLE_DEFAULT('qc') }
     ]
   },
@@ -67,7 +123,7 @@ export const PERMISSION_MODULES = [
     key: 'templates',
     label: '报告模板',
     items: [
-      { key: 'use', label: '使用', defaults: ROLE_DEFAULT('qc', 'chairman', 'sales_admin') }
+      { key: 'use', label: '使用', defaults: ROLE_DEFAULT('qc', 'chairman', 'manager', 'sales_admin') }
     ]
   },
   {
@@ -75,7 +131,7 @@ export const PERMISSION_MODULES = [
     label: '公司章',
     items: [
       { key: 'manage', label: '维护' },
-      { key: 'view', label: '查看', defaults: ROLE_DEFAULT('chairman') }
+      { key: 'view', label: '查看', defaults: ROLE_DEFAULT('chairman', 'manager') }
     ]
   },
   {
@@ -83,15 +139,15 @@ export const PERMISSION_MODULES = [
     label: '公司信息',
     items: [
       { key: 'manage', label: '维护' },
-      { key: 'view', label: '查看', defaults: ROLE_DEFAULT('chairman', 'sales_admin') }
+      { key: 'view', label: '查看', defaults: ROLE_DEFAULT('chairman', 'manager', 'sales_admin') }
     ]
   },
   {
     key: 'audit',
     label: '安全日志',
     items: [
-      { key: 'viewLogin', label: '登录日志', defaults: ROLE_DEFAULT('chairman', 'sales_admin') },
-      { key: 'viewOperations', label: '操作日志', defaults: ROLE_DEFAULT('chairman', 'sales_admin') },
+      { key: 'viewLogin', label: '登录日志', defaults: ROLE_DEFAULT('chairman', 'manager', 'sales_admin') },
+      { key: 'viewOperations', label: '操作日志', defaults: ROLE_DEFAULT('chairman', 'manager', 'sales_admin') },
       { key: 'viewErrors', label: '错误日志', defaults: ROLE_DEFAULT('chairman') },
       { key: 'exportAudit', label: '导出', defaults: ROLE_DEFAULT('chairman') }
     ]
@@ -109,8 +165,8 @@ export const PERMISSION_MODULES = [
     label: '订单管理',
     items: [
       { key: 'order_input', label: '录入', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
-      { key: 'order_query', label: '查询', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'sales_admin') },
-      { key: 'order_query_all', label: '查全部', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'sales_admin') },
+      { key: 'order_query', label: '查询', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'manager', 'sales_admin') },
+      { key: 'order_query_all', label: '查全部', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'manager', 'sales_admin') },
       { key: 'order_edit', label: '编辑', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
       { key: 'order_submit', label: '提交财务', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
       { key: 'order_withdraw', label: '撤回审核', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
@@ -118,13 +174,13 @@ export const PERMISSION_MODULES = [
       { key: 'order_status_qc', label: '品管审核', defaults: ROLE_DEFAULT('qc', 'sales_admin') },
       { key: 'order_status_warehouse', label: '仓库流程', defaults: ROLE_DEFAULT('warehouse', 'sales_admin') },
       { key: 'order_ship', label: '发货', defaults: ROLE_DEFAULT('warehouse', 'sales_admin') },
-      { key: 'order_view_status_logs', label: '状态日志', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'sales_admin') },
+      { key: 'order_view_status_logs', label: '状态日志', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'qc', 'manager', 'sales_admin') },
       { key: 'order_cancel', label: '取消', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'sales_admin') },
       { key: 'order_delete', label: '删除', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'sales_admin') },
       { key: 'order_field_config', label: '字段配置', defaults: ROLE_DEFAULT('documentary', 'sales_admin') },
-      { key: 'order_list_unit_price', label: '列表显示单价', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'sales_admin') },
-      { key: 'order_list_contract', label: '列表显示合同', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
-      { key: 'order_list_qc_qrcode', label: '列表显示质检二维码', defaults: ROLE_DEFAULT('sales', 'documentary', 'qc', 'sales_admin') }
+      { key: 'order_list_unit_price', label: '列表显示单价', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'manager', 'sales_admin') },
+      { key: 'order_list_contract', label: '列表显示合同', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'manager', 'sales_admin') },
+      { key: 'order_list_qc_qrcode', label: '列表显示质检二维码', defaults: ROLE_DEFAULT('sales', 'documentary', 'qc', 'manager', 'sales_admin') }
     ]
   },
   {
@@ -135,7 +191,7 @@ export const PERMISSION_MODULES = [
       { key: 'contract_generate', label: '生成', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
       { key: 'contract_submit', label: '提交审核', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
       { key: 'contract_review', label: '审核', defaults: ROLE_DEFAULT('finance', 'sales_admin') },
-      { key: 'contract_view', label: '查看', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
+      { key: 'contract_view', label: '查看', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'manager', 'sales_admin') },
       { key: 'contract_edit', label: '编辑' },
       { key: 'contract_delete', label: '删除' },
       { key: 'invoice_delete', label: '删除开票申请', defaults: ROLE_DEFAULT('sales_admin') },
@@ -148,6 +204,7 @@ export const PERMISSION_MODULES = [
           qc: true,
           cs: true,
           chairman: true,
+          manager: true,
           sales: true,
           documentary: true,
           finance: true,
@@ -162,6 +219,7 @@ export const PERMISSION_MODULES = [
           qc: true,
           cs: true,
           chairman: true,
+          manager: true,
           sales: true,
           documentary: true,
           finance: true,
@@ -175,7 +233,7 @@ export const PERMISSION_MODULES = [
     key: 'process_management',
     label: '流程',
     items: [
-      { key: 'view_flow', label: '查看流程', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
+      { key: 'view_flow', label: '查看流程', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'manager', 'sales_admin') },
       { key: 'edit_flow', label: '配置审核流程', defaults: ROLE_DEFAULT('sales_admin') }
     ]
   },
@@ -183,7 +241,7 @@ export const PERMISSION_MODULES = [
     key: 'data_management',
     label: '数据导出',
     items: [
-      { key: 'data_export', label: '导出', defaults: ROLE_DEFAULT('finance', 'documentary', 'sales_admin') },
+      { key: 'data_export', label: '导出', defaults: ROLE_DEFAULT('finance', 'documentary', 'manager', 'sales_admin') },
       { key: 'data_export_all', label: '全量导出', defaults: ROLE_DEFAULT('documentary', 'sales_admin') }
     ]
   },
@@ -191,7 +249,7 @@ export const PERMISSION_MODULES = [
     key: 'customer_management',
     label: '客户管理',
     items: [
-      { key: 'view', label: '查看', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'sales_admin') },
+      { key: 'view', label: '查看', defaults: ROLE_DEFAULT('sales', 'documentary', 'finance', 'warehouse', 'manager', 'sales_admin') },
       { key: 'create', label: '新建', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
       { key: 'edit', label: '编辑', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') },
       { key: 'disable', label: '停用', defaults: ROLE_DEFAULT('sales', 'documentary', 'sales_admin') }
@@ -201,7 +259,7 @@ export const PERMISSION_MODULES = [
     key: 'qc_yearbooks',
     label: '年度品质管控台账',
     items: [
-      { key: 'view', label: '查看数据', defaults: ROLE_DEFAULT('qc', 'chairman', 'sales_admin') },
+      { key: 'view', label: '查看数据', defaults: ROLE_DEFAULT('qc', 'chairman', 'manager', 'sales_admin') },
       { key: 'upload', label: '维护（年份与台账记录的增删改）', defaults: ROLE_DEFAULT('qc', 'sales_admin') }
     ]
   }
@@ -234,14 +292,15 @@ export function emptyPermissions() {
   return out;
 }
 
-/** 按内置 role code 取默认权限（qc / cs / chairman / sales / documentary / finance / warehouse / sales_admin） */
+/** 按内置 role code 取默认权限（含管理层 alias → manager） */
 export function defaultPermissionsForRole(roleCode) {
   const out = emptyPermissions();
   const code = String(roleCode || '').toLowerCase();
   if (!KNOWN_ROLE_CODES.includes(code)) return out;
+  const effective = ROLE_DEFAULT_ALIASES[code] || code;
   for (const m of PERMISSION_MODULES) {
     for (const it of m.items) {
-      if (it.defaults && it.defaults[code]) out[m.key][it.key] = true;
+      if (it.defaults && it.defaults[effective]) out[m.key][it.key] = true;
     }
   }
   return out;

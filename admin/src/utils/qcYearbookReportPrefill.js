@@ -1,4 +1,8 @@
 import { normalizeInspectionItemZh } from './inspectionItemSuggestions.js';
+import {
+  normalizeResultFormat,
+  setInspectionResultFromSource
+} from './inspectionResultFormat.js';
 
 function itemMatchKey(zh) {
   return normalizeInspectionItemZh(String(zh || ''))
@@ -27,7 +31,7 @@ function keysMatchRow(rowKey, matchKeys) {
  * 将品质管控台账检验值填入检测项目表「检测值」列
  * @returns {{ applied: number, tableValue: object }}
  */
-export function applyQcResultsToInspectionTable(tableValue, qcInspection) {
+export function applyQcResultsToInspectionTable(tableValue, qcInspection, options = {}) {
   if (!tableValue || typeof tableValue !== 'object') {
     return { applied: 0, tableValue };
   }
@@ -35,6 +39,8 @@ export function applyQcResultsToInspectionTable(tableValue, qcInspection) {
   if (!Array.isArray(rowResults) || !rowResults.length) {
     return { applied: 0, tableValue };
   }
+
+  const resultFormat = normalizeResultFormat(options.resultFormat ?? tableValue.resultFormat);
 
   const rows = (tableValue.rows || []).map((row) => {
     const next = { ...row };
@@ -56,8 +62,7 @@ export function applyQcResultsToInspectionTable(tableValue, qcInspection) {
       if (!row.result || typeof row.result !== 'object') {
         row.result = { zh: '', en: '' };
       }
-      row.result.zh = text;
-      if (!String(row.result.en || '').trim()) row.result.en = text;
+      row.result = setInspectionResultFromSource(row.result, text, resultFormat);
       applied += 1;
       break;
     }
@@ -65,7 +70,7 @@ export function applyQcResultsToInspectionTable(tableValue, qcInspection) {
 
   return {
     applied,
-    tableValue: { ...tableValue, rows }
+    tableValue: { ...tableValue, resultFormat, rows }
   };
 }
 
@@ -76,25 +81,6 @@ export function applyQcYearbookFieldsToFormFields(formFields, qcFields) {
   }
 
   let inspectionApplied = 0;
-  const setTextField = (key, val) => {
-    if (!val || typeof val !== 'object') return;
-    const f = formFields.find((x) => x.fieldKey === key);
-    if (!f) return;
-    if (!f.fieldValue || typeof f.fieldValue !== 'object') {
-      f.fieldValue = { zh: '', en: '' };
-    }
-    const zh = String(val.zh ?? '').trim();
-    const en = String(val.en ?? '').trim();
-    if (zh) f.fieldValue.zh = zh;
-    if (en) f.fieldValue.en = en;
-  };
-
-  if (qcFields.batch_weight?.zh) {
-    setTextField('batch_weight', qcFields.batch_weight);
-  }
-  if (qcFields.test_conclusion?.zh) {
-    setTextField('test_conclusion', qcFields.test_conclusion);
-  }
 
   const tableField = formFields.find((x) => x.fieldKey === 'inspection_table' && x.fieldType === 'table');
   if (tableField && qcFields.inspectionTable) {

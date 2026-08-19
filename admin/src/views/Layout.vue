@@ -8,17 +8,26 @@
     >
       <div class="aside-column">
         <div class="brand">
-          <div class="logo" v-if="!isMenuCollapsed">NL</div>
+            <div class="logo">
+              <svg class="logo-hex" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+                <defs>
+                  <linearGradient id="logoHexGrad" x1="10" y1="10" x2="90" y2="90" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#22c55e" />
+                    <stop offset="1" stop-color="#16a34a" />
+                  </linearGradient>
+                </defs>
+                <!-- Flat-top hexagon rotated 90deg clockwise → pointy-top -->
+                <polygon
+                  points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5"
+                  fill="url(#logoHexGrad)"
+                />
+              </svg>
+              <span class="logo-text">NL</span>
+            </div>
           <div class="brand-text" v-if="!isMenuCollapsed">
             <div class="name">物源数智管控平台</div>
             <div class="sub">员工端后台</div>
           </div>
-          <el-button class="collapse-btn" text @click="toggleMenu">
-            <el-icon :size="18">
-              <Expand v-if="isMenuCollapsed" />
-              <Fold v-else />
-            </el-icon>
-          </el-button>
         </div>
         <div class="aside-menu-wrap">
           <!-- default-active 会随路由更新（EP 内部 watch）；勿加 :key 整表重建，否则子菜单展开态易丢 -->
@@ -29,158 +38,74 @@
             class="menu"
             @select="onSidebarMenuSelect"
           >
-        <el-menu-item v-if="perm('reports', 'list')" index="/reports">
-          <el-icon><DocumentCopy /></el-icon>
-          <template #title><span>报告管理</span></template>
-        </el-menu-item>
-        <el-menu-item v-if="isSuperAdminUser" index="/reports/image-library">
-          <el-icon><Picture /></el-icon>
-          <template #title><span>系统图片库</span></template>
-        </el-menu-item>
-        <el-menu-item v-if="perm('templates', 'use')" index="/report-templates">
-          <el-icon><Files /></el-icon>
-          <template #title><span>报告模板管理</span></template>
-        </el-menu-item>
-        <el-menu-item
-          v-if="perm('qc_yearbooks', 'view') || perm('qc_yearbooks', 'upload')"
-          index="/qc-yearbooks"
-        >
-          <el-icon><DataAnalysis /></el-icon>
-          <template #title><span>品质管控数据</span></template>
-        </el-menu-item>
-        <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
-          <el-icon><Link /></el-icon>
-          <template #title><span>二维码管理</span></template>
-        </el-menu-item>
-        <el-menu-item v-if="perm('stamps', 'manage') || perm('stamps', 'view')" index="/stamps">
-          <el-icon><Medal /></el-icon>
-          <template #title><span>公司章管理</span></template>
-        </el-menu-item>
-        <el-menu-item v-if="perm('company', 'manage') || perm('company', 'view')" index="/company">
-          <el-icon><OfficeBuilding /></el-icon>
-          <template #title><span>公司信息</span></template>
-        </el-menu-item>
-        <el-menu-item v-if="perm('wecom', 'manage')" index="/wecom-notifications">
-          <el-icon><ChatDotRound /></el-icon>
-          <template #title><span>企业微信通知</span></template>
-        </el-menu-item>
-        <el-sub-menu v-if="showSalesMenu" index="sales-submenu" class="no-parent-active">
-          <template #title>
-            <el-icon><ShoppingCart /></el-icon>
-            <span>销售数据</span>
-          </template>
-          <el-menu-item
-            v-if="perm('order_management', 'order_query') || perm('order_management', 'order_input')"
-            index="/sales/orders"
-          >
-            <el-icon><Document /></el-icon>
-            <span>订单管理</span>
-          </el-menu-item>
-          <el-menu-item
-            v-if="perm('customer_management', 'view')"
-            index="/sales/customers"
-          >
-            <el-icon><User /></el-icon>
-            <span>客户管理</span>
-          </el-menu-item>
-          <el-menu-item
-            v-if="perm('order_management', 'order_field_config')"
-            index="/sales/internal-models"
-          >
-            <el-icon><Document /></el-icon>
-            <span>内部型号管理</span>
-          </el-menu-item>
-          <el-menu-item
-            v-if="
-              perm('contract_management', 'template_manage') ||
-              canAccessSalesContractWorkspace() ||
-              perm('process_management', 'view_flow')
-            "
-            index="/sales/contracts"
-          >
-            <el-icon><Tickets /></el-icon>
-            <span>合同管理</span>
-          </el-menu-item>
-          <el-menu-item
-            v-if="canAccessInvoiceCenter()"
-            index="/sales/invoices"
-          >
-            <el-icon><Tickets /></el-icon>
-            <span>开票中心</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu v-if="isSuperAdminUser" index="account-submenu" class="no-parent-active">
-          <template #title>
-            <el-icon><User /></el-icon>
-            <span>账号管理</span>
-          </template>
-          <el-menu-item index="/employee-categories">
-            <el-icon><FolderOpened /></el-icon>
-            <span>员工类别</span>
-          </el-menu-item>
-          <el-menu-item index="/departments">
-            <el-icon><Share /></el-icon>
-            <span>部门管理</span>
-          </el-menu-item>
-          <el-menu-item index="/users">
-            <el-icon><UserFilled /></el-icon>
-            <span>员工账号</span>
-          </el-menu-item>
-          <el-menu-item index="/support-contact">
-            <el-icon><Service /></el-icon>
-            <span>技术支持联系</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu v-if="showAuditMenu" index="audit-submenu" class="no-parent-active">
-          <template #title>
-            <el-icon><Notebook /></el-icon>
-            <span>安全中心</span>
-          </template>
-          <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewLogin')" index="/audit/login-logs">
-            <el-icon><Key /></el-icon>
-            <span>登录日志</span>
-          </el-menu-item>
-          <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewOperations')" index="/audit/operations">
-            <el-icon><Tickets /></el-icon>
-            <span>操作日志</span>
-          </el-menu-item>
-          <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewErrors')" index="/audit/errors">
-            <el-icon><Warning /></el-icon>
-            <span>错误日志</span>
-          </el-menu-item>
-          <el-menu-item v-if="isSuperAdminUser" index="/security">
-            <el-icon><Lock /></el-icon>
-            <span>系统安全</span>
-          </el-menu-item>
-          <el-menu-item v-if="isSuperAdminUser" index="/backups">
-            <el-icon><Download /></el-icon>
-            <span>备份与恢复</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
-          <el-icon><Document /></el-icon>
-          <template #title><span>我的操作日志</span></template>
-        </el-menu-item>
+            <template v-for="group in sidebarMenuGroups" :key="group.key">
+              <div v-if="group.label && !isMenuCollapsed" class="menu-section-label">
+                {{ group.label }}
+              </div>
+              <template v-for="item in group.items" :key="item.index">
+                <el-menu-item v-if="!item.children" :index="item.index">
+                  <el-icon><component :is="item.icon" /></el-icon>
+                  <template #title><span>{{ item.label }}</span></template>
+                </el-menu-item>
+                <el-sub-menu v-else :index="item.index" class="no-parent-active">
+                  <template #title>
+                    <el-icon><component :is="item.icon" /></el-icon>
+                    <span>{{ item.label }}</span>
+                  </template>
+                  <el-menu-item
+                    v-for="child in item.children"
+                    :key="child.index"
+                    :index="child.index"
+                  >
+                    <el-icon><component :is="child.icon" /></el-icon>
+                    <span>{{ child.label }}</span>
+                  </el-menu-item>
+                </el-sub-menu>
+              </template>
+            </template>
           </el-menu>
         </div>
         <SidebarGuide :collapsed="isMenuCollapsed" />
       </div>
     </el-aside>
     <el-container class="main-column">
-      <el-header height="64px" class="header">
+      <el-header height="64px" class="header" :class="{ 'header--mobile': isMobile }">
         <div class="header-leading">
+          <el-tooltip
+            v-if="!isMobile"
+            :content="isMenuCollapsed ? '展开侧栏' : '收起侧栏'"
+            placement="bottom"
+          >
+            <el-button class="collapse-btn" @click="toggleMenu">
+              <el-icon :size="18">
+                <Expand v-if="isMenuCollapsed" />
+                <Fold v-else />
+              </el-icon>
+            </el-button>
+          </el-tooltip>
           <el-tooltip v-if="!isMobile" content="返回首页" placement="bottom">
             <el-button class="home-btn" @click="goDashboard">
               <el-icon><HomeFilled /></el-icon>
               <span>首页</span>
             </el-button>
           </el-tooltip>
-          <div class="header-left">
-            <el-button v-if="isMobile" class="mobile-menu-btn" text @click="openMobileMenu">
-              <el-icon :size="18"><Expand /></el-icon>
-            </el-button>
-            <div class="page-title">{{ pageTitle }}</div>
-            <div class="text-muted" v-if="!isMobile">{{ pageDesc }}</div>
+          <div class="header-left" :class="{ 'header-left--mobile': isMobile }">
+            <button
+              v-if="isMobile"
+              type="button"
+              class="mobile-menu-trigger"
+              aria-label="打开导航菜单"
+              @click="openMobileMenu"
+            >
+              <span class="mobile-menu-trigger__icon" aria-hidden="true">
+                <el-icon :size="22"><Menu /></el-icon>
+              </span>
+              <span class="mobile-menu-trigger__text">菜单</span>
+            </button>
+            <div class="header-title-block">
+              <div class="page-title">{{ pageTitle }}</div>
+              <div class="text-muted" v-if="!isMobile">{{ pageDesc }}</div>
+            </div>
           </div>
         </div>
         <div class="header-right">
@@ -293,11 +218,26 @@
       :with-header="false"
       class="mobile-menu-drawer"
     >
-      <div class="mobile-drawer-body">
+        <div class="mobile-drawer-body">
         <div class="brand mobile-brand">
-          <div class="logo">QC</div>
+          <div class="logo">
+            <svg class="logo-hex" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+              <defs>
+                <linearGradient id="logoHexGradMobile" x1="10" y1="10" x2="90" y2="90" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#22c55e" />
+                  <stop offset="1" stop-color="#16a34a" />
+                </linearGradient>
+              </defs>
+              <!-- Flat-top hexagon rotated 90deg clockwise → pointy-top -->
+              <polygon
+                points="50,5 89,27.5 89,72.5 50,95 11,72.5 11,27.5"
+                fill="url(#logoHexGradMobile)"
+              />
+            </svg>
+            <span class="logo-text">NL</span>
+          </div>
           <div class="brand-text">
-            <div class="name">质检报告系统</div>
+            <div class="name">物源数智管控平台</div>
             <div class="sub">员工端后台</div>
           </div>
         </div>
@@ -357,142 +297,31 @@
           class="menu mobile-menu"
           @select="onMobileMenuSelect"
         >
-          <el-menu-item v-if="perm('reports', 'list')" index="/reports">
-            <el-icon><DocumentCopy /></el-icon>
-            <template #title><span>报告管理</span></template>
-          </el-menu-item>
-          <el-menu-item v-if="isSuperAdminUser" index="/reports/image-library">
-            <el-icon><Picture /></el-icon>
-            <template #title><span>系统图片库</span></template>
-          </el-menu-item>
-          <el-menu-item v-if="perm('templates', 'use')" index="/report-templates">
-            <el-icon><Files /></el-icon>
-            <template #title><span>报告模板管理</span></template>
-          </el-menu-item>
-          <el-menu-item
-            v-if="perm('qc_yearbooks', 'view') || perm('qc_yearbooks', 'upload')"
-            index="/qc-yearbooks"
-          >
-            <el-icon><DataAnalysis /></el-icon>
-            <template #title><span>品质管控数据</span></template>
-          </el-menu-item>
-          <el-menu-item v-if="perm('qrcodes', 'list')" index="/qrcodes">
-            <el-icon><Link /></el-icon>
-            <template #title><span>二维码管理</span></template>
-          </el-menu-item>
-          <el-menu-item v-if="perm('stamps', 'manage') || perm('stamps', 'view')" index="/stamps">
-            <el-icon><Medal /></el-icon>
-            <template #title><span>公司章管理</span></template>
-          </el-menu-item>
-          <el-menu-item v-if="perm('company', 'manage') || perm('company', 'view')" index="/company">
-            <el-icon><OfficeBuilding /></el-icon>
-            <template #title><span>公司信息</span></template>
-          </el-menu-item>
-          <el-menu-item v-if="perm('wecom', 'manage')" index="/wecom-notifications">
-            <el-icon><ChatDotRound /></el-icon>
-            <template #title><span>企业微信通知</span></template>
-          </el-menu-item>
-          <el-sub-menu v-if="showSalesMenu" index="sales-submenu-mobile" class="no-parent-active">
-            <template #title>
-              <el-icon><ShoppingCart /></el-icon>
-              <span>销售数据</span>
+          <template v-for="group in sidebarMenuGroups" :key="group.key">
+            <div v-if="group.label" class="menu-section-label mobile-menu-section-label">
+              {{ group.label }}
+            </div>
+            <template v-for="item in group.items" :key="item.index">
+              <el-menu-item v-if="!item.children" :index="item.index">
+                <el-icon><component :is="item.icon" /></el-icon>
+                <template #title><span>{{ item.label }}</span></template>
+              </el-menu-item>
+              <el-sub-menu v-else :index="item.index" class="no-parent-active">
+                <template #title>
+                  <el-icon><component :is="item.icon" /></el-icon>
+                  <span>{{ item.label }}</span>
+                </template>
+                <el-menu-item
+                  v-for="child in item.children"
+                  :key="child.index"
+                  :index="child.index"
+                >
+                  <el-icon><component :is="child.icon" /></el-icon>
+                  <span>{{ child.label }}</span>
+                </el-menu-item>
+              </el-sub-menu>
             </template>
-            <el-menu-item
-              v-if="perm('order_management', 'order_query') || perm('order_management', 'order_input')"
-              index="/sales/orders"
-            >
-              <el-icon><Document /></el-icon>
-              <span>订单管理</span>
-            </el-menu-item>
-            <el-menu-item
-              v-if="perm('customer_management', 'view')"
-              index="/sales/customers"
-            >
-              <el-icon><User /></el-icon>
-              <span>客户管理</span>
-            </el-menu-item>
-            <el-menu-item
-              v-if="perm('order_management', 'order_field_config')"
-              index="/sales/internal-models"
-            >
-              <el-icon><Document /></el-icon>
-              <span>内部型号管理</span>
-            </el-menu-item>
-            <el-menu-item
-              v-if="
-                perm('contract_management', 'template_manage') ||
-                canAccessSalesContractWorkspace() ||
-                perm('process_management', 'view_flow')
-              "
-              index="/sales/contracts"
-            >
-              <el-icon><Tickets /></el-icon>
-              <span>合同管理</span>
-            </el-menu-item>
-            <el-menu-item
-              v-if="canAccessInvoiceCenter()"
-              index="/sales/invoices"
-            >
-              <el-icon><Tickets /></el-icon>
-              <span>开票中心</span>
-            </el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="isSuperAdminUser" index="account-submenu-mobile" class="no-parent-active">
-            <template #title>
-              <el-icon><User /></el-icon>
-              <span>账号管理</span>
-            </template>
-            <el-menu-item index="/employee-categories">
-              <el-icon><FolderOpened /></el-icon>
-              <span>员工类别</span>
-            </el-menu-item>
-            <el-menu-item index="/departments">
-              <el-icon><Share /></el-icon>
-              <span>部门管理</span>
-            </el-menu-item>
-            <el-menu-item index="/users">
-              <el-icon><UserFilled /></el-icon>
-              <span>员工账号</span>
-            </el-menu-item>
-            <el-menu-item index="/support-contact">
-              <el-icon><Service /></el-icon>
-              <span>技术支持联系</span>
-            </el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="showAuditMenu" index="audit-submenu-mobile" class="no-parent-active">
-            <template #title>
-              <el-icon><Notebook /></el-icon>
-              <span>安全中心</span>
-            </template>
-            <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewLogin')" index="/audit/login-logs">
-              <el-icon><Key /></el-icon>
-              <span>登录日志</span>
-            </el-menu-item>
-            <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewOperations')" index="/audit/operations">
-              <el-icon><Tickets /></el-icon>
-              <span>操作日志</span>
-            </el-menu-item>
-            <el-menu-item v-if="isSuperAdminUser || perm('audit', 'viewErrors')" index="/audit/errors">
-              <el-icon><Warning /></el-icon>
-              <span>错误日志</span>
-            </el-menu-item>
-            <el-menu-item v-if="isSuperAdminUser" index="/security">
-              <el-icon><Lock /></el-icon>
-              <span>系统安全</span>
-            </el-menu-item>
-            <el-menu-item v-if="isSuperAdminUser" index="/backups">
-              <el-icon><Download /></el-icon>
-              <span>备份与恢复</span>
-            </el-menu-item>
-          </el-sub-menu>
-          <el-menu-item v-if="!isSuperAdminUser" index="/my-operation-logs">
-            <el-icon><Document /></el-icon>
-            <template #title><span>我的操作日志</span></template>
-          </el-menu-item>
-          <el-menu-item index="/operation-guide">
-            <el-icon><Reading /></el-icon>
-            <template #title><span>操作指南</span></template>
-          </el-menu-item>
+          </template>
         </el-menu>
       </div>
     </el-drawer>
@@ -694,11 +523,228 @@ export default {
         perm('customer_management', 'view') ||
         perm('contract_management', 'template_manage') ||
         canAccessSalesContractWorkspace() ||
-        perm('process_management', 'view_flow')
+        perm('process_management', 'view_flow') ||
+        canAccessInvoiceCenter()
       );
     },
     menuDefaultOpeneds() {
-      return [];
+      const active = this.sidebarActivePath;
+      const openeds = [];
+      for (const group of this.sidebarMenuGroups) {
+        for (const item of group.items) {
+          if (item.children?.some((child) => child.index === active)) {
+            openeds.push(item.index);
+          }
+        }
+      }
+      return openeds;
+    },
+    sidebarMenuGroups() {
+      const groups = [
+        {
+          key: 'overview',
+          label: '',
+          items: [
+            { index: '/dashboard', label: '工作台', icon: 'HomeFilled', visible: true }
+          ]
+        },
+        {
+          key: 'business',
+          label: '业务',
+          items: [
+            {
+              index: 'sales-submenu',
+              label: '销售业务',
+              icon: 'ShoppingCart',
+              children: [
+                {
+                  index: '/sales/orders',
+                  label: '订单管理',
+                  icon: 'Document',
+                  visible: this.isSuperAdminUser || perm('order_management', 'order_query') || perm('order_management', 'order_input')
+                },
+                {
+                  index: '/sales/contracts',
+                  label: '合同管理',
+                  icon: 'Tickets',
+                  visible:
+                    this.isSuperAdminUser ||
+                    perm('contract_management', 'template_manage') ||
+                    canAccessSalesContractWorkspace() ||
+                    perm('process_management', 'view_flow')
+                },
+                {
+                  index: '/sales/invoices',
+                  label: '开票中心',
+                  icon: 'Tickets',
+                  visible: this.isSuperAdminUser || canAccessInvoiceCenter()
+                },
+                {
+                  index: '/sales/customers',
+                  label: '客户管理',
+                  icon: 'User',
+                  visible: this.isSuperAdminUser || perm('customer_management', 'view')
+                },
+                {
+                  index: '/sales/internal-models',
+                  label: '内部型号管理',
+                  icon: 'Document',
+                  visible: this.isSuperAdminUser || perm('order_management', 'order_field_config')
+                },
+                {
+                  index: '/sales/messages',
+                  label: '站内信',
+                  icon: 'Bell',
+                  visible: this.showSalesMenu
+                }
+              ]
+            },
+            {
+              index: 'report-submenu',
+              label: '质检与报告',
+              icon: 'DocumentCopy',
+              children: [
+                {
+                  index: '/reports',
+                  label: '报告管理',
+                  icon: 'DocumentCopy',
+                  visible: this.isSuperAdminUser || perm('reports', 'list')
+                },
+                {
+                  index: '/report-templates',
+                  label: '报告模板',
+                  icon: 'Files',
+                  visible: this.isSuperAdminUser || perm('templates', 'use')
+                },
+                {
+                  index: '/qc-yearbooks',
+                  label: '品质台账',
+                  icon: 'DataAnalysis',
+                  visible: this.isSuperAdminUser || perm('qc_yearbooks', 'view') || perm('qc_yearbooks', 'upload')
+                },
+                {
+                  index: '/qrcodes',
+                  label: '二维码管理',
+                  icon: 'Link',
+                  visible: this.isSuperAdminUser || perm('qrcodes', 'list')
+                }
+              ]
+            }
+          ]
+        },
+        {
+          key: 'config',
+          label: '配置',
+          items: [
+            {
+              index: 'system-config-submenu',
+              label: '系统配置',
+              icon: 'Setting',
+              children: [
+                {
+                  index: '/company',
+                  label: '公司信息',
+                  icon: 'OfficeBuilding',
+                  visible: this.isSuperAdminUser || perm('company', 'manage') || perm('company', 'view')
+                },
+                {
+                  index: '/stamps',
+                  label: '公司章管理',
+                  icon: 'Medal',
+                  visible: this.isSuperAdminUser || perm('stamps', 'manage') || perm('stamps', 'view')
+                },
+                {
+                  index: '/reports/image-library',
+                  label: '系统图片库',
+                  icon: 'Picture',
+                  visible: this.isSuperAdminUser
+                },
+                {
+                  index: '/wecom-notifications',
+                  label: '企业微信通知',
+                  icon: 'ChatDotRound',
+                  visible: this.isSuperAdminUser || perm('wecom', 'manage')
+                }
+              ]
+            },
+            {
+              index: 'account-submenu',
+              label: '组织账号',
+              icon: 'UserFilled',
+              children: [
+                { index: '/departments', label: '部门管理', icon: 'Share', visible: this.isSuperAdminUser },
+                { index: '/users', label: '员工账号', icon: 'UserFilled', visible: this.isSuperAdminUser },
+                { index: '/employee-categories', label: '员工类别', icon: 'FolderOpened', visible: this.isSuperAdminUser },
+                { index: '/support-contact', label: '技术支持联系', icon: 'Service', visible: this.isSuperAdminUser }
+              ]
+            }
+          ]
+        },
+        {
+          key: 'security',
+          label: '安全',
+          items: [
+            {
+              index: 'audit-submenu',
+              label: '审计安全',
+              icon: 'Lock',
+              children: [
+                { index: '/security', label: '系统安全', icon: 'Lock', visible: this.isSuperAdminUser },
+                {
+                  index: '/audit/login-logs',
+                  label: '登录日志',
+                  icon: 'Key',
+                  visible: this.isSuperAdminUser || perm('audit', 'viewLogin')
+                },
+                {
+                  index: '/audit/operations',
+                  label: '操作日志',
+                  icon: 'Tickets',
+                  visible: this.isSuperAdminUser || perm('audit', 'viewOperations')
+                },
+                {
+                  index: '/audit/errors',
+                  label: '错误日志',
+                  icon: 'Warning',
+                  visible: this.isSuperAdminUser || perm('audit', 'viewErrors')
+                },
+                { index: '/backups', label: '备份与恢复', icon: 'Download', visible: this.isSuperAdminUser }
+              ]
+            },
+            {
+              index: '/my-operation-logs',
+              label: '我的操作日志',
+              icon: 'Document',
+              visible: !this.isSuperAdminUser
+            }
+          ]
+        },
+        {
+          key: 'help',
+          label: '帮助',
+          items: [
+            {
+              index: '/operation-guide',
+              label: '操作指南',
+              icon: 'Reading',
+              visible: this.isMobile
+            }
+          ]
+        }
+      ];
+
+      return groups
+        .map((group) => ({
+          ...group,
+          items: group.items
+            .map((item) => {
+              if (!item.children) return item.visible ? item : null;
+              const children = item.children.filter((child) => child.visible);
+              return children.length ? { ...item, children } : null;
+            })
+            .filter(Boolean)
+        }))
+        .filter((group) => group.items.length);
     },
     /** 与侧栏 `index` 对齐，避免子路由（如 /reports/123）无法高亮一级菜单 */
     sidebarActivePath() {
@@ -706,7 +752,12 @@ export default {
       if (p === '/reports/image-library') return '/reports/image-library';
       if (p === '/reports/designer' || p === '/reports/new') return '/reports';
       if (/^\/reports\/\d+$/.test(p)) return '/reports';
+      if (p.startsWith('/sales/orders')) return '/sales/orders';
+      if (p.startsWith('/sales/customers')) return '/sales/customers';
+      if (p.startsWith('/sales/internal-models')) return '/sales/internal-models';
       if (p.startsWith('/sales/contracts/')) return '/sales/contracts';
+      if (p.startsWith('/sales/invoices')) return '/sales/invoices';
+      if (p.startsWith('/sales/messages')) return '/sales/messages';
       if (p.startsWith('/audit/login-logs')) return '/audit/login-logs';
       if (p.startsWith('/audit/operations')) return '/audit/operations';
       if (p.startsWith('/audit/errors')) return '/audit/errors';
@@ -1370,18 +1421,20 @@ export default {
   margin: 0 12px 12px;
 }
 .collapse-btn {
-  margin-left: auto;
-  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  color: #334155;
+  padding: 8px;
   border-radius: 8px;
-  padding: 4px;
+  flex-shrink: 0;
 }
 .collapse-btn:hover {
-  background: rgba(34, 197, 94, 0.14) !important;
-  color: #ffffff !important;
+  color: #22c55e !important;
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(255, 255, 255, 0.95) !important;
 }
 
-/* When sidebar is collapsed, only collapse button is shown in brand;
-   center it in the brand row. */
+/* When sidebar is collapsed, center logo in brand row. */
 .aside.is-collapsed .brand {
   justify-content: center;
   margin-left: 8px;
@@ -1389,23 +1442,40 @@ export default {
   padding-left: 0;
   padding-right: 0;
 }
-
-.aside.is-collapsed .collapse-btn {
-  margin-left: 0;
-  width: 100%;
-  justify-content: center;
+.aside.is-collapsed .logo {
+  width: 40px;
+  height: 40px;
+}
+.aside.is-collapsed .logo-text {
+  font-size: 13px;
 }
 .logo {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
+  width: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: #ffffff;
+  position: relative;
+  border-radius: 14px;
+  flex-shrink: 0;
+}
+.logo-hex {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+  filter: drop-shadow(0 8px 18px rgba(22, 163, 74, 0.28));
+}
+.logo-text {
+  font-size: 15px;
   font-weight: 800;
   letter-spacing: 0.5px;
-  color: #0b1220;
-  background: linear-gradient(135deg, #7dd3fc, #a78bfa);
+  line-height: 1;
+  position: relative;
+  z-index: 1;
 }
 .brand-text .name {
   font-weight: 700;
@@ -1424,6 +1494,68 @@ export default {
 .menu {
   padding-top: 6px;
   padding-bottom: 8px;
+}
+.menu-section-label {
+  padding: 14px 12px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  color: rgba(148, 163, 184, 0.72);
+}
+.menu :deep(.el-menu-item),
+.menu :deep(.el-sub-menu__title) {
+  height: 42px;
+  margin: 3px 0;
+  border-radius: 11px;
+  line-height: 42px;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+.menu :deep(.el-menu-item .el-icon),
+.menu :deep(.el-sub-menu__title .el-icon) {
+  font-size: 17px;
+  opacity: 0.92;
+}
+.menu :deep(.el-menu-item:hover),
+.menu :deep(.el-sub-menu__title:hover) {
+  transform: translateX(2px);
+}
+.menu :deep(.el-menu-item.is-active) {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.1)) !important;
+  color: #bbf7d0 !important;
+  box-shadow: inset 3px 0 0 #22c55e, 0 8px 20px rgba(0, 0, 0, 0.12);
+  border-right-color: transparent !important;
+}
+.menu :deep(.el-menu-item.is-active .el-icon) {
+  color: #86efac !important;
+}
+.menu :deep(.el-sub-menu .el-menu-item) {
+  height: 38px;
+  margin: 2px 0 2px 12px;
+  padding-left: 34px !important;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.menu :deep(.el-sub-menu .el-menu-item .el-icon) {
+  font-size: 15px;
+}
+.aside.is-collapsed .menu :deep(.el-menu-item),
+.aside.is-collapsed .menu :deep(.el-sub-menu__title) {
+  width: 44px !important;
+  height: 42px;
+  margin: 4px auto !important;
+  border-radius: 12px;
+  transform: none;
+}
+.aside.is-collapsed .menu-section-label {
+  display: none;
+}
+.aside.is-collapsed .menu :deep(.el-menu-item.is-active) {
+  box-shadow: inset 3px 0 0 #22c55e;
 }
 .header {
   display: flex;
@@ -1444,6 +1576,9 @@ export default {
   gap: 2px;
   min-width: 0;
 }
+.header-title-block {
+  min-width: 0;
+}
 .page-title {
   font-size: 16px;
   font-weight: 700;
@@ -1453,9 +1588,37 @@ export default {
   align-items: center;
   gap: 14px;
 }
-.mobile-menu-btn {
-  align-self: flex-start;
-  margin-bottom: 2px;
+.mobile-menu-trigger {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid rgba(34, 197, 94, 0.5);
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  color: #15803d;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(34, 197, 94, 0.22);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+.mobile-menu-trigger:hover {
+  background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+  border-color: rgba(22, 163, 74, 0.65);
+}
+.mobile-menu-trigger:active {
+  transform: scale(0.97);
+}
+.mobile-menu-trigger__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .home-btn {
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -2001,16 +2164,42 @@ export default {
 }
 .mobile-menu {
   color: #0f172a;
+  padding-right: 2px;
 }
 
 .mobile-menu :deep(.el-menu-item),
 .mobile-menu :deep(.el-sub-menu__title) {
   color: #0f172a;
+  border-radius: 10px;
+}
+
+.mobile-menu-section-label {
+  color: #94a3b8;
+  padding-left: 8px;
+}
+
+.mobile-menu :deep(.el-sub-menu .el-menu-item) {
+  margin-left: 8px;
+  padding-left: 30px !important;
+}
+
+.mobile-menu :deep(.el-menu-item:hover),
+.mobile-menu :deep(.el-sub-menu__title:hover) {
+  color: #16a34a !important;
+  background: rgba(34, 197, 94, 0.08) !important;
+  transform: none;
+}
+
+.mobile-menu :deep(.el-menu-item.is-active) {
+  color: #16a34a !important;
+  background: rgba(34, 197, 94, 0.1) !important;
+  box-shadow: inset 3px 0 0 #22c55e;
 }
 
 .menu :deep(.no-parent-active.is-active > .el-sub-menu__title) {
   background: transparent !important;
   color: rgba(255, 255, 255, 0.84) !important;
+  box-shadow: none !important;
   border-right-color: transparent !important;
 }
 
@@ -2030,29 +2219,60 @@ export default {
 
 @media (max-width: 992px) {
   .header {
-    padding: 0 12px;
+    padding: 0 max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left));
+  }
+  .header--mobile {
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06);
+  }
+  .header-leading {
+    flex: 1;
+    min-width: 0;
+    gap: 0;
+  }
+  .header-left--mobile {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+  }
+  .header-title-block {
+    flex: 1;
+    min-width: 0;
   }
   .page-title {
     font-size: 15px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 50vw;
+    max-width: 100%;
   }
   .header-right {
     gap: 8px;
+    flex-shrink: 0;
   }
   .user {
     padding: 6px 8px;
   }
   .user .text {
-    max-width: 96px;
+    max-width: 72px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .main {
     padding: 12px;
+  }
+}
+
+@media (max-width: 400px) {
+  .mobile-menu-trigger__text {
+    display: none;
+  }
+  .mobile-menu-trigger {
+    width: 44px;
+    padding: 0;
   }
 }
 </style>

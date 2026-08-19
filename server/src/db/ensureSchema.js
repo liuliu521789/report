@@ -1,6 +1,13 @@
 import { nanoid } from 'nanoid';
 import { getPool } from './pool.js';
-import { defaultPermissionsForRole } from '../lib/permissionSchema.js';
+import {
+  ALL_BUILTIN_CATEGORY_CODES,
+  EXTRA_BUILTIN_CATEGORY_SEEDS,
+  KNOWN_BUILTIN_CATEGORY_SEEDS,
+  KNOWN_ROLE_CODES,
+  defaultPermissionsForRole,
+  emptyPermissions
+} from '../lib/permissionSchema.js';
 
 /** 与 migrations/010_report_image_library.sql 一致；启动时若表不存在则创建，免手工执行迁移 */
 const DDL_REPORT_IMAGE_LIBRARY = `
@@ -167,10 +174,12 @@ function backfillBuiltinCategoryPermissionDefaults(currentRaw, roleCode) {
 }
 
 async function ensureBuiltinCategoryPermissionDefaults(pool) {
+  const placeholders = KNOWN_ROLE_CODES.map(() => '?').join(', ');
   const [rows] = await pool.query(
     `SELECT id, code, default_permissions_json
      FROM employee_categories
-     WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'documentary', 'finance', 'warehouse', 'sales_admin')`
+     WHERE code IN (${placeholders})`,
+    KNOWN_ROLE_CODES
   );
   for (const row of rows || []) {
     const next = backfillBuiltinCategoryPermissionDefaults(row.default_permissions_json, row.code);
@@ -635,7 +644,8 @@ export async function ensureAccountModuleHardeningColumns() {
     );
     await pool.query(
       `UPDATE employee_categories SET is_builtin = 1
-       WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'documentary', 'finance', 'warehouse', 'sales_admin')`
+       WHERE code IN (${ALL_BUILTIN_CATEGORY_CODES.map(() => '?').join(', ')})`,
+      ALL_BUILTIN_CATEGORY_CODES
     );
   }
 }
@@ -831,22 +841,27 @@ export async function ensureSalesModuleTables() {
       row
     );
   }
-  /** 品管(qc)、跟单(documentary)：未跑完整 schema.sql 的库可由 INSERT IGNORE 幂等补齐 */
-  const qcDocumentarySeeds = [
-    ['品管', 'qc', 9],
-    ['跟单', 'documentary', 14]
-  ];
-  for (const [nameZh, code, sortOrder] of qcDocumentarySeeds) {
-    const json = JSON.stringify(defaultPermissionsForRole(code));
+  /** 内置岗位类别：幂等补齐（含管理层 alias、客服、采购等扩展种子） */
+  for (const seed of KNOWN_BUILTIN_CATEGORY_SEEDS) {
+    const json = JSON.stringify(defaultPermissionsForRole(seed.code));
     await pool.query(
-      `INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor)
-       VALUES (?, ?, ?, CAST(? AS JSON), 0)`,
-      [nameZh, code, sortOrder, json]
+      `INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor, is_builtin)
+       VALUES (?, ?, ?, CAST(? AS JSON), ?, 1)`,
+      [seed.nameZh, seed.code, seed.sortOrder, json, seed.requireTwoFactor ? 1 : 0]
+    );
+  }
+  for (const seed of EXTRA_BUILTIN_CATEGORY_SEEDS) {
+    const json = JSON.stringify(emptyPermissions());
+    await pool.query(
+      `INSERT IGNORE INTO employee_categories (name_zh, code, sort_order, default_permissions_json, require_two_factor, is_builtin)
+       VALUES (?, ?, ?, CAST(? AS JSON), 0, 1)`,
+      [seed.nameZh, seed.code, seed.sortOrder, json]
     );
   }
   await pool.query(
     `UPDATE employee_categories SET is_builtin = 1
-     WHERE code IN ('qc', 'cs', 'chairman', 'sales', 'documentary', 'finance', 'warehouse', 'sales_admin')`
+     WHERE code IN (${ALL_BUILTIN_CATEGORY_CODES.map(() => '?').join(', ')})`,
+    ALL_BUILTIN_CATEGORY_CODES
   );
   await pool.query(
     `UPDATE employee_categories
@@ -1464,6 +1479,25 @@ export async function ensureReportsReportUidColumn() {
   await pool.query(
     "UPDATE reports SET report_uid = CONCAT('ZJ-', LPAD(id, 10, '0')) WHERE report_uid IS NULL OR report_uid = ''"
   );
+}
+
+/** 与 migrations/064_qrcodes_qrcode_uid.sql 一致 */
+export async function ensureQrcodesQrcodeUidColumn() {
+  const pool = getPool();
+  if (!(await columnExists(pool, 'qrcodes', 'qrcode_uid'))) {
+    await pool.query(
+      "ALTER TABLE qrcodes ADD COLUMN qrcode_uid VARCHAR(32) NULL COMMENT '二维码业务编号' AFTER token"
+    );
+  }
+  if (!(await indexExists(pool, 'qrcodes', 'uk_qrcodes_qrcode_uid'))) {
+    try {
+      await pool.query('ALTER TABLE qrcodes ADD UNIQUE KEY uk_qrcodes_qrcode_uid (qrcode_uid)');
+    } catch (_e) {
+      /* 重复执行或冲突时跳过 */
+    }
+  }
+  const { backfillQrcodeUids } = await import('../lib/qrcodeUid.js');
+  await backfillQrcodeUids(pool);
 }
 
 /** 与 migrations/063_reports_customer_id.sql 一致 */

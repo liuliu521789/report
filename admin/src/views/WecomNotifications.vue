@@ -1,117 +1,246 @@
 <template>
-  <div class="wecom-page">
-    <el-alert
-      v-if="metaHint"
-      type="info"
-      :closable="false"
-      class="mb-3"
-      :title="metaHint"
-    />
-    <el-alert type="success" :closable="false" class="mb-3" title="系统自动推送（销售订单）">
-      模板代码 <code>sales_order_submit_finance</code>（提交财务审核）、<code>sales_order_withdraw_finance</code>（撤回审核）、
-      <code>sales_order_rejected_sales</code>（财务驳回至创建销售，正文含订单摘要与驳回原因）；正文变量含
-      <code>detail</code>（与站内信相同摘要）、<code>orderNo</code>、<code>count</code>、<code>fromUser</code>。
-      提交/撤回接收人：公司「快捷财务」或财务类别且已填企业微信 UserID 的成员；驳回接收人为订单创建人（须维护 UserID）。
-    </el-alert>
-    <el-alert type="success" :closable="false" class="mb-3" title="系统自动推送（合同开票）">
-      模板代码
-      <code>sales_invoice_submit_finance</code>（提交/新建并提交）、
-      <code>sales_invoice_withdraw_finance</code>（撤销待开票）、
-      <code>sales_invoice_fulfilled_applicant</code>（财务已开票→申请人）、
-      <code>sales_invoice_deleted_finance</code>（删除待开票→财务）、
-      <code>sales_invoice_deleted_applicant</code>（删除已开票→申请人）。
-      变量含 <code>detail</code>、<code>contractNo</code>、<code>customerName</code>、<code>amount</code>、<code>fromUser</code>；
-      提交类文本卡片链接须用 <code>{{invoiceCenterUrl}}</code>（系统生成 <code>/api/public/wecom-invoice-center</code> 引导页，需 <code>PUBLIC_BASE_URL</code> 为 HTTPS 可访问的 API 根；引导页内跳转管理后台须另配 <code>ADMIN_PUBLIC_URL</code>）。
-      财务收件人：公司「快捷财务」或财务类别且已填企业微信 UserID；申请人收件人须维护 UserID。
-    </el-alert>
-    <el-alert type="success" :closable="false" class="mb-3" title="财务通过 → 仓库（销售订单）">
-      模板 <code>sales_order_approved_warehouse</code> 须为<strong>文本卡片</strong>：财务通过时<strong>按订单逐条</strong>推送企业微信，正文含厂家、标签型号、仓库型号、规格、批号、数量、备注；占位符除
-      <code>detail</code>、<code>orderNo</code>、<code>count</code>、<code>fromUser</code> 外，「链接地址」须使用
-      <span v-pre><code>{{shipConfirmUrl}}</code></span>（打开确认页，避免点卡片正文即发货）；<code>shipUrl</code> 与同变量等价（兼容旧模板），确认页内「完成发货」通过表单 <strong>POST</strong>
-      <code>/api/public/wecom-order-ship</code> 执行发货（GET 已停用）。
-      服务器需配置与外网一致的 <code>PUBLIC_BASE_URL</code> 及 <code>JWT_SECRET</code>；在确认页点击「完成发货」才把该单更新为「已发货」（无需登录）。升级请执行迁移
-      <code>025_wecom_warehouse_ship_textcard.sql</code>、<code>029_wecom_warehouse_ship_confirm_page.sql</code>。
-      <strong>若点击后提示「无法打开页面」：</strong>多为企业微信拦截非 HTTPS 或未加入可信域名——请用 HTTPS 域名（反代到本服务）、在企业微信后台把<strong>主机名</strong>配进应用可信网页域名（勿填协议头；不支持 IP、短链）；可先在同一网络用手机系统浏览器访问
-      「与 .env 中 <code>PUBLIC_BASE_URL</code> 相同根地址」<code>/api/public/wecom-order-ship-probe</code>（应返回纯文本
-      <code>wecom-ship-probe-ok</code>）确认手机能否到达本服务。服务端默认监听 <code>0.0.0.0</code>（可用 <code>LISTEN_HOST</code> 覆盖）。
-    </el-alert>
-    <el-tabs v-model="activeTab">
-      <el-tab-pane label="企业与应用绑定" name="cfg">
-        <el-form label-width="140px" class="form-block" @submit.prevent>
-          <el-form-item label="接收消息 URL">
-            <div class="callback-row">
-              <el-input :model-value="displayCallbackUrl" readonly />
-              <el-button @click="copyText(displayCallbackUrl)">复制</el-button>
+  <div class="ref-list-page wecom-page" v-loading="pageLoading">
+    <div class="page-head">
+      <div class="page-head__filters">
+        <span class="readiness-badge" :class="bindingReady ? 'is-ready' : 'is-pending'">
+          <el-icon><component :is="bindingReady ? CircleCheck : WarningFilled" /></el-icon>
+          {{ bindingReady ? '应用已绑定' : '绑定未完成' }}
+        </span>
+        <span class="type-pill" :class="{ 'is-active': activeTab === 'cfg' }" @click="activeTab = 'cfg'">
+          绑定
+        </span>
+        <span class="type-pill" :class="{ 'is-active': activeTab === 'recv' }" @click="activeTab = 'recv'">
+          对象
+          <span class="type-pill__count">{{ recipients.length }}</span>
+        </span>
+        <span class="type-pill" :class="{ 'is-active': activeTab === 'tpl' }" @click="activeTab = 'tpl'">
+          模板
+          <span class="type-pill__count">{{ templates.length }}</span>
+        </span>
+        <span class="type-pill" :class="{ 'is-active': activeTab === 'jobs' }" @click="activeTab = 'jobs'">
+          发送记录
+        </span>
+      </div>
+      <div class="page-head__actions">
+        <el-button :icon="Document" @click="catalogDrawer = true">模板代码清单</el-button>
+        <el-button :icon="QuestionFilled" @click="helpDrawer = true">使用说明</el-button>
+        <el-button :icon="Refresh" circle @click="loadAll" />
+      </div>
+    </div>
+
+    <div v-show="activeTab === 'cfg'" class="page-grid">
+      <div class="page-main">
+        <div class="content-panel form-panel">
+          <div class="panel-head">
+            <div>
+              <h3 class="panel-title">企业与应用绑定</h3>
+              <p class="panel-desc">填写企业微信自建应用凭证；接收消息 URL 须与后台「API 接收」一致。</p>
             </div>
-            <div class="field-tip">
-              企业微信后台填写的必须是「根地址 + <code>/api/wecom/callback</code>」，与上方一致。
-              可先访问「自检地址」确认穿透到达本服务：浏览器打开
-              <code>{{ displayProbeUrl || '（先填公网根地址）' }}</code> 应看到纯文本
-              <code>wecom-callback-probe-ok</code>。
-              <strong>loca.lt / localtunnel</strong> 常对<strong>非浏览器请求</strong>返回拦截页，企业微信服务器无法完成验签，需换
-              frp、Cloudflare Tunnel、ngrok、云服务器公网 IP 等无拦截的 HTTPS 入口。
-            </div>
-          </el-form-item>
-          <el-form-item label="公网根地址（可选）">
-            <el-input
-              v-model="callbackBaseOverride"
-              clearable
-              placeholder="https://你的穿透或域名，无尾斜杠"
-            />
-          </el-form-item>
-          <el-form-item label="回调 Token">
-            <el-input
-              v-model="cfgForm.receiveToken"
-              clearable
-              placeholder="与自建应用「设置 API 接收」一致；已保存则留空不改，填写新值则更新"
-            />
-            <div class="field-tip">
-              <span v-if="receiveTokenConfigured" class="text-ok">当前已保存回调 Token（接口不回显原文）</span>
-              <el-button link type="danger" size="small" @click="markClearReceiveToken">清除已存 Token</el-button>
-            </div>
-          </el-form-item>
-          <el-form-item label="EncodingAESKey">
-            <el-input
-              v-model="cfgForm.encodingAesKeyNew"
-              type="password"
-              show-password
-              clearable
-              maxlength="43"
-              placeholder="43 位，与后台一致；已配置可不填；清除请点右侧按钮"
-            />
-            <div class="field-tip">
-              <span v-if="encodingAesKeyConfigured" class="text-ok">当前已保存密钥（留空提交则不修改）</span>
-              <el-button link type="danger" size="small" @click="markClearAesKey">清除已存密钥</el-button>
-            </div>
-          </el-form-item>
-          <el-form-item label="企业 ID (corpId)">
-            <el-input v-model="cfgForm.corpId" placeholder="在企业微信管理后台「我的企业」可见" clearable />
-          </el-form-item>
-          <el-form-item label="应用 AgentId">
-            <el-input-number v-model="cfgForm.agentId" :min="0" :controls="true" class="w-full-num" />
-          </el-form-item>
-          <el-form-item label="应用 Secret">
-            <el-input
-              v-model="cfgForm.corpSecret"
-              type="password"
-              show-password
-              :placeholder="cfgLoaded && secretConfigured ? '已配置，留空不改；填新值则更新' : '必填，应用凭证密钥'"
-              clearable
-            />
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="cfgForm.remark" type="textarea" :rows="2" placeholder="可选" />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="cfgSaving" @click="saveConfig" icon=Check>保存绑定信息</el-button>
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
-      <el-tab-pane label="通知对象（成员 UserID）" name="recv">
-        <div class="toolbar">
-          <el-button type="primary" @click="openRecipientDialog()" icon=Plus>新增对象</el-button>
+          </div>
+          <el-form label-width="140px" class="wecom-form" @submit.prevent>
+            <div class="form-section-title">回调入口</div>
+            <el-form-item label="接收消息 URL">
+              <div class="field-with-help">
+                <el-input :model-value="displayCallbackUrl" readonly />
+                <el-button @click="copyText(displayCallbackUrl)">复制</el-button>
+                <el-tooltip placement="top" :show-after="200" popper-class="wecom-field-help-popper">
+                  <template #content>
+                    <div class="field-help-tip">
+                      企业微信后台填写的必须是「根地址 + <code>/api/wecom/callback</code>」，与上方一致。<br />
+                      可先访问自检地址确认穿透：
+                      <code>{{ displayProbeUrl || '（先填公网根地址）' }}</code>
+                      应看到纯文本 <code>wecom-callback-probe-ok</code>。<br />
+                      <strong>loca.lt / localtunnel</strong> 常对非浏览器请求返回拦截页，验签会失败，请换 frp、Cloudflare Tunnel、ngrok 等入口。
+                    </div>
+                  </template>
+                  <el-icon class="field-help-icon" tabindex="0"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+            </el-form-item>
+            <el-form-item label="公网根地址（可选）">
+              <div class="field-with-help">
+                <el-input
+                  v-model="callbackBaseOverride"
+                  clearable
+                  placeholder="https://你的穿透或域名，无尾斜杠"
+                />
+                <el-tooltip placement="top" :show-after="200" popper-class="wecom-field-help-popper">
+                  <template #content>
+                    <div class="field-help-tip">
+                      用于生成本页展示的接收消息 URL 与自检地址；不填则使用服务端识别的 API 根地址。<br />
+                      填写时不要带尾斜杠，须为外网可访问的 HTTPS 地址。
+                    </div>
+                  </template>
+                  <el-icon class="field-help-icon" tabindex="0"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+            </el-form-item>
+            <el-form-item label="回调 Token">
+              <div class="field-with-help">
+                <el-input
+                  v-model="cfgForm.receiveToken"
+                  clearable
+                  placeholder="与企业微信后台一致"
+                />
+                <el-tooltip placement="top" :show-after="200" popper-class="wecom-field-help-popper">
+                  <template #content>
+                    <div class="field-help-tip">
+                      与自建应用「设置 API 接收」中的 Token 保持一致。<br />
+                      已保存时接口不回显原文；留空提交表示不修改，填写新值则更新。
+                    </div>
+                  </template>
+                  <el-icon class="field-help-icon" tabindex="0"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+              <div class="field-tip row-tip">
+                <span v-if="receiveTokenConfigured" class="text-ok">当前已保存回调 Token</span>
+                <el-button link type="danger" size="small" @click="markClearReceiveToken">清除已存 Token</el-button>
+              </div>
+            </el-form-item>
+            <el-form-item label="EncodingAESKey">
+              <div class="field-with-help">
+                <el-input
+                  v-model="cfgForm.encodingAesKeyNew"
+                  type="password"
+                  show-password
+                  clearable
+                  maxlength="43"
+                  placeholder="43 位密钥"
+                />
+                <el-tooltip placement="top" :show-after="200" popper-class="wecom-field-help-popper">
+                  <template #content>
+                    <div class="field-help-tip">
+                      与企业微信后台「EncodingAESKey」一致，须为 43 位。<br />
+                      已配置时可留空不改；需要更换时填入新值再保存。清除请点下方按钮。
+                    </div>
+                  </template>
+                  <el-icon class="field-help-icon" tabindex="0"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+              <div class="field-tip row-tip">
+                <span v-if="encodingAesKeyConfigured" class="text-ok">当前已保存密钥</span>
+                <el-button link type="danger" size="small" @click="markClearAesKey">清除已存密钥</el-button>
+              </div>
+            </el-form-item>
+
+            <div class="form-section-title">应用凭证</div>
+            <el-form-item label="企业 ID (corpId)">
+              <div class="field-with-help">
+                <el-input v-model="cfgForm.corpId" placeholder="企业 ID" clearable />
+                <el-tooltip placement="top" :show-after="200" popper-class="wecom-field-help-popper">
+                  <template #content>
+                    <div class="field-help-tip">
+                      在企业微信管理后台「我的企业」页面可见，形如 <code>wwxxxxxxxx</code>。<br />
+                      发送应用消息、回调验签都依赖此 ID。
+                    </div>
+                  </template>
+                  <el-icon class="field-help-icon" tabindex="0"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+            </el-form-item>
+            <el-form-item label="应用 AgentId">
+              <div class="field-with-help">
+                <el-input-number v-model="cfgForm.agentId" :min="0" :controls="true" class="w-full-num" />
+                <el-tooltip placement="top" :show-after="200" popper-class="wecom-field-help-popper">
+                  <template #content>
+                    <div class="field-help-tip">
+                      自建应用的 AgentId（数字），在应用详情页可见。<br />
+                      推送消息时会带上该应用身份。
+                    </div>
+                  </template>
+                  <el-icon class="field-help-icon" tabindex="0"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+            </el-form-item>
+            <el-form-item label="应用 Secret">
+              <div class="field-with-help">
+                <el-input
+                  v-model="cfgForm.corpSecret"
+                  type="password"
+                  show-password
+                  :placeholder="cfgLoaded && secretConfigured ? '已配置，留空不改' : '应用凭证密钥'"
+                  clearable
+                />
+                <el-tooltip placement="top" :show-after="200" popper-class="wecom-field-help-popper">
+                  <template #content>
+                    <div class="field-help-tip">
+                      自建应用的 Secret（密钥），用于换取 access_token。<br />
+                      首次必填；已保存后接口不回显，留空表示不修改，填写新值则更新。<br />
+                      请勿把 Secret 写进前端或小程序公开代码。
+                    </div>
+                  </template>
+                  <el-icon class="field-help-icon" tabindex="0"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+            </el-form-item>
+            <el-form-item label="备注">
+              <div class="field-with-help field-with-help--top">
+                <el-input v-model="cfgForm.remark" type="textarea" :rows="2" placeholder="可选" />
+                <el-tooltip placement="top" :show-after="200" popper-class="wecom-field-help-popper">
+                  <template #content>
+                    <div class="field-help-tip">
+                      仅本系统内备注，不发送到企业微信，方便区分多套环境或应用用途。
+                    </div>
+                  </template>
+                  <el-icon class="field-help-icon" tabindex="0"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" class="btn-create" :loading="cfgSaving" @click="saveConfig" icon=Check>
+                保存绑定信息
+              </el-button>
+            </el-form-item>
+          </el-form>
         </div>
-        <el-table :data="recipients" border stripe>
+      </div>
+
+      <aside class="page-aside">
+        <div class="aside-card status-card">
+          <h4 class="aside-title">配置状态</h4>
+          <ul class="status-list">
+            <li v-for="item in statusItems" :key="item.key" class="status-item">
+              <span :class="['status-dot', item.ok ? 'is-ok' : 'is-warn']" />
+              <div class="status-body">
+                <span class="status-label">{{ item.label }}</span>
+                <span class="status-value">{{ item.text }}</span>
+              </div>
+            </li>
+          </ul>
+        </div>
+        <div class="aside-card steps-card">
+          <h4 class="aside-title">配置指引</h4>
+          <ol class="steps-list">
+            <li :class="{ done: !!cfgForm.corpId && Number(cfgForm.agentId) > 0 && secretConfigured }">
+              填写 corpId、AgentId、Secret 并保存
+            </li>
+            <li :class="{ done: receiveTokenConfigured && encodingAesKeyConfigured }">
+              配置回调 Token 与 EncodingAESKey（接收消息时需要）
+            </li>
+            <li :class="{ done: recipients.length > 0 }">
+              在「通知对象」中维护成员 UserID
+            </li>
+            <li :class="{ done: templates.length > 0 }">
+              核对系统模板代码，或新建自定义模板
+            </li>
+          </ol>
+          <el-button class="aside-help-btn" text type="primary" @click="helpDrawer = true">
+            查看自动推送与排错说明
+          </el-button>
+        </div>
+      </aside>
+    </div>
+
+    <div v-show="activeTab === 'recv'" class="content-panel">
+      <div class="panel-head panel-head--row">
+        <div>
+          <h3 class="panel-title">通知对象</h3>
+          <p class="panel-desc">维护企业微信成员 UserID，供测试发送与部分业务推送选用。</p>
+        </div>
+        <el-button type="primary" class="btn-create" @click="openRecipientDialog()" icon=Plus>新增对象</el-button>
+      </div>
+      <div class="table-scroll">
+        <el-table :data="recipients" class="ref-table" stripe>
           <el-table-column prop="nameZh" label="名称" min-width="120" />
           <el-table-column label="成员 UserID" min-width="220">
             <template #default="{ row }">
@@ -126,60 +255,61 @@
             </template>
           </el-table-column>
         </el-table>
-      </el-tab-pane>
-      <el-tab-pane label="消息模板与调用代码" name="tpl">
-        <p class="tab-lead">
-          <strong>消息模板</strong>决定推送到企业微信时长的样子。编辑时用「占位符」
-          <code v-pre>{{变量名}}</code>，真正发送时由系统或接口传入具体文字（见下方「可插入变量」）。
-        </p>
-        <div class="toolbar">
-          <el-button type="primary" @click="openTemplateDialog()" icon=Plus>新建模板</el-button>
+      </div>
+      <div v-if="!recipients.length" class="empty-hint">暂无通知对象，点击右上角新增。</div>
+    </div>
+
+    <div v-show="activeTab === 'tpl'" class="content-panel">
+      <div class="panel-head panel-head--row">
+        <div>
+          <h3 class="panel-title">消息模板</h3>
+          <p class="panel-desc">
+            决定推送到企业微信时的样子。编辑时用占位符
+            <code v-pre>{{变量名}}</code>，发送时由系统或接口传入具体值。
+          </p>
         </div>
-        <div class="tpl-two-cols">
-          <el-card shadow="never" class="catalog-card">
-            <template #header>模板代码清单（系统约定）</template>
-            <el-table :data="templateCodeCatalog" border size="small" stripe>
-              <el-table-column prop="code" label="模板代码" width="240">
-                <template #default="{ row }"><code>{{ row.code }}</code></template>
-              </el-table-column>
-              <el-table-column prop="meaning" label="含义" min-width="220" />
-              <el-table-column label="使用位置" min-width="260">
-                <template #default="{ row }">{{ (row.usedBy || []).join('、') || '—' }}</template>
-              </el-table-column>
-            </el-table>
-          </el-card>
-          <el-card shadow="never" class="templates-card">
-            <template #header>消息模板列表</template>
-            <el-table :data="templates" border stripe>
-              <el-table-column prop="code" label="模板代码" width="150">
-                <template #default="{ row }">
-                  <code>{{ row.code }}</code>
-                </template>
-              </el-table-column>
-              <el-table-column prop="nameZh" label="显示名称" min-width="120" />
-              <el-table-column label="消息形态" width="120">
-                <template #default="{ row }">
-                  {{ msgTypeLabel(row.msgType) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="280" fixed="right">
-                <template #default="{ row }">
-                  <el-button link type="primary" @click="openSnippet(row)">调用代码</el-button>
-                  <el-button link type="primary" @click="openTestSend(row)" icon=Promotion>测试发送</el-button>
-                  <el-button link type="primary" @click="openTemplateDialog(row)" icon=Edit>编辑</el-button>
-                  <el-button link type="danger" @click="removeTemplate(row)" icon=Delete>删除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-card>
+        <div class="panel-head__actions">
+          <el-button @click="catalogDrawer = true" icon=Document>代码清单</el-button>
+          <el-button type="primary" class="btn-create" @click="openTemplateDialog()" icon=Plus>新建模板</el-button>
         </div>
-      </el-tab-pane>
-      <el-tab-pane label="发送记录" name="jobs">
-        <p class="tab-lead">
-          系统自动推送（订单/合同）经队列异步发往企业微信；此处可查看状态、失败原因，并对失败/死信任务手动重试。
-          环境变量 <code>WECOM_NOTIFY_WORKER_DISABLED=true</code> 可关闭本机 worker（需另行部署消费进程时再用）。
-        </p>
-        <div class="toolbar jobs-toolbar">
+      </div>
+      <div class="table-scroll">
+        <el-table :data="templates" class="ref-table" stripe>
+          <el-table-column prop="code" label="模板代码" width="200">
+            <template #default="{ row }">
+              <code>{{ row.code }}</code>
+            </template>
+          </el-table-column>
+          <el-table-column prop="nameZh" label="显示名称" min-width="140" />
+          <el-table-column label="消息形态" width="120">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain">{{ msgTypeLabel(row.msgType) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="300" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openSnippet(row)">调用代码</el-button>
+              <el-button link type="primary" @click="openTestSend(row)" icon=Promotion>测试发送</el-button>
+              <el-button link type="primary" @click="openTemplateDialog(row)" icon=Edit>编辑</el-button>
+              <el-button link type="danger" @click="removeTemplate(row)" icon=Delete>删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <div v-if="!templates.length" class="empty-hint">暂无模板，可新建或对照「代码清单」中的系统约定。</div>
+    </div>
+
+    <div v-show="activeTab === 'jobs'" class="content-panel">
+      <div class="panel-head">
+        <div>
+          <h3 class="panel-title">发送记录</h3>
+          <p class="panel-desc">
+            订单/合同等自动推送经队列异步发送；可查看状态并对失败/死信任务重试。
+          </p>
+        </div>
+      </div>
+      <div class="filter-bar">
+        <div class="filter-bar__left jobs-toolbar">
           <el-select v-model="jobFilterStatus" placeholder="状态" clearable style="width: 140px" @change="jobsPage = 1; loadJobs()">
             <el-option label="全部状态" value="" />
             <el-option label="待发送" value="pending" />
@@ -192,26 +322,28 @@
             v-model="jobFilterTemplateCode"
             clearable
             placeholder="模板代码"
-            style="width: 200px"
+            style="width: 180px"
             @keyup.enter="jobsPage = 1; loadJobs()"
           />
           <el-input
             v-model="jobFilterBizType"
             clearable
             placeholder="业务类型"
-            style="width: 140px"
+            style="width: 130px"
             @keyup.enter="jobsPage = 1; loadJobs()"
           />
           <el-input
             v-model="jobFilterBizId"
             clearable
             placeholder="业务ID"
-            style="width: 120px"
+            style="width: 110px"
             @keyup.enter="jobsPage = 1; loadJobs()"
           />
           <el-button type="primary" :loading="jobsLoading" @click="jobsPage = 1; loadJobs()">查询</el-button>
         </div>
-        <el-table :data="jobs" border stripe v-loading="jobsLoading">
+      </div>
+      <div class="table-scroll">
+        <el-table :data="jobs" class="ref-table" stripe v-loading="jobsLoading">
           <el-table-column prop="id" label="ID" width="72" />
           <el-table-column prop="bizType" label="业务类型" width="120">
             <template #default="{ row }">{{ row.bizType || '—' }}</template>
@@ -228,7 +360,13 @@
               <span v-if="row.toUserRecipientCount > 1" class="text-muted">（{{ row.toUserRecipientCount }}人）</span>
             </template>
           </el-table-column>
-          <el-table-column prop="status" label="状态" width="88" />
+          <el-table-column prop="status" label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag :type="jobStatusMeta(row.status).type" size="small" effect="light">
+                {{ jobStatusMeta(row.status).label }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="重试" width="72">
             <template #default="{ row }">{{ row.retryCount }}/{{ row.maxRetries }}</template>
           </el-table-column>
@@ -255,19 +393,96 @@
             </template>
           </el-table-column>
         </el-table>
-        <div class="jobs-pagination">
+      </div>
+      <div class="table-footer">
+        <span>共 {{ jobsTotal }} 条</span>
+        <div class="table-footer__right">
           <el-pagination
             v-model:current-page="jobsPage"
             v-model:page-size="jobsPageSize"
             :total="jobsTotal"
             :page-sizes="[10, 20, 50]"
-            layout="total, sizes, prev, pager, next"
+            layout="sizes, prev, pager, next"
             @current-change="loadJobs"
             @size-change="jobsPage = 1; loadJobs()"
           />
         </div>
-      </el-tab-pane>
-    </el-tabs>
+      </div>
+    </div>
+
+    <!-- 使用说明 / 排错 -->
+    <el-drawer v-model="helpDrawer" title="使用说明与排错" size="520px" destroy-on-close>
+      <el-alert v-if="metaHint" type="info" :closable="false" show-icon class="help-block">
+        <template #title>服务提示</template>
+        <div class="help-body">{{ metaHint }}</div>
+      </el-alert>
+
+      <el-collapse v-model="helpActive" class="help-collapse">
+        <el-collapse-item title="系统自动推送 · 销售订单" name="sales">
+          <div class="help-body">
+            模板代码 <code>sales_order_submit_finance</code>（提交财务审核）、
+            <code>sales_order_withdraw_finance</code>（撤回审核）、
+            <code>sales_order_rejected_sales</code>（财务驳回至创建销售，正文含订单摘要与驳回原因）。
+            正文变量含 <code>detail</code>、<code>orderNo</code>、<code>count</code>、<code>fromUser</code>。
+            提交/撤回接收人：公司「快捷财务」或财务类别且已填企业微信 UserID 的成员；驳回接收人为订单创建人（须维护 UserID）。
+          </div>
+        </el-collapse-item>
+        <el-collapse-item title="系统自动推送 · 合同开票" name="invoice">
+          <div class="help-body">
+            模板代码
+            <code>sales_invoice_submit_finance</code>、<code>sales_invoice_withdraw_finance</code>、
+            <code>sales_invoice_fulfilled_applicant</code>、<code>sales_invoice_deleted_finance</code>、
+            <code>sales_invoice_deleted_applicant</code>。
+            变量含 <code>detail</code>、<code>contractNo</code>、<code>customerName</code>、<code>amount</code>、<code>fromUser</code>；
+            提交类文本卡片链接须用 <code v-pre>{{invoiceCenterUrl}}</code>
+            （系统生成引导页，需 <code>PUBLIC_BASE_URL</code> 为 HTTPS 可访问的 API 根；后台跳转另配 <code>ADMIN_PUBLIC_URL</code>）。
+          </div>
+        </el-collapse-item>
+        <el-collapse-item title="财务通过 → 仓库（文本卡片）" name="warehouse">
+          <div class="help-body">
+            模板 <code>sales_order_approved_warehouse</code> 须为<strong>文本卡片</strong>：按订单逐条推送；
+            「链接地址」须使用 <span v-pre><code>{{shipConfirmUrl}}</code></span>
+            （打开确认页，避免点卡片正文即发货）。确认页内「完成发货」通过表单 POST
+            <code>/api/public/wecom-order-ship</code> 执行。
+            服务器需配置 <code>PUBLIC_BASE_URL</code> 及 <code>JWT_SECRET</code>。
+          </div>
+        </el-collapse-item>
+        <el-collapse-item title="无法打开页面 / 回调验签失败" name="troubleshoot">
+          <div class="help-body">
+            <p>
+              <strong>卡片打不开：</strong>多为企业微信拦截非 HTTPS 或未加入可信域名——请用 HTTPS 域名，
+              在企业微信后台把<strong>主机名</strong>配进应用可信网页域名（勿填协议头；不支持 IP、短链）。
+              可先用手机浏览器访问
+              <code>PUBLIC_BASE_URL</code> 下的
+              <code>/api/public/wecom-order-ship-probe</code>，应返回
+              <code>wecom-ship-probe-ok</code>。
+            </p>
+            <p>
+              <strong>回调验签失败：</strong>
+              loca.lt / localtunnel 常对非浏览器请求返回拦截页；请换 frp、Cloudflare Tunnel、ngrok 或云服务器公网入口。
+            </p>
+            <p>
+              环境变量 <code>WECOM_NOTIFY_WORKER_DISABLED=true</code> 可关闭本机 worker（需另行部署消费进程时再用）。
+            </p>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+    </el-drawer>
+
+    <!-- 模板代码清单 -->
+    <el-drawer v-model="catalogDrawer" title="模板代码清单（系统约定）" size="640px" destroy-on-close>
+      <p class="drawer-tip">以下为业务自动推送约定的模板代码，请在「消息模板」中保持同名配置。</p>
+      <el-table :data="templateCodeCatalog" border size="small" stripe>
+        <el-table-column prop="code" label="模板代码" width="220">
+          <template #default="{ row }"><code>{{ row.code }}</code></template>
+        </el-table-column>
+        <el-table-column prop="meaning" label="含义" min-width="160" />
+        <el-table-column label="使用位置" min-width="200">
+          <template #default="{ row }">{{ (row.usedBy || []).join('、') || '—' }}</template>
+        </el-table-column>
+      </el-table>
+      <div v-if="!templateCodeCatalog.length" class="empty-hint">暂无清单数据。</div>
+    </el-drawer>
 
     <el-dialog v-model="recipientDlg" :title="recipientEditId ? '编辑通知对象' : '新增通知对象'" width="520px" destroy-on-close>
       <el-form label-width="120px">
@@ -308,11 +523,9 @@
       <el-alert type="info" :closable="false" show-icon class="template-intro">
         <template #title>怎么写占位符</template>
         <div class="template-intro-body">
-          在内容里输入 <code v-pre>{{detail}}</code> 表示「这里以后换成真实内容」。发送时用同名变量传入，例如
-          <code>detail</code>、<code>orderNo</code>。下面按钮可一键插入，避免手打拼错。
-          若选<strong>文本卡片</strong>，「链接地址」替换后必须是带 <code>https://</code> 的完整链接。
-          填 <code v-pre>{{reviewUrl}}</code> 时，真实发送由服务端填入；在<strong>测试发送</strong>里须在 JSON 中自行传入
-          <code>reviewUrl</code>，否则会报 <strong>41010 missing url</strong>。
+          在内容里输入 <code v-pre>{{detail}}</code> 表示「这里以后换成真实内容」。发送时用同名变量传入。
+          下面按钮可一键插入。若选<strong>文本卡片</strong>，「链接地址」替换后必须是带
+          <code>https://</code> 的完整链接。
         </div>
       </el-alert>
 
@@ -329,9 +542,7 @@
             />
             <el-button type="primary" plain @click="generateTemplateCode">自动生成</el-button>
           </div>
-          <div class="field-tip">
-            可手动输入，也可自动生成。若你手动改过代码，后续改显示名称时不会自动覆盖。
-          </div>
+          <div class="field-tip">可手动输入，也可自动生成。若手动改过代码，后续改显示名称时不会自动覆盖。</div>
         </el-form-item>
         <el-form-item v-else label="模板代码">
           <el-input :model-value="templateForm.code" disabled />
@@ -340,7 +551,7 @@
 
         <el-divider content-position="left">消息长什么样</el-divider>
         <el-form-item label="消息形态" required>
-            <el-radio-group v-model="templateForm.msgType" class="msg-type-radios">
+          <el-radio-group v-model="templateForm.msgType" class="msg-type-radios">
             <el-radio label="text" border>
               <span class="msg-type-title">纯文本</span>
               <span class="msg-type-desc">企业微信里一整段普通文字，最简单。</span>
@@ -368,8 +579,9 @@
             </el-button>
           </div>
           <div class="field-tip">
-            销售系统自动推送已约定：<code>detail</code>（长摘要）、<code>orderNo</code>、<code>contractNo</code>、<code>customerName</code>、<code>reviewUrl</code>（合同待审：移动端审批页 HTTPS 链接，可插入正文或文本卡片 url）、<code>contractReviewStatus</code>（合同审核状态）、<code>reviewComment</code>（审核备注）、<code>count</code>、<code>fromUser</code>；财务通过→仓库的文本卡片另传
-            <span v-pre><code>{{shipConfirmUrl}}</code></span>（卡片应指向的确认页链接）；<code>shipUrl</code> 与前者同源兼容占位。执行发货仅为确认页内 POST <code>/api/public/wecom-order-ship</code>。自写接口可自行传其它变量名。
+            销售系统约定常用变量：
+            <code>detail</code>、<code>orderNo</code>、<code>contractNo</code>、<code>reviewUrl</code>、
+            <span v-pre><code>{{shipConfirmUrl}}</code></span> 等；完整说明见「使用说明」。
           </div>
         </el-form-item>
 
@@ -378,7 +590,7 @@
           <el-form-item>
             <template #label>
               <span>卡片标题</span>
-              <el-tooltip content="消息最上面一行大字，可点右侧按钮把变量插进正文或标题" placement="top">
+              <el-tooltip content="消息最上面一行大字" placement="top">
                 <el-icon class="label-help"><QuestionFilled /></el-icon>
               </el-tooltip>
             </template>
@@ -413,7 +625,7 @@
             </div>
             <el-input
               v-model="templateForm.urlTemplate"
-              placeholder="必填。合同审批模板请填 {{reviewUrl}}（服务器须配置 PUBLIC_BASE_URL + JWT_SECRET）。仓库发货等填对应链接变量。"
+              placeholder="必填。合同审批等填 {{reviewUrl}}；仓库发货填对应链接变量。"
             />
           </el-form-item>
           <el-form-item label="按钮文字">
@@ -502,6 +714,13 @@
 <script>
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
+  CircleCheck,
+  Document,
+  QuestionFilled,
+  Refresh,
+  WarningFilled
+} from '@element-plus/icons-vue';
+import {
   wecomMeta,
   getWecomConfig,
   updateWecomConfig,
@@ -528,6 +747,14 @@ function parseUserIdsText(text) {
 }
 
 const TEMPLATE_CODE_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+
+const JOB_STATUS_MAP = {
+  pending: { label: '待发送', type: 'info' },
+  sending: { label: '发送中', type: 'warning' },
+  sent: { label: '已发送', type: 'success' },
+  failed: { label: '失败', type: 'danger' },
+  dead: { label: '死信', type: 'danger' }
+};
 
 /** Derives API template code from display name; falls back to tpl_<base36 time> if no Latin slug. */
 function slugifyDisplayNameToCodeBase(nameZh) {
@@ -569,8 +796,18 @@ function generateUniqueTemplateCode(nameZh, existingCodeList) {
 
 export default {
   name: 'WecomNotifications',
+  components: { CircleCheck, WarningFilled, QuestionFilled },
   data() {
     return {
+      CircleCheck,
+      WarningFilled,
+      QuestionFilled,
+      Refresh,
+      Document,
+      pageLoading: false,
+      helpDrawer: false,
+      catalogDrawer: false,
+      helpActive: ['sales'],
       activeTab: 'cfg',
       metaHint: '',
       metaApiBase: '',
@@ -654,6 +891,46 @@ export default {
     await this.loadAll();
   },
   computed: {
+    bindingReady() {
+      return !!(
+        String(this.cfgForm.corpId || '').trim() &&
+        Number(this.cfgForm.agentId) > 0 &&
+        this.secretConfigured
+      );
+    },
+    statusItems() {
+      return [
+        {
+          key: 'corp',
+          label: '企业与应用',
+          ok: this.bindingReady,
+          text: this.bindingReady
+            ? `corpId 已填 · AgentId ${this.cfgForm.agentId} · Secret 已配置`
+            : '请完善 corpId / AgentId / Secret'
+        },
+        {
+          key: 'callback',
+          label: '回调验签',
+          ok: this.receiveTokenConfigured && this.encodingAesKeyConfigured,
+          text:
+            this.receiveTokenConfigured && this.encodingAesKeyConfigured
+              ? 'Token 与 EncodingAESKey 已保存'
+              : '接收消息时需配置 Token 与 AESKey'
+        },
+        {
+          key: 'recv',
+          label: '通知对象',
+          ok: this.recipients.length > 0,
+          text: this.recipients.length ? `${this.recipients.length} 个对象` : '尚未添加'
+        },
+        {
+          key: 'tpl',
+          label: '消息模板',
+          ok: this.templates.length > 0,
+          text: this.templates.length ? `${this.templates.length} 个模板` : '尚未配置'
+        }
+      ];
+    },
     displayCallbackUrl() {
       const b = String(this.callbackBaseOverride || this.metaApiBase || '')
         .trim()
@@ -753,24 +1030,34 @@ export default {
     }
   },
   methods: {
+    jobStatusMeta(status) {
+      return JOB_STATUS_MAP[status] || { label: status || '—', type: 'info' };
+    },
     async loadAll() {
+      this.pageLoading = true;
       try {
-        const meta = await wecomMeta();
-        this.metaHint = [meta?.receiveHint, meta?.placeholderHint].filter(Boolean).join('\n');
-        this.metaApiBase = meta?.apiBase || '';
-        this.templateCodeCatalog = Array.isArray(meta?.templateCodeCatalog) ? meta.templateCodeCatalog : [];
-        this.templateVariableSchemas = meta?.templateVariableSchemas && typeof meta.templateVariableSchemas === 'object'
-          ? meta.templateVariableSchemas
-          : {};
-        this.secretEncryptionEnabled = !!meta?.secretEncryptionEnabled;
-      } catch {
-        this.metaHint = '';
-        this.metaApiBase = '';
-        this.templateCodeCatalog = [];
+        try {
+          const meta = await wecomMeta();
+          this.metaHint = [meta?.receiveHint, meta?.placeholderHint].filter(Boolean).join('\n');
+          this.metaApiBase = meta?.apiBase || '';
+          this.templateCodeCatalog = Array.isArray(meta?.templateCodeCatalog) ? meta.templateCodeCatalog : [];
+          this.templateVariableSchemas =
+            meta?.templateVariableSchemas && typeof meta.templateVariableSchemas === 'object'
+              ? meta.templateVariableSchemas
+              : {};
+          this.secretEncryptionEnabled = !!meta?.secretEncryptionEnabled;
+        } catch {
+          this.metaHint = '';
+          this.metaApiBase = '';
+          this.templateCodeCatalog = [];
+        }
+        await this.loadConfig();
+        await this.loadRecipients();
+        await this.loadTemplates();
+        if (this.activeTab === 'jobs') await this.loadJobs();
+      } finally {
+        this.pageLoading = false;
       }
-      await this.loadConfig();
-      await this.loadRecipients();
-      await this.loadTemplates();
     },
     async loadConfig() {
       const c = await getWecomConfig();
@@ -992,8 +1279,7 @@ export default {
         if (err === 'DUPLICATE_CODE') ElMessage.error('模板代码已存在');
         else if (err === 'TEXTCARD_REQUIRES_URL') {
           ElMessage.error(
-            e?.response?.data?.message ||
-              '文本卡片必须填写链接地址（企业微信 41010：missing url）'
+            e?.response?.data?.message || '文本卡片必须填写链接地址（企业微信 41010：missing url）'
           );
         } else if (
           err === 'WECOM_TEMPLATE_MISSING_VARIABLE' ||
@@ -1134,47 +1420,145 @@ export default {
 </script>
 
 <style scoped>
-.wecom-page {
-  padding: 8px 0 24px;
+@import '../styles/refListPage.css';
+
+.readiness-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
 }
-.mb-3 {
-  margin-bottom: 12px;
+.readiness-badge.is-ready {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
 }
-.form-block {
-  max-width: 560px;
+.readiness-badge.is-pending {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
 }
-.toolbar {
-  margin-bottom: 12px;
+
+.page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
 }
-.jobs-toolbar {
+.page-main {
+  min-width: 0;
+}
+.form-panel {
+  padding: 0;
+}
+.panel-head {
+  padding: 16px 20px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.panel-head--row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.panel-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.panel-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+}
+.panel-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ref-muted);
+  line-height: 1.5;
+  max-width: 640px;
+}
+.wecom-form {
+  padding: 8px 20px 20px;
+  max-width: 640px;
+}
+.form-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ref-text);
+  margin: 16px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #eef2f7;
+}
+.form-section-title:first-child {
+  margin-top: 8px;
+}
+.field-tip {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--ref-muted);
+  line-height: 1.5;
+}
+.field-tip code,
+.panel-desc code,
+.help-body code,
+.drawer-tip code {
+  font-size: 12px;
+  padding: 1px 5px;
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+.row-tip {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
   align-items: center;
-  margin-bottom: 12px;
+  gap: 4px 8px;
 }
-.jobs-pagination {
-  margin-top: 16px;
-  justify-content: flex-end;
-  display: flex;
+.text-ok {
+  color: #059669;
 }
 .text-muted {
   color: #94a3b8;
   font-size: 12px;
 }
-.tpl-two-cols {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  align-items: start;
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
-.catalog-card,
-.templates-card {
+.field-with-help {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+.field-with-help > .el-input,
+.field-with-help > .w-full-num {
+  flex: 1;
   min-width: 0;
 }
-.mono {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
+.field-with-help--top {
+  align-items: flex-start;
+}
+.field-with-help--top .field-help-icon {
+  margin-top: 8px;
+}
+.field-help-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+  color: #94a3b8;
+  cursor: help;
+  outline: none;
+}
+.field-help-icon:hover,
+.field-help-icon:focus {
+  color: var(--ref-primary);
 }
 .w-full-num {
   width: 100%;
@@ -1182,48 +1566,130 @@ export default {
 .w-full-num :deep(.el-input__wrapper) {
   width: 100%;
 }
-.drawer-tip {
-  color: #64748b;
+.empty-hint {
+  padding: 28px 20px;
+  text-align: center;
   font-size: 13px;
-  margin-bottom: 16px;
-  line-height: 1.5;
+  color: var(--ref-muted);
 }
-.callback-row {
+
+.page-aside {
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.aside-card {
+  background: #fff;
+  border: 1px solid var(--ref-border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+.aside-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+.status-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.status-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+}
+.status-dot.is-ok {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+}
+.status-dot.is-warn {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+}
+.status-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.status-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
+}
+.status-value {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.steps-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.55;
+}
+.steps-list li {
+  margin-bottom: 8px;
+}
+.steps-list li:last-child {
+  margin-bottom: 0;
+}
+.steps-list li.done {
+  color: #059669;
+}
+.aside-help-btn {
+  margin-top: 12px;
+  padding-left: 0;
+}
+
+.jobs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
-.callback-row .el-input {
-  flex: 1;
+
+.help-block {
+  margin-bottom: 14px;
 }
-.field-tip {
-  font-size: 12px;
-  color: #64748b;
-  line-height: 1.5;
-  margin-top: 6px;
+.help-collapse :deep(.el-collapse-item__header) {
+  font-weight: 600;
+  color: #1e293b;
 }
-.text-ok {
-  color: #059669;
-  margin-right: 8px;
-}
-.code-box {
-  background: #0f172a;
-  color: #e2e8f0;
-  padding: 12px;
-  border-radius: 8px;
-  overflow: auto;
-  font-size: 12px;
-  line-height: 1.5;
-  max-height: 360px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.tab-lead {
-  color: #475569;
+.help-body {
   font-size: 13px;
   line-height: 1.6;
-  margin: 0 0 12px;
-  max-width: 720px;
+  color: #475569;
+}
+.help-body p {
+  margin: 0 0 10px;
+}
+.help-body p:last-child {
+  margin-bottom: 0;
+}
+.drawer-tip {
+  color: #64748b;
+  font-size: 13px;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.mb-2 {
+  margin-bottom: 12px;
 }
 .template-intro {
   margin-bottom: 14px;
@@ -1238,9 +1704,6 @@ export default {
   padding: 1px 5px;
   background: #f1f5f9;
   border-radius: 4px;
-}
-.template-form {
-  max-width: 100%;
 }
 .code-generate-row {
   display: flex;
@@ -1359,9 +1822,84 @@ export default {
   font-size: 12px;
   color: #94a3b8;
 }
-@media (max-width: 1200px) {
-  .tpl-two-cols {
+.code-box {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 12px;
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 360px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@media (max-width: 992px) {
+  .page-grid {
     grid-template-columns: 1fr;
   }
+  .page-aside {
+    order: -1;
+  }
+  .wecom-form {
+    max-width: 100%;
+  }
+  .wecom-form :deep(.el-form-item__label) {
+    width: 100% !important;
+    text-align: left;
+    margin-bottom: 6px;
+    line-height: 1.35;
+  }
+  .wecom-form :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+  }
+  .field-with-help {
+    flex-wrap: wrap;
+  }
+  .field-with-help > .el-button {
+    flex: 1 1 auto;
+  }
+  .code-generate-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .jobs-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+  .jobs-toolbar .el-button,
+  .jobs-toolbar .el-select,
+  .jobs-toolbar .el-input {
+    width: 100% !important;
+  }
+  .table-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .table-footer__right {
+    margin-left: 0;
+    display: flex;
+    justify-content: center;
+  }
+  .preview-card {
+    max-width: 100%;
+  }
+}
+</style>
+
+<style>
+.wecom-field-help-popper .field-help-tip {
+  max-width: 320px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.wecom-field-help-popper .field-help-tip code {
+  font-size: 11px;
+  padding: 0 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
 }
 </style>

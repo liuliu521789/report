@@ -1,5 +1,5 @@
 <template>
-  <div class="customer-management">
+  <div class="customer-management ref-list-page legacy-list-page">
     <div class="page-header">
       <h2>客户管理</h2>
       <div class="toolbar">
@@ -71,8 +71,10 @@
       </div>
     </div>
 
+    <div class="desktop-table-wrap">
     <el-table
       v-loading="loading"
+      class="desktop-table"
       :data="customerList"
       border
       stripe
@@ -176,10 +178,73 @@
         </template>
       </el-table-column>
     </el-table>
+    </div>
 
-    <el-empty v-if="!loading && !customerList.length" description="暂无客户数据" />
+    <el-empty v-if="!loading && !customerList.length" class="legacy-desktop-empty" description="暂无客户数据" />
 
-    <div class="pagination-bar">
+    <div class="mobile-list" v-loading="loading">
+      <div
+        v-for="row in customerList"
+        :key="'m-' + row.id"
+        class="mobile-card"
+        @click="handleRowDblClick(row)"
+      >
+        <div class="mobile-head">
+          <div class="mobile-head-main">
+            <div>
+              <strong>{{ row.customer_name || '—' }}</strong>
+              <span class="name-sub">{{ row.customer_code || '—' }}</span>
+            </div>
+          </div>
+          <el-tag v-if="row.duplicate_risk" type="warning" size="small">可能重复</el-tag>
+          <el-tag v-else :type="row.is_active ? 'success' : 'info'" size="small" effect="plain">
+            {{ row.is_active ? '启用' : '停用' }}
+          </el-tag>
+        </div>
+        <div class="mobile-line"><span>简称</span><span class="mobile-val">{{ row.contact_name || '—' }}</span></div>
+        <div class="mobile-line"><span>联系人</span><span>{{ row.contact_person || '—' }}</span></div>
+        <div class="mobile-line"><span>电话</span><span>{{ row.phone || '—' }}</span></div>
+        <div v-if="row.order_count || row.contract_count_approved" class="mobile-line">
+          <span>关联</span>
+          <span class="mobile-val">
+            <template v-if="row.order_count">订单 {{ row.order_count }}</template>
+            <template v-if="row.order_count && row.contract_count_approved"> · </template>
+            <template v-if="row.contract_count_approved">合同 {{ row.contract_count_approved }}</template>
+          </span>
+        </div>
+        <div class="mobile-line mobile-line--switch" @click.stop>
+          <span>状态</span>
+          <el-switch
+            v-model="row.is_active"
+            :active-value="1"
+            :inactive-value="0"
+            :disabled="!hasDisablePerm"
+            size="small"
+            @change="(val) => toggleStatus(row.id, val)"
+          />
+        </div>
+        <div class="mobile-actions" @click.stop>
+          <el-button v-if="hasViewPerm" size="small" @click="goToCustomerModels(row)">型号</el-button>
+          <el-button v-if="hasEditPerm" size="small" type="primary" @click="openEditDialog(row)">编辑</el-button>
+          <el-button v-if="hasViewPerm" size="small" @click="viewStats(row)">详情</el-button>
+        </div>
+      </div>
+      <el-empty v-if="!loading && !customerList.length" description="暂无客户数据" />
+      <div v-if="total > 0" class="mobile-pager">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-sizes="[10, 20, 50]"
+          :page-size="pageSize"
+          :total="total"
+          layout="total, prev, pager, next"
+          small
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
+    </div>
+
+    <div class="pagination-bar desktop-pagination">
       <el-pagination
         v-model:current-page="currentPage"
         :page-sizes="[10, 20, 50, 100]"
@@ -1008,6 +1073,8 @@ export default {
 </script>
 
 <style scoped>
+@import '../styles/refListPage.css';
+
 .customer-management {
   padding: 20px;
 }
